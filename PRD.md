@@ -111,12 +111,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a registered user, I can log in with email and password to access my inbox.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/auth/login` accepts: email, password
-- [ ] Verifies password against stored hash with bcrypt
-- [ ] Returns session cookie on success
-- [ ] Returns 401 with generic message on invalid credentials
-- [ ] Only allows login for users with status=active
-- [ ] Typecheck passes
+- [x] `POST /api/auth/login` accepts: email, password
+- [x] Verifies password against stored hash with bcrypt
+- [x] Returns session cookie on success
+- [x] Returns 401 with generic message on invalid credentials
+- [x] Only allows login for users with status=active
+- [x] Typecheck passes
 
 ---
 

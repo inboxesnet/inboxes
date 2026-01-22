@@ -76,3 +76,13 @@
   - lib/session.ts exports: createSession, setSessionCookie, getSession, clearSessionCookie
   - lib/db.ts exports: prisma (singleton PrismaClient instance)
 ---
+
+## Iteration 6 - US-006: Auth — login endpoint
+- What was implemented: POST /api/auth/login endpoint with bcrypt password verification, session cookie on success, generic 401 for invalid credentials, status=active check
+- Files changed: app/api/auth/login/route.ts (new file)
+- Learnings for future iterations:
+  - Login follows same pattern as signup: parse body, validate, query DB, bcrypt.compare, createSession + setSessionCookie
+  - Use generic "Invalid email or password" for all auth failures (prevents user enumeration)
+  - Check user.status !== "active" before verifying password to block invited/disabled users
+  - No new dependencies needed — bcryptjs, jose, prisma already installed
+---
