@@ -167,3 +167,15 @@
   - Next.js build output shows all routes and their types (static vs dynamic)
   - macOS doesn't have `timeout` command; use background process + sleep + kill pattern instead
 ---
+
+## Iteration 14 - US-013: Domain — add domain API
+- What was implemented: POST /api/domains endpoint — admin-only, validates domain format (regex for valid TLD, no protocol/path), creates Domain record with status=pending, calls Resend API to register domain, returns DNS records (type, name, value, priority), returns 409 if domain already registered
+- Files changed: app/api/domains/route.ts (new)
+- Learnings for future iterations:
+  - Resend domain registration: POST https://api.resend.com/domains with { name: domain }
+  - Resend returns { id, records: [...] } where each record has type, name, value, priority, status
+  - Domain validation regex: /^(?!-)([a-zA-Z0-9-]{1,63}(?<!-)\.)+[a-zA-Z]{2,}$/ — validates proper TLD format
+  - Admin-only endpoints: check user.role !== "admin" and return 403
+  - getCurrentUser() already returns null for unauthenticated (handled by middleware), but double-check in route
+  - Pattern: validate input → check conflicts (409) → call external API → save to DB → return response
+---

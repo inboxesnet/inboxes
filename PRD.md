@@ -212,13 +212,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I can add my domain and receive the required DNS records to configure.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/domains` accepts: domain (string). Admin-only.
-- [ ] Validates domain format (no protocol, no path, valid TLD)
-- [ ] Creates Domain record with status=pending
-- [ ] Calls Resend API to register domain and get required DNS records (MX, SPF, DKIM)
-- [ ] Returns DNS records that need to be configured (type, name, value, priority)
-- [ ] Returns 409 if domain already registered
-- [ ] Typecheck passes
+- [x] `POST /api/domains` accepts: domain (string). Admin-only.
+- [x] Validates domain format (no protocol, no path, valid TLD)
+- [x] Creates Domain record with status=pending
+- [x] Calls Resend API to register domain and get required DNS records (MX, SPF, DKIM)
+- [x] Returns DNS records that need to be configured (type, name, value, priority)
+- [x] Returns 409 if domain already registered
+- [x] Typecheck passes
 
 ---
 
