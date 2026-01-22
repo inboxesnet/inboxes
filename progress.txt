@@ -110,3 +110,26 @@
   - After password reset, clear both reset_token and reset_token_expires_at (set to null)
   - NEXT_PUBLIC_APP_URL env var used for constructing reset links
 ---
+
+## Iteration 9 - US-009: Auth UI — signup page
+- What was implemented: Signup page at /signup with form (org name, your name, email, password, confirm password), client-side validation, API submission, error display, link to login
+- Files changed: app/signup/page.tsx (new), components/ui/button.tsx (new), components/ui/input.tsx (new), components/ui/label.tsx (new), components/ui/card.tsx (new)
+- Learnings for future iterations:
+  - shadcn/ui components created manually (Button, Input, Label, Card) since no CLI available
+  - "use client" directive needed for pages with useState/useRouter
+  - Form validation pattern: validate() returns boolean, sets errors state object
+  - API error shown in a destructive-colored banner div
+  - useRouter from next/navigation for App Router (not next/router)
+  - components/.gitkeep can be removed once real component files exist
+---
+
+## Iteration 10 - US-010: Auth UI — login page
+- What was implemented: Login page at /login with form (email, password), client-side validation, API submission to /api/auth/login, error display, links to signup and forgot-password pages
+- Files changed: app/login/page.tsx (new)
+- Learnings for future iterations:
+  - Login page follows same Card-based layout pattern as signup page
+  - Redirects to /inbox on success (not /dashboard like signup)
+  - Uses same shadcn/ui components (Button, Input, Label, Card) already created
+  - CardFooter uses flex-col with space-y for stacked links (forgot-password + signup)
+  - Use &apos; entity for apostrophe in JSX text to satisfy linting
+---

@@ -167,12 +167,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a returning user, I see a login form to access my inbox.
 
 **Acceptance Criteria:**
-- [ ] Page at `/login` with form: email, password
-- [ ] Submits to login API, redirects to `/inbox` on success
-- [ ] Shows error message on invalid credentials
-- [ ] Link to signup and forgot-password pages
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/login` with form: email, password
+- [x] Submits to login API, redirects to `/inbox` on success
+- [x] Shows error message on invalid credentials
+- [x] Link to signup and forgot-password pages
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
