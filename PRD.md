@@ -152,13 +152,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a new user, I see a signup form to create my organization.
 
 **Acceptance Criteria:**
-- [ ] Page at `/signup` with form: org name, your name, email, password, confirm password
-- [ ] Client-side validation (matching passwords, email format, 8+ char password)
-- [ ] Submits to signup API, redirects to `/dashboard` on success
-- [ ] Shows API error messages inline
-- [ ] Link to login page
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/signup` with form: org name, your name, email, password, confirm password
+- [x] Client-side validation (matching passwords, email format, 8+ char password)
+- [x] Submits to signup API, redirects to `/dashboard` on success
+- [x] Shows API error messages inline
+- [x] Link to login page
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
