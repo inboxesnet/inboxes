@@ -1,0 +1,2 @@
+// Application type definitions
+export {};
