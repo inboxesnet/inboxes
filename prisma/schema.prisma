@@ -69,6 +69,8 @@ model User {
   invite_token     String?
   invite_expires_at DateTime?
   claimed_at       DateTime?
+  reset_token      String?
+  reset_token_expires_at DateTime?
   created_at       DateTime   @default(now())
   updated_at       DateTime   @updatedAt
 

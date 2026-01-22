@@ -139,11 +139,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user who forgot their password, I can request a reset link and set a new password.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/auth/forgot-password` accepts email, generates reset token (stored on User), sends email via Resend
-- [ ] Reset token expires after 1 hour
-- [ ] `POST /api/auth/reset-password` accepts token + new_password, updates password_hash, clears token
-- [ ] Returns 400 for expired/invalid tokens
-- [ ] Typecheck passes
+- [x] `POST /api/auth/forgot-password` accepts email, generates reset token (stored on User), sends email via Resend
+- [x] Reset token expires after 1 hour
+- [x] `POST /api/auth/reset-password` accepts token + new_password, updates password_hash, clears token
+- [x] Returns 400 for expired/invalid tokens
+- [x] Typecheck passes
 
 ---
 

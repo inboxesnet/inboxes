@@ -86,3 +86,27 @@
   - Check user.status !== "active" before verifying password to block invited/disabled users
   - No new dependencies needed — bcryptjs, jose, prisma already installed
 ---
+
+## Iteration 7 - US-007: Auth — session middleware and logout
+- What was implemented: Next.js middleware.ts for route protection, getCurrentUser() helper, POST /api/auth/logout endpoint
+- Files changed: middleware.ts (new), lib/session.ts (added getCurrentUser), app/api/auth/logout/route.ts (new), PRD.md
+- Learnings for future iterations:
+  - Next.js middleware.ts goes at project root (not inside app/)
+  - middleware `config.matcher` uses regex-like patterns: `"/api/((?!auth/).*)"` to exclude auth routes
+  - getCurrentUser() fetches user from DB using session.user_id and returns null if not found or inactive
+  - Middleware can differentiate API vs page routes: return 401 JSON for API, redirect for pages
+  - jose jwtVerify is available in Edge Runtime (middleware runs on Edge)
+  - No need to duplicate getSecret() — middleware has its own copy since it can't import from lib/session.ts in all cases
+---
+
+## Iteration 8 - US-008: Auth — password reset flow
+- What was implemented: POST /api/auth/forgot-password (generates reset token, sends email via Resend), POST /api/auth/reset-password (validates token, updates password, clears token), added reset_token and reset_token_expires_at to User model
+- Files changed: prisma/schema.prisma (added reset_token, reset_token_expires_at to User), prisma/migrations/20240104000000_user_reset_token/migration.sql, app/api/auth/forgot-password/route.ts (new), app/api/auth/reset-password/route.ts (new)
+- Learnings for future iterations:
+  - Use `crypto.randomBytes(32).toString("hex")` for secure token generation (Node.js built-in)
+  - Always return generic success message on forgot-password to prevent user enumeration
+  - Resend API: POST https://api.resend.com/emails with Bearer token auth
+  - Reset token lookup uses `findFirst` with where clause on token field
+  - After password reset, clear both reset_token and reset_token_expires_at (set to null)
+  - NEXT_PUBLIC_APP_URL env var used for constructing reset links
+---
