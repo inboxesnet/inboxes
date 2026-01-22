@@ -70,11 +70,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need the Email and Thread models to store all email data.
 
 **Acceptance Criteria:**
-- [ ] Thread model: id (uuid), org_id (fk), user_id (fk), subject, participant_emails (json), last_message_at, message_count (int), unread_count (int), starred (bool, default false), folder (enum: inbox/sent/archive/trash), deleted_at (nullable), created_at, updated_at
-- [ ] Email model: id (uuid), org_id (fk), thread_id (fk), user_id (fk), message_id (string), in_reply_to (nullable), references_header (json, nullable), from_address, to_addresses (json), cc_addresses (json), bcc_addresses (json), subject, body_html (text), body_plain (text), attachments (json), direction (enum: inbound/outbound), status (enum: received/sent/delivered/bounced/failed), read (bool), starred (bool), folder (enum: inbox/sent/archive/trash), deleted_at (nullable), trash_expires_at (nullable), delivered_via_alias (nullable fk), original_to (nullable), received_at, created_at
-- [ ] Proper indexes on: user_id, thread_id, org_id, message_id, folder, received_at
-- [ ] Migration runs successfully
-- [ ] Typecheck passes
+- [x] Thread model: id (uuid), org_id (fk), user_id (fk), subject, participant_emails (json), last_message_at, message_count (int), unread_count (int), starred (bool, default false), folder (enum: inbox/sent/archive/trash), deleted_at (nullable), created_at, updated_at
+- [x] Email model: id (uuid), org_id (fk), thread_id (fk), user_id (fk), message_id (string), in_reply_to (nullable), references_header (json, nullable), from_address, to_addresses (json), cc_addresses (json), bcc_addresses (json), subject, body_html (text), body_plain (text), attachments (json), direction (enum: inbound/outbound), status (enum: received/sent/delivered/bounced/failed), read (bool), starred (bool), folder (enum: inbox/sent/archive/trash), deleted_at (nullable), trash_expires_at (nullable), delivered_via_alias (nullable fk), original_to (nullable), received_at, created_at
+- [x] Proper indexes on: user_id, thread_id, org_id, message_id, folder, received_at
+- [x] Migration runs successfully
+- [x] Typecheck passes
 
 ---
 

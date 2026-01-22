@@ -11,6 +11,8 @@
 - Use `DATABASE_URL="..." npx prisma validate` to validate schema without .env file
 - Use `prisma migrate diff --from-empty --to-schema-datamodel` to generate migration SQL without DB connection
 - Prisma enums use lowercase values: `admin`, `member`, `invited`, etc.
+- migration_lock.toml must exist in prisma/migrations/ with `provider = "postgresql"`
+- For incremental migrations without a DB, write SQL manually based on schema diff
 
 ---
 
@@ -33,4 +35,16 @@
   - Migration files go in prisma/migrations/<timestamp>_<name>/migration.sql
   - UUIDs in Prisma 5: use `@id @default(uuid())` with `String` type (not native uuid)
   - Indexes added with `@@index([field])` for foreign keys
+---
+
+## Iteration 3 - US-003: Email and Thread database schema
+- What was implemented: Thread and Email Prisma models with enums (Folder, EmailDirection, EmailStatus), relations, indexes, and migration SQL
+- Files changed: prisma/schema.prisma (already had models from previous iteration setup), prisma/migrations/20240102000000_email_thread_schema/migration.sql, prisma/migrations/migration_lock.toml
+- Learnings for future iterations:
+  - `prisma migrate diff --from-migrations` requires a shadow database URL; not practical without a real DB
+  - migration_lock.toml is required in the migrations directory (provider = "postgresql")
+  - Thread and Email models were already defined in schema.prisma with correct fields from iteration 2
+  - For incremental migrations, just write the SQL manually based on what's new vs existing migrations
+  - JSONB type in SQL corresponds to `Json` in Prisma with `@default("[]")`
+  - `@db.Text` annotation maps to TEXT column type in PostgreSQL
 ---

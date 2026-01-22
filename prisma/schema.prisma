@@ -24,6 +24,26 @@ enum DomainStatus {
   active
 }
 
+enum Folder {
+  inbox
+  sent
+  archive
+  trash
+}
+
+enum EmailDirection {
+  inbound
+  outbound
+}
+
+enum EmailStatus {
+  received
+  sent
+  delivered
+  bounced
+  failed
+}
+
 model Org {
   id               String   @id @default(uuid())
   name             String
@@ -33,6 +53,8 @@ model Org {
 
   users   User[]
   domains Domain[]
+  threads Thread[]
+  emails  Email[]
 }
 
 model User {
@@ -49,7 +71,9 @@ model User {
   created_at       DateTime   @default(now())
   updated_at       DateTime   @updatedAt
 
-  org Org @relation(fields: [org_id], references: [id])
+  org     Org      @relation(fields: [org_id], references: [id])
+  threads Thread[]
+  emails  Email[]
 
   @@index([org_id])
 }
@@ -69,4 +93,69 @@ model Domain {
   org Org @relation(fields: [org_id], references: [id])
 
   @@index([org_id])
+}
+
+model Thread {
+  id                 String   @id @default(uuid())
+  org_id             String
+  user_id            String
+  subject            String
+  participant_emails Json     @default("[]")
+  last_message_at    DateTime @default(now())
+  message_count      Int      @default(0)
+  unread_count       Int      @default(0)
+  starred            Boolean  @default(false)
+  folder             Folder   @default(inbox)
+  deleted_at         DateTime?
+  created_at         DateTime @default(now())
+  updated_at         DateTime @updatedAt
+
+  org    Org     @relation(fields: [org_id], references: [id])
+  user   User    @relation(fields: [user_id], references: [id])
+  emails Email[]
+
+  @@index([org_id])
+  @@index([user_id])
+  @@index([folder])
+  @@index([last_message_at])
+}
+
+model Email {
+  id                String         @id @default(uuid())
+  org_id            String
+  thread_id         String
+  user_id           String
+  message_id        String?
+  in_reply_to       String?
+  references_header Json?
+  from_address      String
+  to_addresses      Json           @default("[]")
+  cc_addresses      Json           @default("[]")
+  bcc_addresses     Json           @default("[]")
+  subject           String
+  body_html         String         @db.Text
+  body_plain        String         @db.Text
+  attachments       Json           @default("[]")
+  direction         EmailDirection
+  status            EmailStatus
+  read              Boolean        @default(false)
+  starred           Boolean        @default(false)
+  folder            Folder         @default(inbox)
+  deleted_at        DateTime?
+  trash_expires_at  DateTime?
+  delivered_via_alias String?
+  original_to       String?
+  received_at       DateTime       @default(now())
+  created_at        DateTime       @default(now())
+
+  org    Org    @relation(fields: [org_id], references: [id])
+  thread Thread @relation(fields: [thread_id], references: [id])
+  user   User   @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@index([thread_id])
+  @@index([org_id])
+  @@index([message_id])
+  @@index([folder])
+  @@index([received_at])
 }
