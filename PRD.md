@@ -227,12 +227,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I can trigger domain verification to check if DNS records are properly configured.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/domains/:id/verify` triggers Resend domain verification
-- [ ] Checks MX, SPF, DKIM status via Resend API
-- [ ] Updates Domain record: mx_verified, spf_verified, dkim_verified flags
-- [ ] When all verified: status → verified → active, set verified_at
-- [ ] Returns current verification status for each record type
-- [ ] Typecheck passes
+- [x] `POST /api/domains/:id/verify` triggers Resend domain verification
+- [x] Checks MX, SPF, DKIM status via Resend API
+- [x] Updates Domain record: mx_verified, spf_verified, dkim_verified flags
+- [x] When all verified: status → verified → active, set verified_at
+- [x] Returns current verification status for each record type
+- [x] Typecheck passes
 
 ---
 

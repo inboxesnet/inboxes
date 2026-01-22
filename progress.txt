@@ -179,3 +179,17 @@
   - getCurrentUser() already returns null for unauthenticated (handled by middleware), but double-check in route
   - Pattern: validate input → check conflicts (409) → call external API → save to DB → return response
 ---
+
+## Iteration 15 - US-014: Domain — verification API
+- What was implemented: POST /api/domains/:id/verify endpoint — admin-only, triggers Resend domain verification, checks MX/SPF/DKIM status from Resend records, updates Domain model flags, sets status to active when all verified
+- Files changed: app/api/domains/[id]/verify/route.ts (new)
+- Learnings for future iterations:
+  - Next.js App Router dynamic routes: `[id]` folder name creates params.id
+  - In Next.js 14+, route handler params is a Promise that must be awaited: `const { id } = await params`
+  - Resend verify endpoint: POST /domains/{domain}/verify triggers verification check
+  - Resend domain status: GET /domains/{domain} returns records array with status per record
+  - SPF records identified by TXT type with name containing "_spf" or value containing "spf"
+  - DKIM records identified by CNAME/TXT type with name containing "dkim"
+  - Use `findFirst` with org_id filter to ensure domain belongs to user's org (security)
+  - DomainStatus enum values: "pending", "verified", "active" — cast string with `as` for type safety
+---
