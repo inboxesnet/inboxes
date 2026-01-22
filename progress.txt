@@ -144,3 +144,17 @@
   - Reset-password validates token presence on mount, shows error if missing
   - Same Card-based layout pattern consistent across all auth pages
 ---
+
+## Iteration 12 - US-012: App layout shell
+- What was implemented: Authenticated app layout with sidebar navigation, mobile hamburger menu (Sheet), user info in footer, admin-only nav items, logout button, placeholder pages for inbox/sent/search/settings/dashboard
+- Files changed: components/ui/sheet.tsx (new), components/ui/separator.tsx (new), components/app-sidebar.tsx (new), components/app-shell.tsx (new), app/(app)/layout.tsx (new), app/(app)/inbox/page.tsx (new), app/(app)/sent/page.tsx (new), app/(app)/search/page.tsx (new), app/(app)/settings/page.tsx (new), app/(app)/dashboard/page.tsx (new)
+- Learnings for future iterations:
+  - Route groups `(app)` in Next.js App Router don't affect URLs but share a layout
+  - AppShell is a client component ("use client") wrapping the sidebar + main content
+  - Layout.tsx (server component) calls getCurrentUser() and passes user data to AppShell
+  - Sheet component implemented manually (custom, not radix) with context for open/close state
+  - Mobile sidebar uses Sheet with side="left", desktop sidebar is always visible via md:block
+  - Active nav item determined by pathname matching with usePathname()
+  - Admin nav items (Team, Domain, Aliases) conditionally shown based on user.role === "admin"
+  - Dashboard redirects to /inbox (signup redirects to /dashboard initially)
+---

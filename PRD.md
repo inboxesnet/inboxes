@@ -196,13 +196,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I see a consistent app layout with sidebar navigation.
 
 **Acceptance Criteria:**
-- [ ] Layout at `/app` (or root authenticated layout) with sidebar + main content area
-- [ ] Sidebar shows: Inbox, Sent, Search, Settings nav items
-- [ ] Admin users also see: Team, Domain, Aliases in sidebar
-- [ ] Mobile: sidebar collapses to hamburger menu (Sheet component)
-- [ ] Shows current user name/email in sidebar footer with logout button
-- [ ] Active nav item highlighted
-- [ ] Typecheck passes
+- [x] Layout at `/app` (or root authenticated layout) with sidebar + main content area
+- [x] Sidebar shows: Inbox, Sent, Search, Settings nav items
+- [x] Admin users also see: Team, Domain, Aliases in sidebar
+- [x] Mobile: sidebar collapses to hamburger menu (Sheet component)
+- [x] Shows current user name/email in sidebar footer with logout button
+- [x] Active nav item highlighted
+- [x] Typecheck passes
 - [ ] Verify changes work in browser
 
 ---
