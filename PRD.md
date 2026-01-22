@@ -57,11 +57,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need the foundational database models so that orgs, users, and domains can be stored.
 
 **Acceptance Criteria:**
-- [ ] Org model: id (uuid), name, catch_all_enabled (bool, default true), created_at, updated_at
-- [ ] User model: id (uuid), org_id (fk), email (unique), name, password_hash, role (enum: admin/member), status (enum: invited/active/disabled), invite_token, invite_expires_at, claimed_at, created_at, updated_at
-- [ ] Domain model: id (uuid), org_id (fk), domain (unique), status (enum: pending/verified/active), mx_verified (bool), spf_verified (bool), dkim_verified (bool), verified_at, created_at, updated_at
-- [ ] Migration runs successfully
-- [ ] Typecheck passes
+- [x] Org model: id (uuid), name, catch_all_enabled (bool, default true), created_at, updated_at
+- [x] User model: id (uuid), org_id (fk), email (unique), name, password_hash, role (enum: admin/member), status (enum: invited/active/disabled), invite_token, invite_expires_at, claimed_at, created_at, updated_at
+- [x] Domain model: id (uuid), org_id (fk), domain (unique), status (enum: pending/verified/active), mx_verified (bool), spf_verified (bool), dkim_verified (bool), verified_at, created_at, updated_at
+- [x] Migration runs successfully
+- [x] Typecheck passes
 
 ---
 

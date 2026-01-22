@@ -12,12 +12,12 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@prisma/client": "^7.3.0",
+    "@prisma/client": "^5.22.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
     "next": "^14.2.0",
-    "prisma": "^7.3.0",
+    "prisma": "^5.22.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "tailwind-merge": "^3.4.0",

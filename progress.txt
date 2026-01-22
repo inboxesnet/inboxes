@@ -1,6 +1,36 @@
 # Progress Log
 
 ## Learnings
-(Patterns discovered during implementation)
+- create-next-app interactive prompts don't work well in non-interactive shells; manually create files instead
+- shadcn/ui needs: class-variance-authority, clsx, tailwind-merge, lucide-react, tailwindcss-animate
+- shadcn/ui components.json + lib/utils.ts with cn() helper is the foundation
+- tailwind.config.ts needs CSS variable-based colors and tailwindcss-animate plugin
+- globals.css needs @layer base with CSS variables for light/dark themes
+- Project name must be lowercase in package.json for npm compatibility
+- Prisma 7 removes `url` from datasource block; downgraded to Prisma 5 for traditional config
+- Use `DATABASE_URL="..." npx prisma validate` to validate schema without .env file
+- Use `prisma migrate diff --from-empty --to-schema-datamodel` to generate migration SQL without DB connection
+- Prisma enums use lowercase values: `admin`, `member`, `invited`, etc.
 
+---
+
+## Iteration 1 - US-001: Project Scaffolding
+- What was implemented: Full Next.js 14+ project with App Router, TypeScript, Tailwind CSS, shadcn/ui, Prisma, ESLint, Prettier
+- Files changed: package.json, tsconfig.json, next.config.mjs, tailwind.config.ts, postcss.config.mjs, components.json, .eslintrc.json, .prettierrc, .prettierignore, .gitignore, .env.example, app/globals.css, app/layout.tsx, app/page.tsx, lib/utils.ts, prisma/schema.prisma, types/index.ts, components/.gitkeep
+- Learnings for future iterations:
+  - Typecheck command: `npm run typecheck`
+  - Lint command: `npm run lint`
+  - shadcn/ui components go in `components/ui/`
+  - Prisma schema at `prisma/schema.prisma` with postgresql provider
+---
+
+## Iteration 2 - US-002: Core database schema (Org, User, Domain)
+- What was implemented: Org, User, Domain Prisma models with enums (UserRole, UserStatus, DomainStatus), relations, indexes, and migration SQL
+- Files changed: prisma/schema.prisma, prisma/migrations/20240101000000_core_schema_org_user_domain/migration.sql, package.json (prisma downgrade to v5)
+- Learnings for future iterations:
+  - Had to downgrade prisma from v7 to v5 because v7 removed `url` from datasource block
+  - `prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` generates SQL without needing DB
+  - Migration files go in prisma/migrations/<timestamp>_<name>/migration.sql
+  - UUIDs in Prisma 5: use `@id @default(uuid())` with `String` type (not native uuid)
+  - Indexes added with `@@index([field])` for foreign keys
 ---

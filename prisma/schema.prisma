@@ -6,3 +6,67 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum UserRole {
+  admin
+  member
+}
+
+enum UserStatus {
+  invited
+  active
+  disabled
+}
+
+enum DomainStatus {
+  pending
+  verified
+  active
+}
+
+model Org {
+  id               String   @id @default(uuid())
+  name             String
+  catch_all_enabled Boolean @default(true)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  users   User[]
+  domains Domain[]
+}
+
+model User {
+  id               String     @id @default(uuid())
+  org_id           String
+  email            String     @unique
+  name             String
+  password_hash    String
+  role             UserRole   @default(member)
+  status           UserStatus @default(invited)
+  invite_token     String?
+  invite_expires_at DateTime?
+  claimed_at       DateTime?
+  created_at       DateTime   @default(now())
+  updated_at       DateTime   @updatedAt
+
+  org Org @relation(fields: [org_id], references: [id])
+
+  @@index([org_id])
+}
+
+model Domain {
+  id            String       @id @default(uuid())
+  org_id        String
+  domain        String       @unique
+  status        DomainStatus @default(pending)
+  mx_verified   Boolean      @default(false)
+  spf_verified  Boolean      @default(false)
+  dkim_verified Boolean      @default(false)
+  verified_at   DateTime?
+  created_at    DateTime     @default(now())
+  updated_at    DateTime     @updatedAt
+
+  org Org @relation(fields: [org_id], references: [id])
+
+  @@index([org_id])
+}
