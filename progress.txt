@@ -13,6 +13,10 @@
 - Prisma enums use lowercase values: `admin`, `member`, `invited`, etc.
 - migration_lock.toml must exist in prisma/migrations/ with `provider = "postgresql"`
 - For incremental migrations without a DB, write SQL manually based on schema diff
+- Use `bcryptjs` (pure JS) for bcrypt hashing; `jose` for JWT operations
+- Prisma client singleton at lib/db.ts; session utils at lib/session.ts
+- `npx prisma generate` must run before typecheck for @prisma/client types
+- Next.js 14 App Router: cookies() is async, API routes use NextRequest/NextResponse
 
 ---
 
@@ -57,4 +61,18 @@
   - Reverse relations needed on Org (aliases) and User (alias_users)
   - @@unique([alias_id, user_id]) enforces composite uniqueness in Prisma
   - Migration also adds FK constraint on existing Email.delivered_via_alias column
+---
+
+## Iteration 5 - US-005: Auth — signup endpoint
+- What was implemented: POST /api/auth/signup endpoint with bcrypt password hashing, input validation, session cookie via JWT (jose), Prisma client singleton
+- Files changed: package.json (added bcryptjs, jose, @types/bcryptjs), lib/db.ts (Prisma singleton), lib/session.ts (JWT session utils), app/api/auth/signup/route.ts
+- Learnings for future iterations:
+  - Use `bcryptjs` (pure JS) instead of `bcrypt` (native) to avoid build issues on Vercel
+  - `jose` library for JWT: SignJWT and jwtVerify with HS256
+  - Next.js 14 cookies() from next/headers is async (returns Promise)
+  - Prisma client singleton pattern: store on globalThis to avoid re-creating in dev
+  - Session stored as httpOnly cookie with 7 day expiry
+  - `npx prisma generate` needed before typecheck so @prisma/client types exist
+  - lib/session.ts exports: createSession, setSessionCookie, getSession, clearSessionCookie
+  - lib/db.ts exports: prisma (singleton PrismaClient instance)
 ---

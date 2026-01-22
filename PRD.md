@@ -96,13 +96,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a new user, I can create an organization and become its admin so I can start setting up email.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/auth/signup` accepts: org_name, user_name, email, password
-- [ ] Password hashed with bcrypt (cost factor 12)
-- [ ] Creates Org record, then User record with role=admin, status=active
-- [ ] Returns session cookie (httpOnly, secure, sameSite=lax)
-- [ ] Validates: email format, password 8+ chars, org_name not empty
-- [ ] Returns 409 if email already exists
-- [ ] Typecheck passes
+- [x] `POST /api/auth/signup` accepts: org_name, user_name, email, password
+- [x] Password hashed with bcrypt (cost factor 12)
+- [x] Creates Org record, then User record with role=admin, status=active
+- [x] Returns session cookie (httpOnly, secure, sameSite=lax)
+- [x] Validates: email format, password 8+ chars, org_name not empty
+- [x] Returns 409 if email already exists
+- [x] Typecheck passes
 
 ---
 
