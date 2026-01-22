@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import { prisma } from "@/lib/db";
 
 const SESSION_COOKIE = "session";
 
@@ -51,4 +52,34 @@ export async function getSession(): Promise<SessionPayload | null> {
 export async function clearSessionCookie() {
   const cookieStore = await cookies();
   cookieStore.delete(SESSION_COOKIE);
+}
+
+export interface CurrentUser {
+  id: string;
+  org_id: string;
+  email: string;
+  name: string;
+  role: string;
+  status: string;
+}
+
+export async function getCurrentUser(): Promise<CurrentUser | null> {
+  const session = await getSession();
+  if (!session) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user_id },
+    select: {
+      id: true,
+      org_id: true,
+      email: true,
+      name: true,
+      role: true,
+      status: true,
+    },
+  });
+
+  if (!user || user.status !== "active") return null;
+
+  return user;
 }

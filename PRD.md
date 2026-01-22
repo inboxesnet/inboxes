@@ -125,12 +125,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need middleware to protect routes and a logout endpoint to end sessions.
 
 **Acceptance Criteria:**
-- [ ] Session stored as signed JWT in httpOnly cookie (contains user_id, org_id, role)
-- [ ] Middleware reads/validates session on all `/api/*` and app routes (except /auth/*)
-- [ ] `getCurrentUser()` helper returns typed user object or null
-- [ ] `POST /api/auth/logout` clears session cookie
-- [ ] Unauthenticated requests to protected routes return 401
-- [ ] Typecheck passes
+- [x] Session stored as signed JWT in httpOnly cookie (contains user_id, org_id, role)
+- [x] Middleware reads/validates session on all `/api/*` and app routes (except /auth/*)
+- [x] `getCurrentUser()` helper returns typed user object or null
+- [x] `POST /api/auth/logout` clears session cookie
+- [x] Unauthenticated requests to protected routes return 401
+- [x] Typecheck passes
 
 ---
 
