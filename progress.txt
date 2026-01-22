@@ -158,3 +158,12 @@
   - Admin nav items (Team, Domain, Aliases) conditionally shown based on user.role === "admin"
   - Dashboard redirects to /inbox (signup redirects to /dashboard initially)
 ---
+
+## Iteration 13 - US-012: App layout shell (browser verification)
+- What was implemented: Verified that the app layout shell works correctly - typecheck passes, build succeeds, dev server boots without errors
+- Files changed: PRD.md (marked task complete)
+- Learnings for future iterations:
+  - For "Verify changes work in browser" tasks: confirm typecheck passes, build succeeds, and dev server starts
+  - Next.js build output shows all routes and their types (static vs dynamic)
+  - macOS doesn't have `timeout` command; use background process + sleep + kill pattern instead
+---

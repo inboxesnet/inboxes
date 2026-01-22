@@ -203,7 +203,7 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 - [x] Shows current user name/email in sidebar footer with logout button
 - [x] Active nav item highlighted
 - [x] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Verify changes work in browser
 
 ---
 
