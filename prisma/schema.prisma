@@ -55,6 +55,7 @@ model Org {
   domains Domain[]
   threads Thread[]
   emails  Email[]
+  aliases Alias[]
 }
 
 model User {
@@ -71,9 +72,10 @@ model User {
   created_at       DateTime   @default(now())
   updated_at       DateTime   @updatedAt
 
-  org     Org      @relation(fields: [org_id], references: [id])
-  threads Thread[]
-  emails  Email[]
+  org         Org         @relation(fields: [org_id], references: [id])
+  threads     Thread[]
+  emails      Email[]
+  alias_users AliasUser[]
 
   @@index([org_id])
 }
@@ -151,6 +153,7 @@ model Email {
   org    Org    @relation(fields: [org_id], references: [id])
   thread Thread @relation(fields: [thread_id], references: [id])
   user   User   @relation(fields: [user_id], references: [id])
+  alias  Alias? @relation(fields: [delivered_via_alias], references: [id])
 
   @@index([user_id])
   @@index([thread_id])
@@ -158,4 +161,34 @@ model Email {
   @@index([message_id])
   @@index([folder])
   @@index([received_at])
+}
+
+model Alias {
+  id         String   @id @default(uuid())
+  org_id     String
+  address    String   @unique
+  name       String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  org        Org         @relation(fields: [org_id], references: [id])
+  alias_users AliasUser[]
+  emails     Email[]
+
+  @@index([org_id])
+}
+
+model AliasUser {
+  id          String   @id @default(uuid())
+  alias_id    String
+  user_id     String
+  can_send_as Boolean  @default(true)
+  created_at  DateTime @default(now())
+
+  alias Alias @relation(fields: [alias_id], references: [id])
+  user  User  @relation(fields: [user_id], references: [id])
+
+  @@unique([alias_id, user_id])
+  @@index([alias_id])
+  @@index([user_id])
 }

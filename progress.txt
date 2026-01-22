@@ -48,3 +48,13 @@
   - JSONB type in SQL corresponds to `Json` in Prisma with `@default("[]")`
   - `@db.Text` annotation maps to TEXT column type in PostgreSQL
 ---
+
+## Iteration 4 - US-004: Alias database schema
+- What was implemented: Alias and AliasUser Prisma models with relations, unique constraint on (alias_id, user_id), indexes, FK from Email.delivered_via_alias to Alias, and migration SQL
+- Files changed: prisma/schema.prisma, prisma/migrations/20240103000000_alias_schema/migration.sql
+- Learnings for future iterations:
+  - Email.delivered_via_alias was already a String? field; added optional relation to Alias model
+  - Reverse relations needed on Org (aliases) and User (alias_users)
+  - @@unique([alias_id, user_id]) enforces composite uniqueness in Prisma
+  - Migration also adds FK constraint on existing Email.delivered_via_alias column
+---

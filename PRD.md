@@ -83,11 +83,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need the Alias and AliasUser models to support distribution lists.
 
 **Acceptance Criteria:**
-- [ ] Alias model: id (uuid), org_id (fk), address (string, unique), name (string), created_at, updated_at
-- [ ] AliasUser model: id (uuid), alias_id (fk), user_id (fk), can_send_as (bool, default true), created_at
-- [ ] Unique constraint on (alias_id, user_id)
-- [ ] Migration runs successfully
-- [ ] Typecheck passes
+- [x] Alias model: id (uuid), org_id (fk), address (string, unique), name (string), created_at, updated_at
+- [x] AliasUser model: id (uuid), alias_id (fk), user_id (fk), can_send_as (bool, default true), created_at
+- [x] Unique constraint on (alias_id, user_id)
+- [x] Migration runs successfully
+- [x] Typecheck passes
 
 ---
 
