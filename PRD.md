@@ -181,13 +181,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can request a password reset and set a new password via the UI.
 
 **Acceptance Criteria:**
-- [ ] Page at `/forgot-password` with email input, submits to forgot-password API
-- [ ] Success message: "Check your email for reset instructions"
-- [ ] Page at `/reset-password?token=xxx` with new password + confirm fields
-- [ ] Submits to reset-password API, redirects to login on success
-- [ ] Shows error for invalid/expired token
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/forgot-password` with email input, submits to forgot-password API
+- [x] Success message: "Check your email for reset instructions"
+- [x] Page at `/reset-password?token=xxx` with new password + confirm fields
+- [x] Submits to reset-password API, redirects to login on success
+- [x] Shows error for invalid/expired token
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

@@ -133,3 +133,14 @@
   - CardFooter uses flex-col with space-y for stacked links (forgot-password + signup)
   - Use &apos; entity for apostrophe in JSX text to satisfy linting
 ---
+
+## Iteration 11 - US-011: Auth UI — password reset pages
+- What was implemented: Forgot-password page at /forgot-password (email input, submits to API, shows success message), Reset-password page at /reset-password?token=xxx (new password + confirm fields, submits to reset API, redirects to login)
+- Files changed: app/forgot-password/page.tsx (new), app/reset-password/page.tsx (new)
+- Learnings for future iterations:
+  - useSearchParams() requires Suspense boundary in Next.js App Router (SSR bailout)
+  - Pattern: wrap component using useSearchParams in Suspense with a loading fallback
+  - Forgot-password shows success state after submission (no redirect) using boolean toggle
+  - Reset-password validates token presence on mount, shows error if missing
+  - Same Card-based layout pattern consistent across all auth pages
+---
