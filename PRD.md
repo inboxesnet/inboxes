@@ -369,14 +369,14 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I see my inbox as a list of threads sorted by most recent activity.
 
 **Acceptance Criteria:**
-- [ ] Page at `/inbox` showing threads where folder=inbox
-- [ ] Each thread row shows: sender avatar/initial, sender name, subject, body preview (truncated), time, unread indicator (bold + dot)
-- [ ] Threads sorted by last_message_at descending
-- [ ] Unread threads visually distinct (bold text, blue dot)
-- [ ] Clicking a thread navigates to thread view
-- [ ] Pagination or infinite scroll (20 threads per page)
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/inbox` showing threads where folder=inbox
+- [x] Each thread row shows: sender avatar/initial, sender name, subject, body preview (truncated), time, unread indicator (bold + dot)
+- [x] Threads sorted by last_message_at descending
+- [x] Unread threads visually distinct (bold text, blue dot)
+- [x] Clicking a thread navigates to thread view
+- [x] Pagination or infinite scroll (20 threads per page)
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
