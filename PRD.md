@@ -257,13 +257,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can send an email via the API which calls Resend to deliver it.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/emails/send` accepts: to, cc (optional), bcc (optional), subject, body_html, body_plain, in_reply_to (optional), references (optional)
-- [ ] Sends via Resend `POST /emails` with user's email as `from`
-- [ ] Creates Email record with direction=outbound, status=sent
-- [ ] Creates or updates Thread record (new thread if not a reply, existing thread if in_reply_to matches)
-- [ ] Sets proper Message-ID header
-- [ ] Returns 400 if org domain not active
-- [ ] Typecheck passes
+- [x] `POST /api/emails/send` accepts: to, cc (optional), bcc (optional), subject, body_html, body_plain, in_reply_to (optional), references (optional)
+- [x] Sends via Resend `POST /emails` with user's email as `from`
+- [x] Creates Email record with direction=outbound, status=sent
+- [x] Creates or updates Thread record (new thread if not a reply, existing thread if in_reply_to matches)
+- [x] Sets proper Message-ID header
+- [x] Returns 400 if org domain not active
+- [x] Typecheck passes
 
 ---
 

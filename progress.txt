@@ -205,3 +205,17 @@
   - GET /api/domains fetches first domain for the org (MVP: single domain per org)
   - Build output shows /settings/domain as dynamic route (3.76 kB)
 ---
+
+## Iteration 17 - US-016: Send email — API endpoint
+- What was implemented: POST /api/emails/send endpoint — accepts to/cc/bcc/subject/body_html/body_plain/in_reply_to/references, sends via Resend API, creates Email record (outbound, sent), creates or updates Thread, generates Message-ID header, returns 400 if org domain not active
+- Files changed: app/api/emails/send/route.ts (new)
+- Learnings for future iterations:
+  - Prisma nullable JSON fields require `Prisma.JsonNull` instead of plain `null` for type safety
+  - Import `{ Prisma }` from `@prisma/client` to access `Prisma.JsonNull`
+  - Resend send email API: POST https://api.resend.com/emails with from/to/subject/html/text/headers
+  - Custom headers (Message-ID, In-Reply-To, References) go in `headers` object of Resend payload
+  - Thread matching on reply: find existing email by message_id matching in_reply_to, use its thread_id
+  - New outbound emails set folder="sent" on both Thread and Email records
+  - participant_emails stored as JSON.stringify of unique address array
+  - `randomUUID()` from Node.js crypto for generating message IDs
+---
