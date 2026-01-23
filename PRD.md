@@ -356,11 +356,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, when a new email arrives, my inbox updates in real-time without refreshing.
 
 **Acceptance Criteria:**
-- [ ] After inbound email is stored, call `notifyUser()` with event `new_email` and thread/email summary
-- [ ] Client-side hook `useWebSocket()` that connects on mount, reconnects on disconnect
-- [ ] Hook exposes `onMessage` callback for components to subscribe to events
-- [ ] Inbox list re-fetches or optimistically updates when `new_email` event received
-- [ ] Typecheck passes
+- [x] After inbound email is stored, call `notifyUser()` with event `new_email` and thread/email summary
+- [x] Client-side hook `useWebSocket()` that connects on mount, reconnects on disconnect
+- [x] Hook exposes `onMessage` callback for components to subscribe to events
+- [x] Inbox list re-fetches or optimistically updates when `new_email` event received
+- [x] Typecheck passes
 
 ---
 

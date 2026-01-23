@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
+import { notifyUser } from "@/lib/notify";
 
 // Map Resend event types to our EmailStatus values
 const DELIVERY_STATUS_MAP: Record<string, string> = {
@@ -316,7 +317,7 @@ async function deliverToUser(
   }
 
   // Create Email record
-  await prisma.email.create({
+  const newEmail = await prisma.email.create({
     data: {
       org_id: user.org_id,
       thread_id: threadId,
@@ -340,6 +341,16 @@ async function deliverToUser(
       delivered_via_alias: aliasId || null,
       original_to: originalTo || null,
     },
+  });
+
+  // Notify user of new email via WebSocket
+  await notifyUser(user.id, "new_email", {
+    threadId,
+    emailId: newEmail.id,
+    subject,
+    from: fromAddress,
+    preview: bodyPlain.slice(0, 100),
+    receivedAt: newEmail.received_at,
   });
 
   return true;
