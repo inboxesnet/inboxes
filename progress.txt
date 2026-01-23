@@ -272,3 +272,15 @@
   - Only deliver to alias users with status="active" (skip disabled/invited users)
   - Duplicate prevention across direct+alias: check deliveredUserIds before delivering via alias
 ---
+
+## Iteration 22 - US-021: Receive email — catch-all routing
+- What was implemented: Phase 3 catch-all routing in handleInboundEmail — after direct user + alias matching, unmatched addresses are checked against org domains. If catch_all_enabled, deliver to all org admins with original_to set.
+- Files changed: app/api/webhooks/resend/route.ts (added Phase 3 catch-all logic, added originalTo param to deliverToUser, added matchedAddresses tracking)
+- Learnings for future iterations:
+  - Catch-all requires extracting domain from email address and looking up Domain → Org
+  - matchedAddresses Set tracks which `to` addresses were resolved by Phase 1 (direct) or Phase 2 (alias)
+  - deliverToUser now accepts optional `originalTo` param, stored in Email.original_to field
+  - When catch_all_enabled is false, simply skip the address (Resend will handle bounce externally)
+  - Phase 1 user-check is quick (findFirst), but Phase 3 re-checks weren't needed; used matchedAddresses Set instead
+  - Domain lookup uses `include: { org: true }` to access org.catch_all_enabled in one query
+---

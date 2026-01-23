@@ -237,11 +237,12 @@ async function deliverToUser(
     attachmentsMeta: { filename: string; content_type: string; size: number }[];
     allParticipants: string[];
     aliasId?: string;
+    originalTo?: string;
   }
 ): Promise<boolean> {
   const {
     fromAddress, toAddresses, ccAddresses, subject, bodyHtml, bodyPlain,
-    messageId, inReplyTo, referencesArray, attachmentsMeta, allParticipants, aliasId,
+    messageId, inReplyTo, referencesArray, attachmentsMeta, allParticipants, aliasId, originalTo,
   } = opts;
 
   // Check for duplicate: skip if we already have this message_id for this user
@@ -337,6 +338,7 @@ async function deliverToUser(
       folder: "inbox",
       received_at: new Date(),
       delivered_via_alias: aliasId || null,
+      original_to: originalTo || null,
     },
   });
 
@@ -420,9 +422,21 @@ async function handleInboundEmail(
   }
 
   // Phase 2: Alias matching — route to alias members if `to` matches an alias address
+  // Also track which addresses were matched (user or alias) for catch-all fallback
+  const matchedAddresses = new Set<string>();
+
   for (const toAddr of toAddresses) {
     const emailMatch = toAddr.match(/<([^>]+)>/);
     const normalizedTo = emailMatch ? emailMatch[1].toLowerCase() : toAddr.toLowerCase().trim();
+
+    // Check if this address was already matched to a direct user in Phase 1
+    const directUser = await prisma.user.findFirst({
+      where: { email: normalizedTo, status: "active" },
+      select: { id: true },
+    });
+    if (directUser) {
+      matchedAddresses.add(normalizedTo);
+    }
 
     // Find alias by address
     const alias = await prisma.alias.findFirst({
@@ -442,6 +456,8 @@ async function handleInboundEmail(
       continue;
     }
 
+    matchedAddresses.add(normalizedTo);
+
     // Deliver to each alias user who hasn't already received this email
     for (const aliasUser of alias.alias_users) {
       if (deliveredUserIds.has(aliasUser.user_id)) {
@@ -459,6 +475,61 @@ async function handleInboundEmail(
       );
       if (delivered) {
         deliveredUserIds.add(aliasUser.user_id);
+      }
+    }
+  }
+
+  // Phase 3: Catch-all routing — deliver to org admins if address matches no user and no alias
+  for (const toAddr of toAddresses) {
+    const emailMatch = toAddr.match(/<([^>]+)>/);
+    const normalizedTo = emailMatch ? emailMatch[1].toLowerCase() : toAddr.toLowerCase().trim();
+
+    // Skip if this address was already matched to a user or alias
+    if (matchedAddresses.has(normalizedTo)) {
+      continue;
+    }
+
+    // Extract domain from the email address
+    const atIndex = normalizedTo.indexOf("@");
+    if (atIndex === -1) continue;
+    const emailDomain = normalizedTo.slice(atIndex + 1);
+
+    // Find the domain record and its org
+    const domain = await prisma.domain.findFirst({
+      where: { domain: emailDomain },
+      include: { org: true },
+    });
+
+    if (!domain) {
+      // Not our domain — skip
+      continue;
+    }
+
+    if (!domain.org.catch_all_enabled) {
+      // Catch-all disabled — email will bounce (Resend handles bounce)
+      continue;
+    }
+
+    // Deliver to all active admins in this org
+    const admins = await prisma.user.findMany({
+      where: {
+        org_id: domain.org_id,
+        role: "admin",
+        status: "active",
+      },
+    });
+
+    for (const admin of admins) {
+      if (deliveredUserIds.has(admin.id)) {
+        continue;
+      }
+
+      const delivered = await deliverToUser(
+        { id: admin.id, org_id: domain.org_id },
+        { ...deliverOpts, originalTo: normalizedTo }
+      );
+      if (delivered) {
+        deliveredUserIds.add(admin.id);
       }
     }
   }

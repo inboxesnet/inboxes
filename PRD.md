@@ -329,11 +329,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, emails to non-existent addresses are delivered to org admins when catch-all is enabled.
 
 **Acceptance Criteria:**
-- [ ] On inbound: if `to` matches no User and no Alias, check org's catch_all_enabled
-- [ ] If enabled: deliver to all org admins, set `original_to` field on Email
-- [ ] If disabled: return appropriate response (Resend will bounce)
-- [ ] Catch-all emails clearly marked with the original intended address
-- [ ] Typecheck passes
+- [x] On inbound: if `to` matches no User and no Alias, check org's catch_all_enabled
+- [x] If enabled: deliver to all org admins, set `original_to` field on Email
+- [x] If disabled: return appropriate response (Resend will bounce)
+- [x] Catch-all emails clearly marked with the original intended address
+- [x] Typecheck passes
 
 ---
 
