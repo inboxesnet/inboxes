@@ -432,11 +432,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can view my sent emails organized by thread.
 
 **Acceptance Criteria:**
-- [ ] Page at `/sent` showing threads where folder=sent (or threads containing outbound emails)
-- [ ] Same layout as inbox list: recipient names, subject, preview, time
-- [ ] Clicking navigates to thread view
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/sent` showing threads where folder=sent (or threads containing outbound emails)
+- [x] Same layout as inbox list: recipient names, subject, preview, time
+- [x] Clicking navigates to thread view
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

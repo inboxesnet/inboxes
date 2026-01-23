@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
           select: {
             id: true,
             from_address: true,
+            to_addresses: true,
             body_plain: true,
             received_at: true,
             direction: true,
@@ -57,6 +58,7 @@ export async function GET(request: NextRequest) {
       message_count: thread.message_count,
       last_message_at: thread.last_message_at,
       from_address: latestEmail?.from_address || "",
+      to_addresses: latestEmail?.to_addresses || [],
       preview,
     };
   });
