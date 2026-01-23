@@ -11,6 +11,7 @@ import {
   Globe,
   AtSign,
   LogOut,
+  PenSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -43,9 +44,10 @@ interface AppSidebarProps {
     role: string;
   };
   onNavigate?: () => void;
+  onCompose?: () => void;
 }
 
-export function AppSidebar({ user, onNavigate }: AppSidebarProps) {
+export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isAdmin = user.role === "admin";
@@ -59,6 +61,18 @@ export function AppSidebar({ user, onNavigate }: AppSidebarProps) {
     <div className="flex h-full flex-col">
       <div className="px-4 py-6">
         <h1 className="text-lg font-semibold">Inboxes.net</h1>
+      </div>
+      <div className="px-3 pb-3">
+        <Button
+          className="w-full justify-start gap-2"
+          onClick={() => {
+            onCompose?.();
+            onNavigate?.();
+          }}
+        >
+          <PenSquare className="h-4 w-4" />
+          Compose
+        </Button>
       </div>
       <Separator />
       <nav className="flex-1 space-y-1 px-2 py-4">

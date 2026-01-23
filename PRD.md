@@ -401,14 +401,14 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can compose and send a new email via a compose modal.
 
 **Acceptance Criteria:**
-- [ ] "Compose" button in sidebar/header opens modal (Dialog component)
-- [ ] Fields: To (email input), Subject, Body (rich text: bold, italic, links, lists)
-- [ ] CC/BCC fields hidden by default, toggled by button
-- [ ] Send button submits to send email API
-- [ ] Modal closes on successful send with toast confirmation
-- [ ] Shows error inline on failure
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] "Compose" button in sidebar/header opens modal (Dialog component)
+- [x] Fields: To (email input), Subject, Body (rich text: bold, italic, links, lists)
+- [x] CC/BCC fields hidden by default, toggled by button
+- [x] Send button submits to send email API
+- [x] Modal closes on successful send with toast confirmation
+- [x] Shows error inline on failure
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
