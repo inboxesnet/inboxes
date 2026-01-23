@@ -417,13 +417,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can reply to or forward an email within a thread view.
 
 **Acceptance Criteria:**
-- [ ] "Reply" button on each message opens inline reply form at bottom of thread
-- [ ] Reply pre-fills: To (original sender), Subject (Re: subject), In-Reply-To and References headers
-- [ ] "Reply All" includes all participants in To/CC
-- [ ] "Forward" opens compose modal with body quoted, empty To field
-- [ ] Sent reply appears in thread immediately
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] "Reply" button on each message opens inline reply form at bottom of thread
+- [x] Reply pre-fills: To (original sender), Subject (Re: subject), In-Reply-To and References headers
+- [x] "Reply All" includes all participants in To/CC
+- [x] "Forward" opens compose modal with body quoted, empty To field
+- [x] Sent reply appears in thread immediately
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

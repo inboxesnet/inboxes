@@ -24,6 +24,7 @@ export async function GET(
         orderBy: { received_at: "asc" },
         select: {
           id: true,
+          message_id: true,
           from_address: true,
           to_addresses: true,
           cc_addresses: true,
@@ -65,6 +66,7 @@ export async function GET(
     message_count: thread.message_count,
     emails: thread.emails.map((email) => ({
       id: email.id,
+      message_id: email.message_id,
       from_address: email.from_address,
       to_addresses: email.to_addresses,
       cc_addresses: email.cc_addresses,

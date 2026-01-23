@@ -13,12 +13,20 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 
+export interface ComposePreFill {
+  to?: string;
+  cc?: string;
+  subject?: string;
+  bodyHtml?: string;
+}
+
 interface ComposeModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  preFill?: ComposePreFill;
 }
 
-export function ComposeModal({ open, onOpenChange }: ComposeModalProps) {
+export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps) {
   const { addToast } = useToast();
   const [to, setTo] = React.useState("");
   const [subject, setSubject] = React.useState("");
@@ -28,6 +36,20 @@ export function ComposeModal({ open, onOpenChange }: ComposeModalProps) {
   const [sending, setSending] = React.useState(false);
   const [error, setError] = React.useState("");
   const editorRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (open && preFill) {
+      if (preFill.to) setTo(preFill.to);
+      if (preFill.cc) {
+        setCc(preFill.cc);
+        setShowCcBcc(true);
+      }
+      if (preFill.subject) setSubject(preFill.subject);
+      if (preFill.bodyHtml && editorRef.current) {
+        editorRef.current.innerHTML = preFill.bodyHtml;
+      }
+    }
+  }, [open, preFill]);
 
   function resetForm() {
     setTo("");

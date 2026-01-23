@@ -341,3 +341,32 @@
   - useWebSocket().subscribe() for real-time inbox refresh on new_email event
   - Skeleton loading: 6 placeholder rows with animate-pulse circles and bars
 ---
+
+## Iteration 27 - US-026: Compose email — modal UI
+- What was implemented: Compose modal with Dialog component, To/CC/BCC fields (CC/BCC toggled by button), Subject input, rich text body editor (contentEditable with bold/italic/link/list toolbar), Send button (calls /api/emails/send), toast notifications on success, inline error on failure, Compose button in sidebar
+- Files changed: components/ui/dialog.tsx (new), components/ui/textarea.tsx (new), components/ui/toast.tsx (new - ToastProvider + useToast), components/compose-modal.tsx (new), components/app-sidebar.tsx (added Compose button + onCompose prop), components/app-shell.tsx (integrated ComposeModal + ToastProvider)
+- Learnings for future iterations:
+  - Dialog component uses React context for open/onOpenChange state (no Radix dependency)
+  - ToastProvider wraps children and renders toast list via portal-like fixed positioning
+  - useToast() hook provides addToast(message, variant) — auto-removes after 4s
+  - Rich text editing uses contentEditable div with document.execCommand for formatting
+  - execCommand supports: bold, italic, createLink, insertUnorderedList, insertOrderedList
+  - ComposeModal resets form state on successful send or discard
+  - Compose button added to sidebar between header and nav, passes onCompose callback
+  - AppShell manages composeOpen state and passes it to both sidebar instances (desktop + mobile)
+---
+
+## Iteration 28 - US-027: Reply and forward in thread
+- What was implemented: Reply, Reply All, and Forward buttons on each message in thread view. Inline reply form at bottom of thread with rich text toolbar. Forward opens compose modal with quoted body and Fwd: subject. Sent replies appear immediately in thread (optimistic update). Thread API now returns message_id for proper In-Reply-To/References header threading.
+- Files changed: app/(app)/inbox/[threadId]/page.tsx (rewritten with Reply/ReplyAll/Forward buttons, InlineReplyForm component), app/api/threads/[id]/route.ts (added message_id to email select and response), components/compose-modal.tsx (added ComposePreFill export, preFill prop with useEffect)
+- Learnings for future iterations:
+  - Reply pre-fills To with extractEmail(from_address), subject with "Re: " prefix, in_reply_to with message_id, references with all prior message_ids
+  - Reply All puts original sender in To, all other to+cc participants in CC (deduplicated)
+  - Forward uses ComposeModal with preFill prop (to="", subject="Fwd: ...", bodyHtml=quoted original)
+  - buildQuotedHtml() wraps original in styled blockquote div with "On [date], [from] wrote:" header
+  - Optimistic update: after successful reply send, append sentEmail to thread.emails state immediately
+  - ComposePreFill interface exported from compose-modal.tsx for use by other components
+  - useEffect with [open, preFill] dependencies applies preFill values when modal opens
+  - InlineReplyForm is a separate component within the thread page using useToast() from parent ToastProvider
+  - message_id needed in thread API response for building proper References header chain
+---
