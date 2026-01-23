@@ -301,12 +301,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, inbound emails are grouped into threads based on email headers.
 
 **Acceptance Criteria:**
-- [ ] On inbound email: check `In-Reply-To` and `References` headers to find existing thread
-- [ ] If match found: add email to existing thread, update thread's last_message_at, message_count, unread_count
-- [ ] If no match: create new Thread with subject (stripped of Re:/Fwd:), set participant_emails
-- [ ] Update thread's participant_emails with any new addresses
-- [ ] Thread matching works across inbound and outbound emails
-- [ ] Typecheck passes
+- [x] On inbound email: check `In-Reply-To` and `References` headers to find existing thread
+- [x] If match found: add email to existing thread, update thread's last_message_at, message_count, unread_count
+- [x] If no match: create new Thread with subject (stripped of Re:/Fwd:), set participant_emails
+- [x] Update thread's participant_emails with any new addresses
+- [x] Thread matching works across inbound and outbound emails
+- [x] Typecheck passes
 
 ---
 

@@ -219,3 +219,44 @@
   - participant_emails stored as JSON.stringify of unique address array
   - `randomUUID()` from Node.js crypto for generating message IDs
 ---
+
+## Iteration 18 - US-017: Send email — delivery status webhook
+- What was implemented: POST /api/webhooks/resend webhook handler that handles email.sent, email.delivered, email.bounced, email.delivery_delayed events, verifies Svix/HMAC signature, updates Email record status, ignores duplicates gracefully, returns 200 immediately
+- Files changed: app/api/webhooks/resend/route.ts (new), .env.example (added RESEND_WEBHOOK_SECRET)
+- Learnings for future iterations:
+  - Resend uses Svix for webhook delivery — headers are svix-id, svix-timestamp, svix-signature
+  - Svix signature: HMAC-SHA256 of "<msg_id>.<timestamp>.<body>" with base64-encoded key (after stripping "whsec_" prefix)
+  - Signature header contains space-separated "v1,<base64sig>" entries
+  - Use timingSafeEqual for constant-time signature comparison (prevent timing attacks)
+  - Status priority prevents downgrading (e.g., delivered won't go back to sent)
+  - Email matching: try message_id contains or direct id match against Resend's email_id
+  - Webhook route does NOT require auth middleware (external service calls it)
+  - RESEND_WEBHOOK_SECRET env var added for signing secret
+---
+
+## Iteration 19 - US-018: Receive email — inbound webhook handler
+- What was implemented: Added `email.received` event handling to the existing webhook at POST /api/webhooks/resend. Parses from/to/cc/subject/html/text/message_id/in_reply_to/references/attachments from Resend webhook payload. Routes to correct user by matching to address against User.email. Creates Email record (direction=inbound, status=received, read=false) and a new Thread per message. Stores attachment metadata (filename, content_type, size) as JSON.
+- Files changed: app/api/webhooks/resend/route.ts (major refactor: split into handleInboundEmail + handleDeliveryStatus functions), PRD.md
+- Learnings for future iterations:
+  - Refactored webhook handler into two functions: handleInboundEmail() and handleDeliveryStatus()
+  - Resend inbound webhook payload has: from, to, cc, subject, html, text, message_id, in_reply_to, references, attachments
+  - to/cc can be string or string[] — normalize with Array.isArray check
+  - references can be space-separated string or array — handle both formats
+  - Email addresses may be in "Name <email>" format — extract with regex /<([^>]+)>/
+  - Thread subject strips Re:/Fwd:/Fw: prefix for clean threading
+  - Duplicate prevention: check message_id + user_id + direction=inbound before creating
+  - Basic thread creation per email (US-019 will handle proper threading logic)
+  - Renamed EVENT_STATUS_MAP to DELIVERY_STATUS_MAP for clarity
+---
+
+## Iteration 20 - US-019: Receive email — threading logic
+- What was implemented: Proper email threading in handleInboundEmail — checks In-Reply-To and References headers to find existing threads, updates thread metadata (last_message_at, message_count, unread_count), merges participant_emails, and creates new threads only when no match found
+- Files changed: app/api/webhooks/resend/route.ts (refactored handleInboundEmail, added findExistingThread helper and cleanSubject helper)
+- Learnings for future iterations:
+  - findExistingThread() queries Email.message_id with `{ in: messageIdsToCheck }` to match against both inbound and outbound emails
+  - In-Reply-To is checked first, then References in reverse order (most recent first) for priority
+  - Thread.participant_emails is stored as JSON string; parse it back to merge new participants
+  - Prisma `{ increment: 1 }` syntax for atomic counter updates on message_count/unread_count
+  - cleanSubject() uses /^(Re|Fwd|Fw):\s*/gi with global+case-insensitive to strip all prefixes
+  - Thread update and participant merge done in two separate updates (first for counters, second for participants after merge logic)
+---

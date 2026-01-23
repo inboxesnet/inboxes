@@ -173,6 +173,51 @@ export async function POST(request: NextRequest) {
   return handleDeliveryStatus(data, newStatus);
 }
 
+/**
+ * Find an existing thread for a user by checking In-Reply-To and References headers.
+ * Matches against message_id on any Email (inbound or outbound) belonging to the user.
+ */
+async function findExistingThread(
+  userId: string,
+  inReplyTo: string | null,
+  referencesArray: string[]
+): Promise<string | null> {
+  // Collect all message IDs to search for (In-Reply-To + References)
+  const messageIdsToCheck: string[] = [];
+  if (inReplyTo) {
+    messageIdsToCheck.push(inReplyTo);
+  }
+  // Add references in reverse order (most recent first) for better matching
+  for (let i = referencesArray.length - 1; i >= 0; i--) {
+    if (!messageIdsToCheck.includes(referencesArray[i])) {
+      messageIdsToCheck.push(referencesArray[i]);
+    }
+  }
+
+  if (messageIdsToCheck.length === 0) {
+    return null;
+  }
+
+  // Find any email belonging to this user that matches one of the message IDs
+  const matchingEmail = await prisma.email.findFirst({
+    where: {
+      user_id: userId,
+      message_id: { in: messageIdsToCheck },
+    },
+    select: { thread_id: true },
+    orderBy: { created_at: "desc" },
+  });
+
+  return matchingEmail ? matchingEmail.thread_id : null;
+}
+
+/**
+ * Strip Re:/Fwd:/Fw: prefixes from subject for clean thread subject.
+ */
+function cleanSubject(subject: string): string {
+  return subject.replace(/^(Re|Fwd|Fw):\s*/gi, "").trim() || "(No Subject)";
+}
+
 async function handleInboundEmail(
   data: ResendWebhookEvent["data"]
 ): Promise<NextResponse> {
@@ -212,8 +257,12 @@ async function handleInboundEmail(
     return NextResponse.json({ received: true });
   }
 
+  // All participants for this email
+  const allParticipants = Array.from(
+    new Set([fromAddress, ...toAddresses, ...ccAddresses])
+  );
+
   // Route to correct user(s) by matching to address against User.email
-  // For each to address, find a matching user
   for (const toAddr of toAddresses) {
     // Extract email address from "Name <email>" format if needed
     const emailMatch = toAddr.match(/<([^>]+)>/);
@@ -242,32 +291,71 @@ async function handleInboundEmail(
         },
       });
       if (existingEmail) {
-        // Already processed — skip
         continue;
       }
     }
 
-    // Create a new thread for this email (basic — threading logic in US-019)
-    const thread = await prisma.thread.create({
-      data: {
-        org_id: user.org_id,
-        user_id: user.id,
-        subject: subject.replace(/^(Re|Fwd|Fw):\s*/i, "").trim() || "(No Subject)",
-        participant_emails: JSON.stringify(
-          Array.from(new Set([fromAddress, ...toAddresses, ...ccAddresses]))
-        ),
-        last_message_at: new Date(),
-        message_count: 1,
-        unread_count: 1,
-        folder: "inbox",
-      },
-    });
+    // Threading: check In-Reply-To and References to find existing thread
+    const existingThreadId = await findExistingThread(
+      user.id,
+      inReplyTo,
+      referencesArray
+    );
+
+    let threadId: string;
+
+    if (existingThreadId) {
+      // Add to existing thread: update last_message_at, increment message_count and unread_count
+      const existingThread = await prisma.thread.update({
+        where: { id: existingThreadId },
+        data: {
+          last_message_at: new Date(),
+          message_count: { increment: 1 },
+          unread_count: { increment: 1 },
+        },
+      });
+
+      // Update participant_emails with any new addresses
+      let currentParticipants: string[] = [];
+      try {
+        const raw = existingThread.participant_emails;
+        currentParticipants = typeof raw === "string" ? JSON.parse(raw) : (raw as string[]);
+      } catch {
+        currentParticipants = [];
+      }
+      const mergedParticipants = Array.from(
+        new Set([...currentParticipants, ...allParticipants])
+      );
+      await prisma.thread.update({
+        where: { id: existingThreadId },
+        data: {
+          participant_emails: JSON.stringify(mergedParticipants),
+        },
+      });
+
+      threadId = existingThreadId;
+    } else {
+      // No existing thread found — create a new one
+      const newThread = await prisma.thread.create({
+        data: {
+          org_id: user.org_id,
+          user_id: user.id,
+          subject: cleanSubject(subject),
+          participant_emails: JSON.stringify(allParticipants),
+          last_message_at: new Date(),
+          message_count: 1,
+          unread_count: 1,
+          folder: "inbox",
+        },
+      });
+      threadId = newThread.id;
+    }
 
     // Create Email record
     await prisma.email.create({
       data: {
         org_id: user.org_id,
-        thread_id: thread.id,
+        thread_id: threadId,
         user_id: user.id,
         message_id: messageId,
         in_reply_to: inReplyTo,
