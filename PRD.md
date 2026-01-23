@@ -385,14 +385,14 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can view a full email conversation with all messages in chronological order.
 
 **Acceptance Criteria:**
-- [ ] Page at `/inbox/[threadId]` showing all emails in the thread
-- [ ] Each message shows: sender, recipients, timestamp, body (rendered HTML, sanitized with DOMPurify)
-- [ ] Messages in chronological order (oldest first)
-- [ ] Most recent message expanded by default, older messages collapsed (click to expand)
-- [ ] Thread marked as read when opened (update unread_count)
-- [ ] Back button returns to inbox list
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/inbox/[threadId]` showing all emails in the thread
+- [x] Each message shows: sender, recipients, timestamp, body (rendered HTML, sanitized with DOMPurify)
+- [x] Messages in chronological order (oldest first)
+- [x] Most recent message expanded by default, older messages collapsed (click to expand)
+- [x] Thread marked as read when opened (update unread_count)
+- [x] Back button returns to inbox list
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

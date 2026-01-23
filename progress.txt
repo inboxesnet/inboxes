@@ -299,3 +299,45 @@
   - Keep-alive via ping every 30 seconds to detect stale connections
   - `npx tsx server/ws.ts` runs the TypeScript server directly for dev
 ---
+
+## Iteration 24 - US-023: Real-time email push to client
+- What was implemented: notifyUser() call in webhook handler after inbound email delivery, useWebSocket() client hook with exponential backoff reconnection, subscribe() API for multiple handlers
+- Files changed: app/api/webhooks/resend/route.ts (import notifyUser, call after email created), hooks/use-websocket.ts (new client hook)
+- Learnings for future iterations:
+  - Client hooks go in `hooks/` directory (not `lib/` which is server-side)
+  - useWebSocket uses refs for mutable state that shouldn't trigger re-renders (handlers, reconnect timer, ws instance)
+  - Exponential backoff: `1000 * 2^attempts` capped at 30s max delay
+  - WebSocket.onclose fires on both clean close and errors; reconnect in onclose only
+  - notifyUser payload should be minimal: threadId, emailId, subject, from, preview (first 100 chars of bodyPlain)
+  - "use client" directive required for hooks using React state/effects
+  - Set.forEach used instead of for...of to avoid downlevelIteration tsconfig requirement
+  - NEXT_PUBLIC_WS_URL env var used client-side for WebSocket connection URL
+---
+
+## Iteration 26 - US-025: Thread view UI
+- What was implemented: GET /api/threads/:id endpoint (returns all emails in thread, marks as read), Thread view page at /inbox/[threadId] with collapsible messages, DOMPurify HTML sanitization, back button, skeleton loading, error state
+- Files changed: app/api/threads/[id]/route.ts (new), app/(app)/inbox/[threadId]/page.tsx (new), package.json (added isomorphic-dompurify, @types/dompurify)
+- Learnings for future iterations:
+  - isomorphic-dompurify works on both server and client (wraps DOMPurify)
+  - DOMPurify.sanitize() with ALLOWED_TAGS/ALLOWED_ATTR for safe HTML rendering
+  - dangerouslySetInnerHTML renders sanitized HTML — use prose class for nice typography
+  - Thread read marking: update Thread.unread_count=0 and Email.read=true for all emails in thread
+  - EmailMessageItem component with defaultExpanded prop (last message expanded, rest collapsed)
+  - Chronological order (oldest first) with `orderBy: { received_at: "asc" }` in Prisma
+  - Next.js dynamic route params must be awaited in route handlers: `const { id } = await params`
+  - Build shows 11 kB for thread view page (includes DOMPurify)
+---
+
+## Iteration 25 - US-024: Inbox list view UI
+- What was implemented: GET /api/threads endpoint (paginated, folder-filtered, sorted by last_message_at desc), Inbox page UI with thread list (sender avatar/initial, name, subject, preview, time, unread indicators), skeleton loading state, empty state, pagination controls, real-time refresh via WebSocket new_email events
+- Files changed: app/api/threads/route.ts (new), app/(app)/inbox/page.tsx (rewritten from placeholder)
+- Learnings for future iterations:
+  - GET /api/threads uses `include: { emails: { take: 1, orderBy: { received_at: "desc" } } }` to get latest email for preview
+  - Thread summary includes: id, subject, unread_count, starred, message_count, last_message_at, from_address (from latest email), preview (first 120 chars of body_plain)
+  - formatTime() shows: time for today, weekday for this week, "Mon DD" for older
+  - extractName() parses "Name <email>" format or falls back to local part before @
+  - Unread threads: bold sender name, blue dot indicator, bg-blue-50/50 background
+  - Pagination: 20 per page, Previous/Next buttons, page X of Y display
+  - useWebSocket().subscribe() for real-time inbox refresh on new_email event
+  - Skeleton loading: 6 placeholder rows with animate-pulse circles and bars
+---
