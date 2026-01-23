@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db";
 
 // Map Resend event types to our EmailStatus values
-const EVENT_STATUS_MAP: Record<string, string> = {
+const DELIVERY_STATUS_MAP: Record<string, string> = {
   "email.sent": "sent",
   "email.delivered": "delivered",
   "email.bounced": "bounced",
@@ -93,13 +93,26 @@ function verifySvixSignature(
   return false;
 }
 
+interface ResendWebhookAttachment {
+  filename?: string;
+  content_type?: string;
+  size?: number;
+}
+
 interface ResendWebhookEvent {
   type: string;
   data: {
     email_id?: string;
     from?: string;
-    to?: string[];
+    to?: string | string[];
+    cc?: string | string[];
     subject?: string;
+    html?: string;
+    text?: string;
+    message_id?: string;
+    in_reply_to?: string;
+    references?: string | string[];
+    attachments?: ResendWebhookAttachment[];
     created_at?: string;
   };
 }
@@ -145,38 +158,154 @@ export async function POST(request: NextRequest) {
 
   const { type, data } = event;
 
-  // Only handle delivery status events
-  const newStatus = EVENT_STATUS_MAP[type];
+  // Handle inbound email
+  if (type === "email.received") {
+    return handleInboundEmail(data);
+  }
+
+  // Handle delivery status events
+  const newStatus = DELIVERY_STATUS_MAP[type];
   if (!newStatus) {
     // Unknown or unhandled event type — acknowledge gracefully
     return NextResponse.json({ received: true });
   }
 
-  // Find the email by Resend's email_id stored in message_id or by matching
-  // Resend includes email_id in webhook data
+  return handleDeliveryStatus(data, newStatus);
+}
+
+async function handleInboundEmail(
+  data: ResendWebhookEvent["data"]
+): Promise<NextResponse> {
+  const fromAddress = data.from || "";
+  const toRaw = data.to;
+  const ccRaw = data.cc;
+  const subject = data.subject || "(No Subject)";
+  const bodyHtml = data.html || "";
+  const bodyPlain = data.text || "";
+  const messageId = data.message_id || null;
+  const inReplyTo = data.in_reply_to || null;
+  const referencesRaw = data.references;
+  const attachmentsRaw = data.attachments || [];
+
+  // Normalize to/cc to arrays
+  const toAddresses = toRaw
+    ? (Array.isArray(toRaw) ? toRaw : [toRaw])
+    : [];
+  const ccAddresses = ccRaw
+    ? (Array.isArray(ccRaw) ? ccRaw : [ccRaw])
+    : [];
+
+  // Normalize references to array
+  const referencesArray = referencesRaw
+    ? (Array.isArray(referencesRaw) ? referencesRaw : referencesRaw.split(/\s+/).filter(Boolean))
+    : [];
+
+  // Store attachment metadata as JSON-friendly objects
+  const attachmentsMeta = attachmentsRaw.map((att) => ({
+    filename: att.filename || "untitled",
+    content_type: att.content_type || "application/octet-stream",
+    size: att.size || 0,
+  }));
+
+  if (toAddresses.length === 0) {
+    // No recipients to route to — acknowledge gracefully
+    return NextResponse.json({ received: true });
+  }
+
+  // Route to correct user(s) by matching to address against User.email
+  // For each to address, find a matching user
+  for (const toAddr of toAddresses) {
+    // Extract email address from "Name <email>" format if needed
+    const emailMatch = toAddr.match(/<([^>]+)>/);
+    const normalizedTo = emailMatch ? emailMatch[1].toLowerCase() : toAddr.toLowerCase().trim();
+
+    // Find user by email address
+    const user = await prisma.user.findFirst({
+      where: {
+        email: normalizedTo,
+        status: "active",
+      },
+    });
+
+    if (!user) {
+      // No user found for this address — skip (catch-all handled in US-021)
+      continue;
+    }
+
+    // Check for duplicate: skip if we already have this message_id for this user
+    if (messageId) {
+      const existingEmail = await prisma.email.findFirst({
+        where: {
+          user_id: user.id,
+          message_id: messageId,
+          direction: "inbound",
+        },
+      });
+      if (existingEmail) {
+        // Already processed — skip
+        continue;
+      }
+    }
+
+    // Create a new thread for this email (basic — threading logic in US-019)
+    const thread = await prisma.thread.create({
+      data: {
+        org_id: user.org_id,
+        user_id: user.id,
+        subject: subject.replace(/^(Re|Fwd|Fw):\s*/i, "").trim() || "(No Subject)",
+        participant_emails: JSON.stringify(
+          Array.from(new Set([fromAddress, ...toAddresses, ...ccAddresses]))
+        ),
+        last_message_at: new Date(),
+        message_count: 1,
+        unread_count: 1,
+        folder: "inbox",
+      },
+    });
+
+    // Create Email record
+    await prisma.email.create({
+      data: {
+        org_id: user.org_id,
+        thread_id: thread.id,
+        user_id: user.id,
+        message_id: messageId,
+        in_reply_to: inReplyTo,
+        references_header: referencesArray.length > 0 ? referencesArray : undefined,
+        from_address: fromAddress,
+        to_addresses: JSON.stringify(toAddresses),
+        cc_addresses: JSON.stringify(ccAddresses),
+        bcc_addresses: JSON.stringify([]),
+        subject,
+        body_html: bodyHtml,
+        body_plain: bodyPlain,
+        attachments: JSON.stringify(attachmentsMeta),
+        direction: "inbound",
+        status: "received",
+        read: false,
+        folder: "inbox",
+        received_at: new Date(),
+      },
+    });
+  }
+
+  return NextResponse.json({ received: true });
+}
+
+async function handleDeliveryStatus(
+  data: ResendWebhookEvent["data"],
+  newStatus: string
+): Promise<NextResponse> {
   const emailId = data.email_id;
   if (!emailId) {
     // Cannot match without email_id — ignore gracefully
     return NextResponse.json({ received: true });
   }
 
-  // Find email by message_id containing the Resend email ID
-  // Our message_id format: <uuid@domain> but Resend returns their own ID
-  // We need to match via the Resend response ID. Since we don't store it separately,
-  // we'll find outbound emails and match by Resend's references.
-  // Alternative: update the email with the closest match by email_id field
-  // For now, look up by a broad match - emails where message_id contains the id
-  // Actually, Resend webhook data includes the email_id which is their internal ID.
-  // We should find emails that were sent recently and match.
-  // The best approach: store resend_id on Email model, or match by message_id.
-  // Since we generate our own message_id, we can look up by checking if the
-  // Resend API response matched. For MVP, look up by the email_id from Resend.
-
-  // Try to find the email - Resend's email_id might be stored or we match by message_id
+  // Try to find the email by message_id or direct id match
   const email = await prisma.email.findFirst({
     where: {
       direction: "outbound",
-      // Try matching message_id that contains the resend email_id
       OR: [
         { message_id: { contains: emailId } },
         { id: emailId },
@@ -186,16 +315,16 @@ export async function POST(request: NextRequest) {
   });
 
   if (!email) {
-    // Email not found — could be a duplicate or already processed. Ignore gracefully.
+    // Email not found — ignore gracefully
     return NextResponse.json({ received: true });
   }
 
-  // Check if status already matches (idempotency - ignore duplicate events)
+  // Check if status already matches (idempotency)
   if (email.status === newStatus) {
     return NextResponse.json({ received: true });
   }
 
-  // Don't downgrade status (e.g., don't go from delivered back to sent)
+  // Don't downgrade status
   const STATUS_PRIORITY: Record<string, number> = {
     sent: 1,
     delivered: 2,
@@ -207,7 +336,6 @@ export async function POST(request: NextRequest) {
   const newPriority = STATUS_PRIORITY[newStatus] || 0;
 
   if (newPriority <= currentPriority) {
-    // Don't downgrade status
     return NextResponse.json({ received: true });
   }
 

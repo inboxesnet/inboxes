@@ -286,13 +286,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need to receive inbound emails from Resend and store them in the correct user's inbox.
 
 **Acceptance Criteria:**
-- [ ] Webhook handler at `POST /api/webhooks/resend` handles: email.received event
-- [ ] Verifies webhook signature
-- [ ] Parses: from, to, cc, subject, body_html, body_plain, message_id, in_reply_to, references, attachments metadata
-- [ ] Routes to correct user by matching `to` address against User.email
-- [ ] Creates Email record with direction=inbound, status=received, read=false
-- [ ] Stores attachment metadata (id, filename, content_type, size) as JSON
-- [ ] Typecheck passes
+- [x] Webhook handler at `POST /api/webhooks/resend` handles: email.received event
+- [x] Verifies webhook signature
+- [x] Parses: from, to, cc, subject, body_html, body_plain, message_id, in_reply_to, references, attachments metadata
+- [x] Routes to correct user by matching `to` address against User.email
+- [x] Creates Email record with direction=inbound, status=received, read=false
+- [x] Stores attachment metadata (id, filename, content_type, size) as JSON
+- [x] Typecheck passes
 
 ---
 
