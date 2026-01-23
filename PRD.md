@@ -272,12 +272,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need to track email delivery status via Resend webhooks.
 
 **Acceptance Criteria:**
-- [ ] Webhook handler at `POST /api/webhooks/resend` handles: email.sent, email.delivered, email.bounced, email.delivery_delayed
-- [ ] Verifies Resend webhook signature (HMAC)
-- [ ] Updates Email record status based on event type
-- [ ] Ignores duplicate webhook events gracefully
-- [ ] Returns 200 immediately (processing is fast)
-- [ ] Typecheck passes
+- [x] Webhook handler at `POST /api/webhooks/resend` handles: email.sent, email.delivered, email.bounced, email.delivery_delayed
+- [x] Verifies Resend webhook signature (HMAC)
+- [x] Updates Email record status based on event type
+- [x] Ignores duplicate webhook events gracefully
+- [x] Returns 200 immediately (processing is fast)
+- [x] Typecheck passes
 
 ---
 
