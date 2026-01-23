@@ -284,3 +284,18 @@
   - Phase 1 user-check is quick (findFirst), but Phase 3 re-checks weren't needed; used matchedAddresses Set instead
   - Domain lookup uses `include: { org: true }` to access org.catch_all_enabled in one query
 ---
+
+## Iteration 23 - US-022: WebSocket server setup
+- What was implemented: WebSocket server (ws library) as separate process, authenticated via session JWT cookie, user connection map, notifyUser() helper, internal HTTP API for cross-process notification, keep-alive pings
+- Files changed: lib/ws-server.ts (new - core WS server logic), lib/notify.ts (new - notifyUser helper for Next.js process), server/ws.ts (new - standalone WS server entry point with internal HTTP API), package.json (added ws dep + ws:dev script), .env.example (added WS_PORT, WS_HTTP_PORT, WS_INTERNAL_URL, NEXT_PUBLIC_WS_URL)
+- Learnings for future iterations:
+  - WebSocket server runs as separate process (not inside Next.js) for Vercel compatibility
+  - Architecture: Next.js → HTTP POST to WS internal API → WS server broadcasts to connected clients
+  - lib/ws-server.ts: createWebSocketServer() + notifyUser() for in-process use
+  - lib/notify.ts: notifyUser() for cross-process use (posts to WS HTTP API)
+  - WS server authenticates by parsing session cookie from upgrade request headers
+  - Use Set.forEach() instead of for...of on Sets to avoid downlevelIteration tsconfig issues
+  - Clients map: Map<userId, Set<ConnectedClient>> supports multiple tabs per user
+  - Keep-alive via ping every 30 seconds to detect stale connections
+  - `npx tsx server/ws.ts` runs the TypeScript server directly for dev
+---

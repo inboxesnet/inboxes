@@ -342,12 +342,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need a WebSocket server so clients can receive real-time email notifications.
 
 **Acceptance Criteria:**
-- [ ] WebSocket server integrated with Next.js (via custom server or separate process)
-- [ ] Clients authenticate via session token on connection
-- [ ] Server maintains map of connected user_ids to socket connections
-- [ ] `notifyUser(userId, event, payload)` helper function available for use by other code
-- [ ] Handles connection/disconnection gracefully
-- [ ] Typecheck passes
+- [x] WebSocket server integrated with Next.js (via custom server or separate process)
+- [x] Clients authenticate via session token on connection
+- [x] Server maintains map of connected user_ids to socket connections
+- [x] `notifyUser(userId, event, payload)` helper function available for use by other code
+- [x] Handles connection/disconnection gracefully
+- [x] Typecheck passes
 
 ---
 
