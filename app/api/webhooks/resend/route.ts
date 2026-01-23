@@ -218,6 +218,131 @@ function cleanSubject(subject: string): string {
   return subject.replace(/^(Re|Fwd|Fw):\s*/gi, "").trim() || "(No Subject)";
 }
 
+/**
+ * Deliver an inbound email to a specific user (creating/updating thread).
+ * Returns true if the email was delivered, false if it was a duplicate.
+ */
+async function deliverToUser(
+  user: { id: string; org_id: string },
+  opts: {
+    fromAddress: string;
+    toAddresses: string[];
+    ccAddresses: string[];
+    subject: string;
+    bodyHtml: string;
+    bodyPlain: string;
+    messageId: string | null;
+    inReplyTo: string | null;
+    referencesArray: string[];
+    attachmentsMeta: { filename: string; content_type: string; size: number }[];
+    allParticipants: string[];
+    aliasId?: string;
+  }
+): Promise<boolean> {
+  const {
+    fromAddress, toAddresses, ccAddresses, subject, bodyHtml, bodyPlain,
+    messageId, inReplyTo, referencesArray, attachmentsMeta, allParticipants, aliasId,
+  } = opts;
+
+  // Check for duplicate: skip if we already have this message_id for this user
+  if (messageId) {
+    const existingEmail = await prisma.email.findFirst({
+      where: {
+        user_id: user.id,
+        message_id: messageId,
+        direction: "inbound",
+      },
+    });
+    if (existingEmail) {
+      return false;
+    }
+  }
+
+  // Threading: check In-Reply-To and References to find existing thread
+  const existingThreadId = await findExistingThread(
+    user.id,
+    inReplyTo,
+    referencesArray
+  );
+
+  let threadId: string;
+
+  if (existingThreadId) {
+    // Add to existing thread: update last_message_at, increment message_count and unread_count
+    const existingThread = await prisma.thread.update({
+      where: { id: existingThreadId },
+      data: {
+        last_message_at: new Date(),
+        message_count: { increment: 1 },
+        unread_count: { increment: 1 },
+      },
+    });
+
+    // Update participant_emails with any new addresses
+    let currentParticipants: string[] = [];
+    try {
+      const raw = existingThread.participant_emails;
+      currentParticipants = typeof raw === "string" ? JSON.parse(raw) : (raw as string[]);
+    } catch {
+      currentParticipants = [];
+    }
+    const mergedParticipants = Array.from(
+      new Set([...currentParticipants, ...allParticipants])
+    );
+    await prisma.thread.update({
+      where: { id: existingThreadId },
+      data: {
+        participant_emails: JSON.stringify(mergedParticipants),
+      },
+    });
+
+    threadId = existingThreadId;
+  } else {
+    // No existing thread found — create a new one
+    const newThread = await prisma.thread.create({
+      data: {
+        org_id: user.org_id,
+        user_id: user.id,
+        subject: cleanSubject(subject),
+        participant_emails: JSON.stringify(allParticipants),
+        last_message_at: new Date(),
+        message_count: 1,
+        unread_count: 1,
+        folder: "inbox",
+      },
+    });
+    threadId = newThread.id;
+  }
+
+  // Create Email record
+  await prisma.email.create({
+    data: {
+      org_id: user.org_id,
+      thread_id: threadId,
+      user_id: user.id,
+      message_id: messageId,
+      in_reply_to: inReplyTo,
+      references_header: referencesArray.length > 0 ? referencesArray : undefined,
+      from_address: fromAddress,
+      to_addresses: JSON.stringify(toAddresses),
+      cc_addresses: JSON.stringify(ccAddresses),
+      bcc_addresses: JSON.stringify([]),
+      subject,
+      body_html: bodyHtml,
+      body_plain: bodyPlain,
+      attachments: JSON.stringify(attachmentsMeta),
+      direction: "inbound",
+      status: "received",
+      read: false,
+      folder: "inbox",
+      received_at: new Date(),
+      delivered_via_alias: aliasId || null,
+    },
+  });
+
+  return true;
+}
+
 async function handleInboundEmail(
   data: ResendWebhookEvent["data"]
 ): Promise<NextResponse> {
@@ -262,7 +387,15 @@ async function handleInboundEmail(
     new Set([fromAddress, ...toAddresses, ...ccAddresses])
   );
 
-  // Route to correct user(s) by matching to address against User.email
+  // Track user IDs that have already received this email (prevent duplicate delivery)
+  const deliveredUserIds = new Set<string>();
+
+  const deliverOpts = {
+    fromAddress, toAddresses, ccAddresses, subject, bodyHtml, bodyPlain,
+    messageId, inReplyTo, referencesArray, attachmentsMeta, allParticipants,
+  };
+
+  // Phase 1: Direct user matching — route to users whose email matches a `to` address
   for (const toAddr of toAddresses) {
     // Extract email address from "Name <email>" format if needed
     const emailMatch = toAddr.match(/<([^>]+)>/);
@@ -277,104 +410,57 @@ async function handleInboundEmail(
     });
 
     if (!user) {
-      // No user found for this address — skip (catch-all handled in US-021)
       continue;
     }
 
-    // Check for duplicate: skip if we already have this message_id for this user
-    if (messageId) {
-      const existingEmail = await prisma.email.findFirst({
-        where: {
-          user_id: user.id,
-          message_id: messageId,
-          direction: "inbound",
-        },
-      });
-      if (existingEmail) {
-        continue;
-      }
+    const delivered = await deliverToUser(user, deliverOpts);
+    if (delivered) {
+      deliveredUserIds.add(user.id);
     }
+  }
 
-    // Threading: check In-Reply-To and References to find existing thread
-    const existingThreadId = await findExistingThread(
-      user.id,
-      inReplyTo,
-      referencesArray
-    );
+  // Phase 2: Alias matching — route to alias members if `to` matches an alias address
+  for (const toAddr of toAddresses) {
+    const emailMatch = toAddr.match(/<([^>]+)>/);
+    const normalizedTo = emailMatch ? emailMatch[1].toLowerCase() : toAddr.toLowerCase().trim();
 
-    let threadId: string;
-
-    if (existingThreadId) {
-      // Add to existing thread: update last_message_at, increment message_count and unread_count
-      const existingThread = await prisma.thread.update({
-        where: { id: existingThreadId },
-        data: {
-          last_message_at: new Date(),
-          message_count: { increment: 1 },
-          unread_count: { increment: 1 },
+    // Find alias by address
+    const alias = await prisma.alias.findFirst({
+      where: {
+        address: normalizedTo,
+      },
+      include: {
+        alias_users: {
+          include: {
+            user: true,
+          },
         },
-      });
-
-      // Update participant_emails with any new addresses
-      let currentParticipants: string[] = [];
-      try {
-        const raw = existingThread.participant_emails;
-        currentParticipants = typeof raw === "string" ? JSON.parse(raw) : (raw as string[]);
-      } catch {
-        currentParticipants = [];
-      }
-      const mergedParticipants = Array.from(
-        new Set([...currentParticipants, ...allParticipants])
-      );
-      await prisma.thread.update({
-        where: { id: existingThreadId },
-        data: {
-          participant_emails: JSON.stringify(mergedParticipants),
-        },
-      });
-
-      threadId = existingThreadId;
-    } else {
-      // No existing thread found — create a new one
-      const newThread = await prisma.thread.create({
-        data: {
-          org_id: user.org_id,
-          user_id: user.id,
-          subject: cleanSubject(subject),
-          participant_emails: JSON.stringify(allParticipants),
-          last_message_at: new Date(),
-          message_count: 1,
-          unread_count: 1,
-          folder: "inbox",
-        },
-      });
-      threadId = newThread.id;
-    }
-
-    // Create Email record
-    await prisma.email.create({
-      data: {
-        org_id: user.org_id,
-        thread_id: threadId,
-        user_id: user.id,
-        message_id: messageId,
-        in_reply_to: inReplyTo,
-        references_header: referencesArray.length > 0 ? referencesArray : undefined,
-        from_address: fromAddress,
-        to_addresses: JSON.stringify(toAddresses),
-        cc_addresses: JSON.stringify(ccAddresses),
-        bcc_addresses: JSON.stringify([]),
-        subject,
-        body_html: bodyHtml,
-        body_plain: bodyPlain,
-        attachments: JSON.stringify(attachmentsMeta),
-        direction: "inbound",
-        status: "received",
-        read: false,
-        folder: "inbox",
-        received_at: new Date(),
       },
     });
+
+    if (!alias) {
+      continue;
+    }
+
+    // Deliver to each alias user who hasn't already received this email
+    for (const aliasUser of alias.alias_users) {
+      if (deliveredUserIds.has(aliasUser.user_id)) {
+        // User already received via direct addressing — skip to avoid duplicates
+        continue;
+      }
+
+      if (aliasUser.user.status !== "active") {
+        continue;
+      }
+
+      const delivered = await deliverToUser(
+        { id: aliasUser.user_id, org_id: alias.org_id },
+        { ...deliverOpts, aliasId: alias.id }
+      );
+      if (delivered) {
+        deliveredUserIds.add(aliasUser.user_id);
+      }
+    }
   }
 
   return NextResponse.json({ received: true });

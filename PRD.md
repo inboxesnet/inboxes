@@ -315,12 +315,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, emails sent to an alias address are delivered to all assigned users.
 
 **Acceptance Criteria:**
-- [ ] On inbound: if `to` matches an Alias address, find all AliasUser records
-- [ ] Create separate Email record for each alias user (each gets their own copy)
-- [ ] Set `delivered_via_alias` to the alias ID on each Email
-- [ ] Each user gets their own Thread (or existing thread updated)
-- [ ] No duplicate delivery if user is directly addressed AND on the alias
-- [ ] Typecheck passes
+- [x] On inbound: if `to` matches an Alias address, find all AliasUser records
+- [x] Create separate Email record for each alias user (each gets their own copy)
+- [x] Set `delivered_via_alias` to the alias ID on each Email
+- [x] Each user gets their own Thread (or existing thread updated)
+- [x] No duplicate delivery if user is directly addressed AND on the alias
+- [x] Typecheck passes
 
 ---
 

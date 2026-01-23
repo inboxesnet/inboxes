@@ -260,3 +260,15 @@
   - cleanSubject() uses /^(Re|Fwd|Fw):\s*/gi with global+case-insensitive to strip all prefixes
   - Thread update and participant merge done in two separate updates (first for counters, second for participants after merge logic)
 ---
+
+## Iteration 21 - US-020: Receive email — alias routing
+- What was implemented: Alias routing for inbound emails — when a `to` address matches an Alias, deliver to all AliasUser members with delivered_via_alias set, preventing duplicate delivery if user is both directly addressed and on the alias
+- Files changed: app/api/webhooks/resend/route.ts (extracted deliverToUser helper, added alias matching phase)
+- Learnings for future iterations:
+  - Extracted `deliverToUser()` helper to avoid code duplication between direct and alias delivery
+  - Two-phase delivery: Phase 1 (direct user match) → Phase 2 (alias match), with deliveredUserIds Set to prevent duplicates
+  - Alias lookup uses `prisma.alias.findFirst` with `include: { alias_users: { include: { user: true } } }` for nested data
+  - deliverToUser takes an optional `aliasId` param to set delivered_via_alias on the Email record
+  - Only deliver to alias users with status="active" (skip disabled/invited users)
+  - Duplicate prevention across direct+alias: check deliveredUserIds before delivering via alias
+---
