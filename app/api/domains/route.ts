@@ -4,6 +4,37 @@ import { getCurrentUser } from "@/lib/session";
 
 const DOMAIN_REGEX = /^(?!-)([a-zA-Z0-9-]{1,63}(?<!-)\.)+[a-zA-Z]{2,}$/;
 
+export async function GET() {
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (user.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const domain = await prisma.domain.findFirst({
+    where: { org_id: user.org_id },
+  });
+
+  if (!domain) {
+    return NextResponse.json({ domain: null });
+  }
+
+  return NextResponse.json({
+    domain: {
+      id: domain.id,
+      domain: domain.domain,
+      status: domain.status,
+      mx_verified: domain.mx_verified,
+      spf_verified: domain.spf_verified,
+      dkim_verified: domain.dkim_verified,
+      verified_at: domain.verified_at,
+    },
+  });
+}
+
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) {

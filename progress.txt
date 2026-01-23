@@ -193,3 +193,15 @@
   - Use `findFirst` with org_id filter to ensure domain belongs to user's org (security)
   - DomainStatus enum values: "pending", "verified", "active" — cast string with `as` for type safety
 ---
+
+## Iteration 16 - US-015: Domain — setup UI (admin)
+- What was implemented: Domain settings page at /settings/domain with add domain form, DNS records table (Type, Name, Value, Priority, Status columns), Copy button per record, Verify Domain button, status badges (pending/yellow, verified/green, failed/red), loading state, and GET /api/domains endpoint
+- Files changed: app/(app)/settings/domain/page.tsx (new), components/ui/badge.tsx (new), app/api/domains/route.ts (added GET handler)
+- Learnings for future iterations:
+  - Badge component uses cva (class-variance-authority) with custom variants: success (green), warning (yellow), destructive (red)
+  - Domain page uses client-side state machine: loading → no domain (show form) → domain exists (show DNS records + verify button)
+  - Copy to clipboard: `navigator.clipboard.writeText(value)` with visual feedback via state
+  - DNS records table uses font-mono for technical values, truncate for long values
+  - GET /api/domains fetches first domain for the org (MVP: single domain per org)
+  - Build output shows /settings/domain as dynamic route (3.76 kB)
+---

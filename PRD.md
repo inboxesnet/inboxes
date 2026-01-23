@@ -241,14 +241,14 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I see a domain setup page with DNS records to configure and a verify button.
 
 **Acceptance Criteria:**
-- [ ] Page at `/settings/domain` (admin-only)
-- [ ] If no domain: form to enter domain name
-- [ ] After adding: displays DNS records table with Type, Name, Value, Priority columns
-- [ ] Each record has a "Copy" button for the value
-- [ ] "Verify Domain" button that triggers verification API
-- [ ] Status badges: pending (yellow), verified (green), failed (red) per record
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/settings/domain` (admin-only)
+- [x] If no domain: form to enter domain name
+- [x] After adding: displays DNS records table with Type, Name, Value, Priority columns
+- [x] Each record has a "Copy" button for the value
+- [x] "Verify Domain" button that triggers verification API
+- [x] Status badges: pending (yellow), verified (green), failed (red) per record
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
