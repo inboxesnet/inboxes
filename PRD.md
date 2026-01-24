@@ -445,12 +445,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can archive, trash, or permanently delete emails/threads.
 
 **Acceptance Criteria:**
-- [ ] `PATCH /api/threads/:id/archive` — sets folder=archive on thread + all emails
-- [ ] `PATCH /api/threads/:id/trash` — sets folder=trash, sets trash_expires_at to 30 days from now
-- [ ] `DELETE /api/threads/:id` — permanent delete (only if already in trash)
-- [ ] All endpoints scoped to current user's threads only
-- [ ] Returns updated thread object
-- [ ] Typecheck passes
+- [x] `PATCH /api/threads/:id/archive` — sets folder=archive on thread + all emails
+- [x] `PATCH /api/threads/:id/trash` — sets folder=trash, sets trash_expires_at to 30 days from now
+- [x] `DELETE /api/threads/:id` — permanent delete (only if already in trash)
+- [x] All endpoints scoped to current user's threads only
+- [x] Returns updated thread object
+- [x] Typecheck passes
 
 ---
 
@@ -459,11 +459,11 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can star threads and mark them as read/unread.
 
 **Acceptance Criteria:**
-- [ ] `PATCH /api/threads/:id/star` — toggles starred boolean on thread
-- [ ] `PATCH /api/threads/:id/read` — marks all emails in thread as read, sets unread_count=0
-- [ ] `PATCH /api/threads/:id/unread` — marks thread as unread (unread_count=1)
-- [ ] All endpoints scoped to current user
-- [ ] Typecheck passes
+- [x] `PATCH /api/threads/:id/star` — toggles starred boolean on thread
+- [x] `PATCH /api/threads/:id/read` — marks all emails in thread as read, sets unread_count=0
+- [x] `PATCH /api/threads/:id/unread` — marks thread as unread (unread_count=1)
+- [x] All endpoints scoped to current user
+- [x] Typecheck passes
 
 ---
 
