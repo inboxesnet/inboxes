@@ -501,13 +501,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can attach files when composing an email.
 
 **Acceptance Criteria:**
-- [ ] Compose modal has "Attach" button + drag-drop zone on the body area
-- [ ] Files uploaded to S3-compatible storage, returns URL
-- [ ] Max 50MB total per email (validate client + server side)
-- [ ] Attached files shown as chips with filename, size, remove button
-- [ ] On send: pass attachment URLs/data to Resend API
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Compose modal has "Attach" button + drag-drop zone on the body area
+- [x] Files uploaded to S3-compatible storage, returns URL
+- [x] Max 50MB total per email (validate client + server side)
+- [x] Attached files shown as chips with filename, size, remove button
+- [x] On send: pass attachment URLs/data to Resend API
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

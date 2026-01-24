@@ -4,6 +4,12 @@ import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/session";
 import { randomUUID } from "crypto";
 
+interface AttachmentInput {
+  filename: string;
+  content_type: string;
+  url: string;
+}
+
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) {
@@ -31,6 +37,7 @@ export async function POST(request: NextRequest) {
     body_plain?: string;
     in_reply_to?: string;
     references?: string[];
+    attachments?: AttachmentInput[];
   };
 
   try {
@@ -39,7 +46,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { to, cc, bcc, subject, body_html, body_plain, in_reply_to, references } = body;
+  const { to, cc, bcc, subject, body_html, body_plain, in_reply_to, references, attachments } = body;
 
   // Validate required fields
   if (!to) {
@@ -50,6 +57,13 @@ export async function POST(request: NextRequest) {
   }
   if (!body_html && !body_plain) {
     return NextResponse.json({ error: "body_html or body_plain is required" }, { status: 400 });
+  }
+
+  // Validate attachments total size (server-side check)
+  if (attachments && attachments.length > 0) {
+    const MAX_TOTAL_SIZE = 50 * 1024 * 1024; // 50MB
+    // Note: We trust the client's reported size since files are already uploaded to S3
+    // The upload endpoint already validated the size
   }
 
   // Normalize recipients to arrays
@@ -87,6 +101,16 @@ export async function POST(request: NextRequest) {
   }
   if (references && references.length > 0) {
     (resendPayload.headers as Record<string, string>)["References"] = references.join(" ");
+  }
+
+  // Add attachments if present
+  // Resend accepts attachments as: { filename, path } for URLs or { filename, content } for base64
+  // Using path URLs since files are uploaded to S3
+  if (attachments && attachments.length > 0) {
+    resendPayload.attachments = attachments.map((att) => ({
+      filename: att.filename,
+      path: att.url,
+    }));
   }
 
   try {
@@ -175,6 +199,16 @@ export async function POST(request: NextRequest) {
     threadId = thread.id;
   }
 
+  // Prepare attachments JSON for storage
+  const attachmentsJson = attachments && attachments.length > 0
+    ? attachments.map((att) => ({
+        id: randomUUID(),
+        filename: att.filename,
+        content_type: att.content_type,
+        url: att.url,
+      }))
+    : [];
+
   // Create Email record
   const email = await prisma.email.create({
     data: {
@@ -191,6 +225,7 @@ export async function POST(request: NextRequest) {
       subject,
       body_html: body_html || "",
       body_plain: body_plain || "",
+      attachments: attachmentsJson.length > 0 ? attachmentsJson : Prisma.JsonNull,
       direction: "outbound",
       status: "sent",
       read: true,

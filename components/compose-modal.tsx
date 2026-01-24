@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bold, Italic, Link, List, ListOrdered, Send } from "lucide-react";
+import { Bold, Italic, Link, List, ListOrdered, Send, Paperclip, X, FileIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,10 +20,29 @@ export interface ComposePreFill {
   bodyHtml?: string;
 }
 
+interface AttachedFile {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  url: string;
+  file?: File; // Local file before upload
+  uploading?: boolean;
+  error?: string;
+}
+
 interface ComposeModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   preFill?: ComposePreFill;
+}
+
+const MAX_TOTAL_SIZE = 50 * 1024 * 1024; // 50MB
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps) {
@@ -35,7 +54,10 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
   const [bcc, setBcc] = React.useState("");
   const [sending, setSending] = React.useState(false);
   const [error, setError] = React.useState("");
+  const [attachments, setAttachments] = React.useState<AttachedFile[]>([]);
+  const [isDragging, setIsDragging] = React.useState(false);
   const editorRef = React.useRef<HTMLDivElement>(null);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   React.useEffect(() => {
     if (open && preFill) {
@@ -58,6 +80,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
     setBcc("");
     setShowCcBcc(false);
     setError("");
+    setAttachments([]);
     if (editorRef.current) {
       editorRef.current.innerHTML = "";
     }
@@ -91,6 +114,121 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
     execCommand("insertOrderedList");
   }
 
+  function getTotalAttachmentSize(): number {
+    return attachments.reduce((sum, a) => sum + a.size, 0);
+  }
+
+  async function handleFiles(files: FileList | File[]) {
+    const fileArray = Array.from(files);
+    const currentTotal = getTotalAttachmentSize();
+    let newTotal = currentTotal;
+
+    // Validate total size
+    for (const file of fileArray) {
+      newTotal += file.size;
+    }
+
+    if (newTotal > MAX_TOTAL_SIZE) {
+      setError(`Total attachment size cannot exceed ${formatFileSize(MAX_TOTAL_SIZE)}`);
+      return;
+    }
+
+    // Create temporary entries for each file
+    const newAttachments: AttachedFile[] = fileArray.map((file) => ({
+      id: `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      filename: file.name,
+      content_type: file.type || "application/octet-stream",
+      size: file.size,
+      url: "",
+      file,
+      uploading: true,
+    }));
+
+    setAttachments((prev) => [...prev, ...newAttachments]);
+
+    // Upload files
+    const formData = new FormData();
+    for (const file of fileArray) {
+      formData.append("files", file);
+    }
+
+    try {
+      const res = await fetch("/api/attachments/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const errorMsg = (data as { error?: string }).error || "Failed to upload files";
+
+        // Mark files as failed
+        setAttachments((prev) =>
+          prev.map((a) =>
+            newAttachments.some((na) => na.id === a.id)
+              ? { ...a, uploading: false, error: errorMsg }
+              : a
+          )
+        );
+        return;
+      }
+
+      const data = (await res.json()) as { files: AttachedFile[] };
+
+      // Replace temp entries with uploaded entries
+      setAttachments((prev) => {
+        const nonTempFiles = prev.filter((a) => !newAttachments.some((na) => na.id === a.id));
+        return [...nonTempFiles, ...data.files];
+      });
+    } catch {
+      // Mark files as failed
+      setAttachments((prev) =>
+        prev.map((a) =>
+          newAttachments.some((na) => na.id === a.id)
+            ? { ...a, uploading: false, error: "Upload failed" }
+            : a
+        )
+      );
+    }
+  }
+
+  function handleAttachClick() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFiles(e.target.files);
+      e.target.value = ""; // Reset input
+    }
+  }
+
+  function handleRemoveAttachment(id: string) {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFiles(e.dataTransfer.files);
+    }
+  }
+
   async function handleSend() {
     setError("");
 
@@ -112,6 +250,18 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
       return;
     }
 
+    // Check if any attachments are still uploading
+    if (attachments.some((a) => a.uploading)) {
+      setError("Please wait for attachments to finish uploading");
+      return;
+    }
+
+    // Check for failed attachments
+    if (attachments.some((a) => a.error)) {
+      setError("Some attachments failed to upload. Please remove them and try again.");
+      return;
+    }
+
     // Parse email addresses (comma separated)
     const toAddresses = to.split(",").map((e) => e.trim()).filter(Boolean);
     const ccAddresses = cc ? cc.split(",").map((e) => e.trim()).filter(Boolean) : [];
@@ -130,6 +280,13 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
           subject,
           body_html: bodyHtml,
           body_plain: bodyPlain,
+          attachments: attachments.length > 0
+            ? attachments.map((a) => ({
+                filename: a.filename,
+                content_type: a.content_type,
+                url: a.url,
+              }))
+            : undefined,
         }),
       });
 
@@ -288,17 +445,94 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
             >
               <ListOrdered className="h-4 w-4" />
             </Button>
+            <div className="flex-1" />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={handleAttachClick}
+              title="Attach files"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={handleFileInputChange}
+            />
           </div>
 
-          {/* ContentEditable editor */}
+          {/* ContentEditable editor with drag-drop support */}
           <div
             ref={editorRef}
             contentEditable
-            className="min-h-[200px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            className={`min-h-[200px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+              isDragging
+                ? "border-primary border-2 bg-primary/5"
+                : "border-input"
+            }`}
             role="textbox"
             aria-label="Email body"
             aria-multiline="true"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
           />
+
+          {/* Drag overlay hint */}
+          {isDragging && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md bg-primary/10">
+              <div className="rounded-lg bg-background px-4 py-2 shadow-lg">
+                <p className="text-sm font-medium">Drop files to attach</p>
+              </div>
+            </div>
+          )}
+
+          {/* Attachment chips */}
+          {attachments.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                {attachments.map((attachment) => (
+                  <div
+                    key={attachment.id}
+                    className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm ${
+                      attachment.error
+                        ? "border-destructive bg-destructive/10"
+                        : attachment.uploading
+                          ? "border-muted bg-muted/50"
+                          : "border-border bg-muted/30"
+                    }`}
+                  >
+                    <FileIcon className="h-3 w-3 flex-shrink-0" />
+                    <span className="max-w-[150px] truncate">{attachment.filename}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatFileSize(attachment.size)}
+                    </span>
+                    {attachment.uploading && (
+                      <span className="text-xs text-muted-foreground">Uploading...</span>
+                    )}
+                    {attachment.error && (
+                      <span className="text-xs text-destructive">Failed</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveAttachment(attachment.id)}
+                      className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                      title="Remove attachment"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Total: {formatFileSize(getTotalAttachmentSize())} / {formatFileSize(MAX_TOTAL_SIZE)}
+              </p>
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-2 pt-2">

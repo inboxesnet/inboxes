@@ -13,6 +13,7 @@
     "ws:dev": "npx tsx server/ws.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.975.0",
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
