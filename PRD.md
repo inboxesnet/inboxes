@@ -516,12 +516,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can see and download attachments on received emails.
 
 **Acceptance Criteria:**
-- [ ] Thread view shows attachments list below email body (filename, size, file type icon)
-- [ ] Click attachment to download (fetch from Resend Attachments API or S3)
-- [ ] Image attachments show inline preview (thumbnail)
-- [ ] Non-image attachments show file type icon
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Thread view shows attachments list below email body (filename, size, file type icon)
+- [x] Click attachment to download (fetch from Resend Attachments API or S3)
+- [x] Image attachments show inline preview (thumbnail)
+- [x] Non-image attachments show file type icon
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

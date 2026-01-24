@@ -3,11 +3,20 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import DOMPurify from "isomorphic-dompurify";
-import { Reply, ReplyAll, Forward, Send, Bold, Italic, Link, List, ListOrdered, Archive, Trash2, Star, Mail, MailOpen } from "lucide-react";
+import { Reply, ReplyAll, Forward, Send, Bold, Italic, Link, List, ListOrdered, Archive, Trash2, Star, Mail, Download, FileText, FileImage, FileAudio, FileVideo, FileArchive, File as FileIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { ComposeModal, ComposePreFill } from "@/components/compose-modal";
 import { cn } from "@/lib/utils";
+
+interface EmailAttachment {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  content?: string | null;
+  url?: string;
+}
 
 interface EmailMessage {
   id: string;
@@ -21,7 +30,7 @@ interface EmailMessage {
   direction: string;
   read: boolean;
   received_at: string;
-  attachments: unknown[];
+  attachments: EmailAttachment[];
 }
 
 interface ThreadDetail {
@@ -79,6 +88,142 @@ function sanitizeHtml(html: string): string {
 function formatRecipients(addresses: string[]): string {
   if (!addresses || addresses.length === 0) return "";
   return addresses.map((addr) => extractName(addr)).join(", ");
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isImageType(contentType: string): boolean {
+  return contentType.startsWith("image/");
+}
+
+function getFileIcon(contentType: string) {
+  if (contentType.startsWith("image/")) return FileImage;
+  if (contentType.startsWith("audio/")) return FileAudio;
+  if (contentType.startsWith("video/")) return FileVideo;
+  if (contentType.startsWith("text/")) return FileText;
+  if (
+    contentType.includes("zip") ||
+    contentType.includes("tar") ||
+    contentType.includes("rar") ||
+    contentType.includes("7z") ||
+    contentType.includes("gzip")
+  ) {
+    return FileArchive;
+  }
+  if (
+    contentType.includes("pdf") ||
+    contentType.includes("document") ||
+    contentType.includes("word")
+  ) {
+    return FileText;
+  }
+  return FileIcon;
+}
+
+function AttachmentItem({
+  attachment,
+  emailId,
+}: {
+  attachment: EmailAttachment;
+  emailId: string;
+}) {
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageError, setImageError] = useState(false);
+  const isImage = isImageType(attachment.content_type);
+  const Icon = getFileIcon(attachment.content_type);
+
+  // Generate preview URL for images
+  useEffect(() => {
+    if (isImage && attachment.content) {
+      // Create data URL from base64 content
+      const dataUrl = `data:${attachment.content_type};base64,${attachment.content}`;
+      setImagePreview(dataUrl);
+    } else if (isImage && attachment.url) {
+      setImagePreview(attachment.url);
+    }
+  }, [isImage, attachment.content, attachment.content_type, attachment.url]);
+
+  const downloadUrl = `/api/attachments/${emailId}/${attachment.id}`;
+
+  async function handleDownload() {
+    // Trigger download
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = attachment.filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
+      {/* Image preview or file icon */}
+      {isImage && imagePreview && !imageError ? (
+        <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border bg-muted">
+          <img
+            src={imagePreview}
+            alt={attachment.filename}
+            className="h-full w-full object-cover"
+            onError={() => setImageError(true)}
+          />
+        </div>
+      ) : (
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-muted">
+          <Icon className="h-6 w-6 text-muted-foreground" />
+        </div>
+      )}
+
+      {/* File info */}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{attachment.filename}</p>
+        <p className="text-xs text-muted-foreground">
+          {formatFileSize(attachment.size)}
+        </p>
+      </div>
+
+      {/* Download button */}
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={handleDownload}
+        title="Download"
+        className="shrink-0"
+      >
+        <Download className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
+function AttachmentsList({
+  attachments,
+  emailId,
+}: {
+  attachments: EmailAttachment[];
+  emailId: string;
+}) {
+  if (!attachments || attachments.length === 0) return null;
+
+  return (
+    <div className="mt-4 space-y-2">
+      <p className="text-xs font-medium text-muted-foreground">
+        {attachments.length} attachment{attachments.length !== 1 ? "s" : ""}
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {attachments.map((attachment) => (
+          <AttachmentItem
+            key={attachment.id}
+            attachment={attachment}
+            emailId={emailId}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function buildQuotedHtml(email: EmailMessage): string {
@@ -167,6 +312,9 @@ function EmailMessageItem({
               {email.body_plain || "No content"}
             </pre>
           )}
+
+          {/* Attachments section */}
+          <AttachmentsList attachments={email.attachments} emailId={email.id} />
 
           <div className="mt-3 flex items-center gap-2">
             <Button

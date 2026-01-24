@@ -98,6 +98,7 @@ interface ResendWebhookAttachment {
   filename?: string;
   content_type?: string;
   size?: number;
+  content?: string; // base64 encoded content for inbound emails
 }
 
 interface ResendWebhookEvent {
@@ -235,7 +236,7 @@ async function deliverToUser(
     messageId: string | null;
     inReplyTo: string | null;
     referencesArray: string[];
-    attachmentsMeta: { filename: string; content_type: string; size: number }[];
+    attachmentsMeta: { id: string; filename: string; content_type: string; size: number; content: string | null }[];
     allParticipants: string[];
     aliasId?: string;
     originalTo?: string;
@@ -383,11 +384,13 @@ async function handleInboundEmail(
     ? (Array.isArray(referencesRaw) ? referencesRaw : referencesRaw.split(/\s+/).filter(Boolean))
     : [];
 
-  // Store attachment metadata as JSON-friendly objects
-  const attachmentsMeta = attachmentsRaw.map((att) => ({
+  // Store attachment metadata (and content if available) as JSON-friendly objects
+  const attachmentsMeta = attachmentsRaw.map((att, index) => ({
+    id: `att-${Date.now()}-${index}`,
     filename: att.filename || "untitled",
     content_type: att.content_type || "application/octet-stream",
     size: att.size || 0,
+    content: att.content || null, // base64 content if provided
   }));
 
   if (toAddresses.length === 0) {
