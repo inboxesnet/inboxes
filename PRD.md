@@ -545,13 +545,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I have a search interface to find emails by keyword.
 
 **Acceptance Criteria:**
-- [ ] Page at `/search` with search input (Command component from shadcn)
-- [ ] Search triggers on Enter or after 300ms debounce
-- [ ] Results displayed as email list: sender, subject with highlighted match, date
-- [ ] Clicking result navigates to thread view
-- [ ] Empty state when no results found
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/search` with search input (Command component from shadcn)
+- [x] Search triggers on Enter or after 300ms debounce
+- [x] Results displayed as email list: sender, subject with highlighted match, date
+- [x] Clicking result navigates to thread view
+- [x] Empty state when no results found
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
