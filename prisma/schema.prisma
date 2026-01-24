@@ -151,6 +151,7 @@ model Email {
   original_to       String?
   received_at       DateTime       @default(now())
   created_at        DateTime       @default(now())
+  search_vector     Unsupported("tsvector")?
 
   org    Org    @relation(fields: [org_id], references: [id])
   thread Thread @relation(fields: [thread_id], references: [id])

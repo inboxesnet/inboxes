@@ -530,13 +530,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can search my emails by keyword and get relevant results.
 
 **Acceptance Criteria:**
-- [ ] `GET /api/emails/search?q=keyword` searches subject + body_plain using PostgreSQL full-text search (tsvector/tsquery)
-- [ ] Results scoped to current user's emails only
-- [ ] Add GIN index on tsvector column for performance
-- [ ] Results return: thread_id, subject, snippet (matching context), from, date
-- [ ] Supports filtering by: folder, from address, date range (query params)
-- [ ] Returns max 50 results, ordered by relevance + recency
-- [ ] Typecheck passes
+- [x] `GET /api/emails/search?q=keyword` searches subject + body_plain using PostgreSQL full-text search (tsvector/tsquery)
+- [x] Results scoped to current user's emails only
+- [x] Add GIN index on tsvector column for performance
+- [x] Results return: thread_id, subject, snippet (matching context), from, date
+- [x] Supports filtering by: folder, from address, date range (query params)
+- [x] Returns max 50 results, ordered by relevance + recency
+- [x] Typecheck passes
 
 ---
 
