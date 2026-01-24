@@ -487,12 +487,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need a scheduled job to permanently delete emails that have been in trash for 30+ days.
 
 **Acceptance Criteria:**
-- [ ] API route or cron endpoint: `POST /api/cron/purge-trash` (protected by secret key)
-- [ ] Finds all emails where folder=trash AND trash_expires_at < now
-- [ ] Permanently deletes expired emails and their threads (if thread is empty)
-- [ ] Logs count of purged items
-- [ ] Designed to be called by Vercel Cron (once daily)
-- [ ] Typecheck passes
+- [x] API route or cron endpoint: `POST /api/cron/purge-trash` (protected by secret key)
+- [x] Finds all emails where folder=trash AND trash_expires_at < now
+- [x] Permanently deletes expired emails and their threads (if thread is empty)
+- [x] Logs count of purged items
+- [x] Designed to be called by Vercel Cron (once daily)
+- [x] Typecheck passes
 
 ---
 
