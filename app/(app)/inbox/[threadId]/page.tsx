@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import DOMPurify from "isomorphic-dompurify";
-import { Reply, ReplyAll, Forward, Send, Bold, Italic, Link, List, ListOrdered } from "lucide-react";
+import { Reply, ReplyAll, Forward, Send, Bold, Italic, Link, List, ListOrdered, Archive, Trash2, Star, Mail, MailOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { ComposeModal, ComposePreFill } from "@/components/compose-modal";
@@ -30,6 +30,7 @@ interface ThreadDetail {
   starred: boolean;
   folder: string;
   message_count: number;
+  unread_count: number;
   emails: EmailMessage[];
 }
 
@@ -348,6 +349,7 @@ function InlineReplyForm({
 export default function ThreadViewPage() {
   const params = useParams();
   const router = useRouter();
+  const { addToast } = useToast();
   const threadId = params.threadId as string;
 
   const [thread, setThread] = useState<ThreadDetail | null>(null);
@@ -356,6 +358,98 @@ export default function ThreadViewPage() {
   const [replyData, setReplyData] = useState<ReplyFormData | null>(null);
   const [forwardPreFill, setForwardPreFill] = useState<ComposePreFill | undefined>(undefined);
   const [forwardOpen, setForwardOpen] = useState(false);
+
+  async function handleArchive() {
+    if (!thread) return;
+    const previousFolder = thread.folder;
+    // Optimistic update
+    setThread({ ...thread, folder: "archive" });
+
+    try {
+      const res = await fetch(`/api/threads/${threadId}/archive`, { method: "PATCH" });
+      if (res.ok) {
+        addToast("Thread archived", "default", {
+          label: "Undo",
+          onClick: async () => {
+            // Restore to previous folder (inbox)
+            await fetch(`/api/threads/${threadId}/archive`, { method: "PATCH" });
+            setThread((t) => t ? { ...t, folder: previousFolder } : t);
+          },
+        });
+        router.push("/inbox");
+      } else {
+        // Revert on error
+        setThread((t) => t ? { ...t, folder: previousFolder } : t);
+        addToast("Failed to archive thread", "destructive");
+      }
+    } catch {
+      setThread((t) => t ? { ...t, folder: previousFolder } : t);
+      addToast("Failed to archive thread", "destructive");
+    }
+  }
+
+  async function handleTrash() {
+    if (!thread) return;
+    const previousFolder = thread.folder;
+    // Optimistic update
+    setThread({ ...thread, folder: "trash" });
+
+    try {
+      const res = await fetch(`/api/threads/${threadId}/trash`, { method: "PATCH" });
+      if (res.ok) {
+        addToast("Thread moved to trash", "default", {
+          label: "Undo",
+          onClick: async () => {
+            // Restore to inbox
+            await fetch(`/api/threads/${threadId}/archive`, { method: "PATCH" });
+            setThread((t) => t ? { ...t, folder: previousFolder } : t);
+          },
+        });
+        router.push("/inbox");
+      } else {
+        setThread((t) => t ? { ...t, folder: previousFolder } : t);
+        addToast("Failed to move thread to trash", "destructive");
+      }
+    } catch {
+      setThread((t) => t ? { ...t, folder: previousFolder } : t);
+      addToast("Failed to move thread to trash", "destructive");
+    }
+  }
+
+  async function handleStar() {
+    if (!thread) return;
+    const previousStarred = thread.starred;
+    // Optimistic update
+    setThread({ ...thread, starred: !previousStarred });
+
+    try {
+      const res = await fetch(`/api/threads/${threadId}/star`, { method: "PATCH" });
+      if (!res.ok) {
+        setThread((t) => t ? { ...t, starred: previousStarred } : t);
+        addToast("Failed to update star", "destructive");
+      }
+    } catch {
+      setThread((t) => t ? { ...t, starred: previousStarred } : t);
+      addToast("Failed to update star", "destructive");
+    }
+  }
+
+  async function handleMarkUnread() {
+    if (!thread) return;
+
+    try {
+      const res = await fetch(`/api/threads/${threadId}/unread`, { method: "PATCH" });
+      if (res.ok) {
+        setThread((t) => t ? { ...t, unread_count: 1 } : t);
+        addToast("Marked as unread", "default");
+        router.push("/inbox");
+      } else {
+        addToast("Failed to mark as unread", "destructive");
+      }
+    } catch {
+      addToast("Failed to mark as unread", "destructive");
+    }
+  }
 
   useEffect(() => {
     async function fetchThread() {
@@ -490,7 +584,7 @@ export default function ThreadViewPage() {
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-3 border-b px-4 py-3">
+      <div className="flex items-center gap-2 border-b px-4 py-3">
         <Button
           variant="ghost"
           size="sm"
@@ -510,14 +604,53 @@ export default function ThreadViewPage() {
           >
             <path d="m15 18-6-6 6-6" />
           </svg>
-          <span className="ml-1">Back</span>
+          <span className="ml-1 hidden sm:inline">Back</span>
         </Button>
 
         <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">
           {thread.subject}
         </h1>
 
-        <span className="shrink-0 text-sm text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleArchive}
+            title="Archive"
+            className="h-8 w-8"
+          >
+            <Archive className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleTrash}
+            title="Move to trash"
+            className="h-8 w-8"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleStar}
+            title={thread.starred ? "Unstar" : "Star"}
+            className="h-8 w-8"
+          >
+            <Star className={cn("h-4 w-4", thread.starred && "fill-yellow-400 text-yellow-400")} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleMarkUnread}
+            title="Mark as unread"
+            className="h-8 w-8"
+          >
+            <Mail className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline">
           {thread.message_count} message{thread.message_count !== 1 ? "s" : ""}
         </span>
       </div>

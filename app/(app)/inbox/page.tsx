@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
+import { Archive, Trash2, Star } from "lucide-react";
 
 interface ThreadSummary {
   id: string;
@@ -54,6 +56,7 @@ function getInitial(address: string): string {
 
 export default function InboxPage() {
   const router = useRouter();
+  const { addToast } = useToast();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -72,6 +75,89 @@ export default function InboxPage() {
       setLoading(false);
     }
   }, []);
+
+  async function handleArchive(e: React.MouseEvent, thread: ThreadSummary) {
+    e.stopPropagation();
+    // Optimistic update - remove from list
+    const previousThreads = threads;
+    setThreads((prev) => prev.filter((t) => t.id !== thread.id));
+
+    try {
+      const res = await fetch(`/api/threads/${thread.id}/archive`, { method: "PATCH" });
+      if (res.ok) {
+        addToast("Thread archived", "default", {
+          label: "Undo",
+          onClick: async () => {
+            // Restore to inbox - need to move back and refresh
+            await fetch(`/api/threads/${thread.id}/archive`, { method: "PATCH" });
+            fetchThreads(page);
+          },
+        });
+      } else {
+        setThreads(previousThreads);
+        addToast("Failed to archive thread", "destructive");
+      }
+    } catch {
+      setThreads(previousThreads);
+      addToast("Failed to archive thread", "destructive");
+    }
+  }
+
+  async function handleTrash(e: React.MouseEvent, thread: ThreadSummary) {
+    e.stopPropagation();
+    // Optimistic update - remove from list
+    const previousThreads = threads;
+    setThreads((prev) => prev.filter((t) => t.id !== thread.id));
+
+    try {
+      const res = await fetch(`/api/threads/${thread.id}/trash`, { method: "PATCH" });
+      if (res.ok) {
+        addToast("Thread moved to trash", "default", {
+          label: "Undo",
+          onClick: async () => {
+            await fetch(`/api/threads/${thread.id}/archive`, { method: "PATCH" });
+            fetchThreads(page);
+          },
+        });
+      } else {
+        setThreads(previousThreads);
+        addToast("Failed to move thread to trash", "destructive");
+      }
+    } catch {
+      setThreads(previousThreads);
+      addToast("Failed to move thread to trash", "destructive");
+    }
+  }
+
+  async function handleStar(e: React.MouseEvent, thread: ThreadSummary) {
+    e.stopPropagation();
+    const previousStarred = thread.starred;
+    // Optimistic update
+    setThreads((prev) =>
+      prev.map((t) =>
+        t.id === thread.id ? { ...t, starred: !previousStarred } : t
+      )
+    );
+
+    try {
+      const res = await fetch(`/api/threads/${thread.id}/star`, { method: "PATCH" });
+      if (!res.ok) {
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.id === thread.id ? { ...t, starred: previousStarred } : t
+          )
+        );
+        addToast("Failed to update star", "destructive");
+      }
+    } catch {
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === thread.id ? { ...t, starred: previousStarred } : t
+        )
+      );
+      addToast("Failed to update star", "destructive");
+    }
+  }
 
   useEffect(() => {
     fetchThreads(page);
@@ -126,13 +212,16 @@ export default function InboxPage() {
         {threads.map((thread) => {
           const isUnread = thread.unread_count > 0;
           return (
-            <button
+            <div
               key={thread.id}
-              onClick={() => router.push(`/inbox/${thread.id}`)}
               className={cn(
-                "flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50",
+                "group relative flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 cursor-pointer",
                 isUnread && "bg-blue-50/50 dark:bg-blue-950/20"
               )}
+              onClick={() => router.push(`/inbox/${thread.id}`)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && router.push(`/inbox/${thread.id}`)}
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
                 {getInitial(thread.from_address)}
@@ -153,9 +242,39 @@ export default function InboxPage() {
                       ({thread.message_count})
                     </span>
                   )}
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground group-hover:hidden">
                     {formatTime(thread.last_message_at)}
                   </span>
+                  {/* Hover actions */}
+                  <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => handleArchive(e, thread)}
+                      title="Archive"
+                      className="h-7 w-7"
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => handleTrash(e, thread)}
+                      title="Move to trash"
+                      className="h-7 w-7"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => handleStar(e, thread)}
+                      title={thread.starred ? "Unstar" : "Star"}
+                      className="h-7 w-7"
+                    >
+                      <Star className={cn("h-3.5 w-3.5", thread.starred && "fill-yellow-400 text-yellow-400")} />
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -178,7 +297,7 @@ export default function InboxPage() {
                   {thread.preview}
                 </p>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>

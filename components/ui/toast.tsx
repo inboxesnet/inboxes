@@ -4,15 +4,21 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface Toast {
   id: string;
   message: string;
   variant?: "default" | "success" | "destructive";
+  action?: ToastAction;
 }
 
 interface ToastContextValue {
   toasts: Toast[];
-  addToast: (message: string, variant?: Toast["variant"]) => void;
+  addToast: (message: string, variant?: Toast["variant"], action?: ToastAction) => void;
   removeToast: (id: string) => void;
 }
 
@@ -29,12 +35,12 @@ export function useToast() {
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = React.useState<Toast[]>([]);
 
-  const addToast = React.useCallback((message: string, variant: Toast["variant"] = "default") => {
+  const addToast = React.useCallback((message: string, variant: Toast["variant"] = "default", action?: ToastAction) => {
     const id = Math.random().toString(36).slice(2);
-    setToasts((prev) => [...prev, { id, message, variant }]);
+    setToasts((prev) => [...prev, { id, message, variant, action }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+    }, action ? 6000 : 4000); // Longer timeout for toasts with actions
   }, []);
 
   const removeToast = React.useCallback((id: string) => {
@@ -56,6 +62,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             )}
           >
             <span className="flex-1">{toast.message}</span>
+            {toast.action && (
+              <button
+                onClick={() => {
+                  toast.action?.onClick();
+                  removeToast(toast.id);
+                }}
+                className="font-medium underline underline-offset-2 hover:no-underline"
+              >
+                {toast.action.label}
+              </button>
+            )}
             <button
               onClick={() => removeToast(toast.id)}
               className="opacity-70 hover:opacity-100"

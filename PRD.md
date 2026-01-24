@@ -472,13 +472,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can archive, trash, star, and mark threads read/unread from the UI.
 
 **Acceptance Criteria:**
-- [ ] Thread view header shows action buttons: Archive, Trash, Star, Mark Unread
-- [ ] Inbox list: swipe or hover actions for Archive, Trash
-- [ ] Star icon toggleable in both list and thread view
-- [ ] Archive/Trash actions show toast with "Undo" option (reverts folder change)
-- [ ] Optimistic UI updates (don't wait for API response)
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Thread view header shows action buttons: Archive, Trash, Star, Mark Unread
+- [x] Inbox list: swipe or hover actions for Archive, Trash
+- [x] Star icon toggleable in both list and thread view
+- [x] Archive/Trash actions show toast with "Undo" option (reverts folder change)
+- [x] Optimistic UI updates (don't wait for API response)
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
