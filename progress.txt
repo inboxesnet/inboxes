@@ -600,3 +600,42 @@
   - Inbox page calls refreshUnreadCount() after archive/trash actions and when clicking unread threads
   - setTimeout(500ms) used for thread click refresh to ensure mark-as-read API completes first
 ---
+
+## Iteration 47 - US-047: Notification preferences UI
+- What was implemented: Notification preferences section on /settings page with browser notifications and notification sound toggles, stored in User model as JSON field notification_preferences, with PATCH /api/users/me/preferences endpoint
+- Files changed: prisma/schema.prisma (added notification_preferences JSON field to User), prisma/migrations/20240107000000_user_notification_preferences/migration.sql (new), app/api/users/me/preferences/route.ts (new), app/(app)/settings/page.tsx (rewritten with Notifications section)
+- Learnings for future iterations:
+  - Prisma JSON fields need proper type casting: use parsePreferences() helper with JsonValue import from @prisma/client/runtime/library
+  - Settings page pattern: fetch preferences on mount, sync sound preference with NotificationContext via setSoundEnabled
+  - Browser notification toggle checks permission state and requests permission if not granted before saving preference
+  - Toggle switch button uses role="switch", aria-checked, translate-x-5/translate-x-0 for position
+  - JSON default in Prisma: @default("{\"browser_notifications\": true, \"notification_sound\": false}")
+---
+
+## Iteration 48 - US-048: User settings page
+- What was implemented: Full user settings page with Profile section (name editable, email/role read-only), Password change form (current + new + confirm), plus existing Notifications section. Added GET/PATCH /api/users/me for profile, PATCH /api/users/me/password for password change.
+- Files changed: app/api/users/me/route.ts (new), app/api/users/me/password/route.ts (new), app/(app)/settings/page.tsx (extended with Profile + Password sections)
+- Learnings for future iterations:
+  - Profile section uses parallel fetch for /api/users/me and /api/users/me/preferences on mount
+  - Name save button disabled until changes detected via hasNameChanges comparison
+  - Password change validates current password server-side with bcrypt.compare before updating
+  - Password endpoint returns success message, not user object (no need to return password_hash)
+  - Form reset after successful password change: clear all three password fields
+  - Toast hook useToast() from existing toast component for success notifications
+  - Read-only inputs styled with bg-muted class for visual distinction
+---
+
+## Iteration 49 - US-049: Recipient autocomplete
+- What was implemented: GET /api/contacts/suggest endpoint that returns matching email addresses from user's sent/received history. RecipientAutocomplete component with chip-based input, dropdown suggestions, keyboard navigation. Compose modal updated to use autocomplete for To/CC/BCC fields.
+- Files changed: app/api/contacts/suggest/route.ts (new), components/recipient-autocomplete.tsx (new), components/compose-modal.tsx (updated to use RecipientAutocomplete)
+- Learnings for future iterations:
+  - Build frequency map from all user emails: inbound from_address + outbound to/cc_addresses
+  - Contact matching on both email and name (case-insensitive)
+  - RecipientAutocomplete uses chips for selected emails with X button to remove
+  - Debounce search at 300ms to avoid excessive API calls
+  - Keyboard navigation: ArrowDown/ArrowUp for selection, Enter to add, Backspace to remove last chip
+  - selectedIndex state tracks which suggestion is highlighted
+  - Filter out already-selected emails from suggestions
+  - Tab key adds valid email when input has content
+  - Comma or space after valid email auto-adds it as chip
+---

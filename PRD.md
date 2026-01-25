@@ -742,13 +742,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user composing an email, I get autocomplete suggestions for recipients based on past contacts.
 
 **Acceptance Criteria:**
-- [ ] `GET /api/contacts/suggest?q=partial` returns matching email addresses from user's sent/received history
-- [ ] Compose To/CC/BCC fields show dropdown suggestions as user types
-- [ ] Matches on both email address and sender name
-- [ ] Results deduplicated and sorted by frequency of contact
-- [ ] Max 10 suggestions shown
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] `GET /api/contacts/suggest?q=partial` returns matching email addresses from user's sent/received history
+- [x] Compose To/CC/BCC fields show dropdown suggestions as user types
+- [x] Matches on both email address and sender name
+- [x] Results deduplicated and sorted by frequency of contact
+- [x] Max 10 suggestions shown
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

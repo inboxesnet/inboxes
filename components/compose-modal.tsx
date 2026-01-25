@@ -5,6 +5,7 @@ import { Bold, Italic, Link, List, ListOrdered, Send, Paperclip, X, FileIcon, Ch
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RecipientAutocomplete } from "@/components/recipient-autocomplete";
 import {
   Dialog,
   DialogContent,
@@ -438,15 +439,14 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
 
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <Label htmlFor="compose-to" className="w-12 text-sm text-muted-foreground">
+              <Label htmlFor="compose-to" className="w-12 shrink-0 text-sm text-muted-foreground">
                 To
               </Label>
-              <Input
+              <RecipientAutocomplete
                 id="compose-to"
-                type="text"
-                placeholder="recipient@example.com"
                 value={to}
-                onChange={(e) => setTo(e.target.value)}
+                onChange={setTo}
+                placeholder="recipient@example.com"
                 className="flex-1"
               />
               {!showCcBcc && (
@@ -455,7 +455,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                   variant="ghost"
                   size="sm"
                   onClick={() => setShowCcBcc(true)}
-                  className="text-xs text-muted-foreground"
+                  className="shrink-0 text-xs text-muted-foreground"
                 >
                   CC/BCC
                 </Button>
@@ -466,28 +466,26 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
           {showCcBcc && (
             <>
               <div className="flex items-center gap-2">
-                <Label htmlFor="compose-cc" className="w-12 text-sm text-muted-foreground">
+                <Label htmlFor="compose-cc" className="w-12 shrink-0 text-sm text-muted-foreground">
                   CC
                 </Label>
-                <Input
+                <RecipientAutocomplete
                   id="compose-cc"
-                  type="text"
-                  placeholder="cc@example.com"
                   value={cc}
-                  onChange={(e) => setCc(e.target.value)}
+                  onChange={setCc}
+                  placeholder="cc@example.com"
                   className="flex-1"
                 />
               </div>
               <div className="flex items-center gap-2">
-                <Label htmlFor="compose-bcc" className="w-12 text-sm text-muted-foreground">
+                <Label htmlFor="compose-bcc" className="w-12 shrink-0 text-sm text-muted-foreground">
                   BCC
                 </Label>
-                <Input
+                <RecipientAutocomplete
                   id="compose-bcc"
-                  type="text"
-                  placeholder="bcc@example.com"
                   value={bcc}
-                  onChange={(e) => setBcc(e.target.value)}
+                  onChange={setBcc}
+                  placeholder="bcc@example.com"
                   className="flex-1"
                 />
               </div>
