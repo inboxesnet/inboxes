@@ -651,15 +651,15 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I can manage aliases and their assigned users via the UI.
 
 **Acceptance Criteria:**
-- [ ] Page at `/settings/aliases` (admin-only)
-- [ ] List of aliases showing: address, name, number of assigned users
-- [ ] "Create Alias" button opens dialog: address prefix (auto-appends @domain), display name
-- [ ] Click alias to expand: shows assigned users with can_send_as toggle
-- [ ] "Add User" dropdown to assign existing org users
-- [ ] "Remove" button to unassign user from alias
-- [ ] Delete alias button with confirmation
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/settings/aliases` (admin-only)
+- [x] List of aliases showing: address, name, number of assigned users
+- [x] "Create Alias" button opens dialog: address prefix (auto-appends @domain), display name
+- [x] Click alias to expand: shows assigned users with can_send_as toggle
+- [x] "Add User" dropdown to assign existing org users
+- [x] "Remove" button to unassign user from alias
+- [x] Delete alias button with confirmation
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
