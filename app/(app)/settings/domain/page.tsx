@@ -26,6 +26,12 @@ interface DomainInfo {
   verified_at: string | null;
 }
 
+interface OrgSettings {
+  id: string;
+  name: string;
+  catch_all_enabled: boolean;
+}
+
 export default function DomainSettingsPage() {
   const [domain, setDomain] = useState<DomainInfo | null>(null);
   const [dnsRecords, setDnsRecords] = useState<DnsRecord[]>([]);
@@ -35,9 +41,12 @@ export default function DomainSettingsPage() {
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
+  const [catchAllLoading, setCatchAllLoading] = useState(false);
 
   useEffect(() => {
     fetchDomain();
+    fetchOrgSettings();
   }, []);
 
   async function fetchDomain() {
@@ -51,6 +60,46 @@ export default function DomainSettingsPage() {
       setError("Failed to load domain information");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchOrgSettings() {
+    try {
+      const res = await fetch("/api/orgs/settings");
+      if (res.ok) {
+        const data = await res.json();
+        setOrgSettings(data.org);
+      }
+    } catch {
+      // Silently fail - catch-all toggle will be hidden if org settings can't load
+    }
+  }
+
+  async function handleCatchAllToggle() {
+    if (!orgSettings) return;
+    setCatchAllLoading(true);
+    setError("");
+
+    const newValue = !orgSettings.catch_all_enabled;
+
+    try {
+      const res = await fetch("/api/orgs/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ catch_all_enabled: newValue }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setOrgSettings(data.org);
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to update catch-all setting");
+      }
+    } catch {
+      setError("Failed to update catch-all setting");
+    } finally {
+      setCatchAllLoading(false);
     }
   }
 
@@ -311,6 +360,51 @@ export default function DomainSettingsPage() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {orgSettings && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Catch-all Routing</CardTitle>
+                <CardDescription>
+                  Configure how emails to unknown addresses are handled.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <Label htmlFor="catch-all-toggle" className="text-sm font-medium">
+                      Enable catch-all routing
+                    </Label>
+                    <p className="text-sm text-muted-foreground">
+                      {orgSettings.catch_all_enabled
+                        ? "Emails to unknown addresses delivered to admins"
+                        : "Emails to unknown addresses will bounce"}
+                    </p>
+                  </div>
+                  <button
+                    id="catch-all-toggle"
+                    type="button"
+                    role="switch"
+                    aria-checked={orgSettings.catch_all_enabled}
+                    disabled={catchAllLoading}
+                    onClick={handleCatchAllToggle}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
+                      orgSettings.catch_all_enabled ? "bg-primary" : "bg-input"
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${
+                        orgSettings.catch_all_enabled ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                    {catchAllLoading && (
+                      <Loader2 className="absolute left-1/2 top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 animate-spin text-muted-foreground" />
+                    )}
+                  </button>
                 </div>
               </CardContent>
             </Card>

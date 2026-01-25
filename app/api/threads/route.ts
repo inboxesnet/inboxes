@@ -37,6 +37,7 @@ export async function GET(request: NextRequest) {
             body_plain: true,
             received_at: true,
             direction: true,
+            original_to: true,
           },
         },
       },
@@ -60,6 +61,7 @@ export async function GET(request: NextRequest) {
       from_address: latestEmail?.from_address || "",
       to_addresses: latestEmail?.to_addresses || [],
       preview,
+      original_to: latestEmail?.original_to || null,
     };
   });
 

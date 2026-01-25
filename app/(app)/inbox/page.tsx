@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { Archive, Trash2, Star } from "lucide-react";
 
@@ -17,6 +18,7 @@ interface ThreadSummary {
   last_message_at: string;
   from_address: string;
   preview: string;
+  original_to: string | null;
 }
 
 interface ThreadsResponse {
@@ -281,6 +283,11 @@ export default function InboxPage() {
                   {isUnread && (
                     <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-blue-500" />
                   )}
+                  {thread.original_to && (
+                    <Badge variant="secondary" className="shrink-0 text-xs px-1.5 py-0">
+                      catch-all
+                    </Badge>
+                  )}
                   <p
                     className={cn(
                       "truncate text-sm",
@@ -294,6 +301,11 @@ export default function InboxPage() {
                 </div>
 
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                  {thread.original_to && (
+                    <span className="font-medium text-amber-600 dark:text-amber-500">
+                      To: {thread.original_to} ·
+                    </span>
+                  )}
                   {thread.preview}
                 </p>
               </div>

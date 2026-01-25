@@ -668,13 +668,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I can enable/disable catch-all routing and see catch-all emails clearly labeled.
 
 **Acceptance Criteria:**
-- [ ] Toggle switch on domain settings page: "Catch-all routing" with description
-- [ ] `PATCH /api/orgs/settings` endpoint to update catch_all_enabled. Admin-only.
-- [ ] When enabled: description shows "Emails to unknown addresses delivered to admins"
-- [ ] When disabled: description shows "Emails to unknown addresses will bounce"
-- [ ] Inbox list shows badge "catch-all" on emails delivered via catch-all, with original address
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Toggle switch on domain settings page: "Catch-all routing" with description
+- [x] `PATCH /api/orgs/settings` endpoint to update catch_all_enabled. Admin-only.
+- [x] When enabled: description shows "Emails to unknown addresses delivered to admins"
+- [x] When disabled: description shows "Emails to unknown addresses will bounce"
+- [x] Inbox list shows badge "catch-all" on emails delivered via catch-all, with original address
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
