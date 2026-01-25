@@ -83,3 +83,26 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   return user;
 }
+
+/**
+ * Checks if the current user is an admin. Returns a 401 JSON response if not authenticated,
+ * or a 403 JSON response if authenticated but not an admin.
+ * @returns The user if they are an admin, or a NextResponse with an error.
+ */
+export async function requireAdmin(): Promise<
+  CurrentUser | { error: Response }
+> {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    const { NextResponse } = await import("next/server");
+    return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  }
+
+  if (user.role !== "admin") {
+    const { NextResponse } = await import("next/server");
+    return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  }
+
+  return user;
+}

@@ -370,3 +370,155 @@
   - InlineReplyForm is a separate component within the thread page using useToast() from parent ToastProvider
   - message_id needed in thread API response for building proper References header chain
 ---
+
+## Iteration 29 - US-028: Sent folder view
+- What was implemented: Sent folder page at /sent showing threads with folder=sent, displaying recipient names (To: Name), subject, preview, time, with pagination. Updated GET /api/threads to include to_addresses in the response.
+- Files changed: app/(app)/sent/page.tsx (rewritten from placeholder), app/api/threads/route.ts (added to_addresses to select and response)
+- Learnings for future iterations:
+  - Sent page reuses same layout pattern as inbox but shows "To: [recipient]" instead of sender name
+  - to_addresses is stored as JSON in DB; API returns it as-is from the email's to_addresses field
+  - getRecipientDisplay() handles multiple recipients: shows first name + count of others
+  - Sent threads don't show unread indicators (no bold/blue dot) since user sent them
+  - Thread click navigates to /inbox/[threadId] — same thread view works for both inbox and sent
+  - Shell glob issues with parentheses in paths: quote path like "app/(app)/sent/page.tsx" for git add
+  - cn() utility imported but only minimally used in sent view (no conditional styling needed)
+---
+
+## Iteration 30 - US-030: Email actions — star and read/unread API
+- What was implemented: Three new API endpoints — PATCH /api/threads/:id/star (toggles starred boolean), PATCH /api/threads/:id/read (marks all emails as read, sets unread_count=0), PATCH /api/threads/:id/unread (sets unread_count=1)
+- Files changed: app/api/threads/[id]/star/route.ts (new), app/api/threads/[id]/read/route.ts (new), app/api/threads/[id]/unread/route.ts (new)
+- Learnings for future iterations:
+  - Follow existing archive/route.ts pattern: getCurrentUser() → findFirst with user_id → update → return updated thread JSON
+  - Star toggles via `!thread.starred` (reads current then inverts)
+  - Read endpoint uses Promise.all to update thread.unread_count=0 and email.read=true simultaneously
+  - Unread endpoint simply sets thread.unread_count=1 (no need to update individual emails)
+  - All endpoints return consistent response shape: id, subject, folder, starred, unread_count, message_count, last_message_at
+---
+
+## Iteration 31 - US-031: Email actions — UI controls
+- What was implemented: Action buttons in thread view header (Archive, Trash, Star, Mark Unread), hover actions in inbox list (Archive, Trash, Star), toast notifications with Undo action, optimistic UI updates
+- Files changed: app/(app)/inbox/[threadId]/page.tsx (added action buttons header + handlers), app/(app)/inbox/page.tsx (added hover actions), components/ui/toast.tsx (added ToastAction support with action button)
+- Learnings for future iterations:
+  - ToastAction interface with { label, onClick } enables undo functionality in toasts
+  - Toast with action gets longer timeout (6s vs 4s) to give user time to click Undo
+  - Optimistic UI: update state immediately, then revert on API failure
+  - Group hover actions use `group` class on parent + `group-hover:flex` / `group-hover:hidden` for show/hide
+  - Thread view actions navigate back to /inbox after archive/trash/mark-unread for better UX
+  - Changed inbox row from <button> to <div role="button"> to nest buttons properly (hover actions)
+  - e.stopPropagation() on action button clicks prevents row click from firing
+  - Star icon uses conditional fill: `fill-yellow-400 text-yellow-400` when starred
+---
+
+## Iteration 32 - US-032: Trash auto-purge background job
+- What was implemented: POST /api/cron/purge-trash endpoint that permanently deletes emails where folder=trash AND trash_expires_at < now, plus empty threads. Protected by CRON_SECRET. Vercel cron configuration added.
+- Files changed: app/api/cron/purge-trash/route.ts (new), vercel.json (new), .env.example (added CRON_SECRET)
+- Learnings for future iterations:
+  - Vercel Cron jobs configured in vercel.json with `crons` array containing `path` and `schedule`
+  - Cron schedule "0 3 * * *" runs at 3 AM UTC daily
+  - Protect cron endpoints with Bearer token auth via CRON_SECRET env var
+  - Use `Array.from(new Set(...))` instead of `[...new Set(...)]` to avoid downlevelIteration tsconfig issue
+  - After deleting emails, check if thread is empty and delete it; otherwise update message_count
+  - deleteMany returns `{ count: number }` for logging purposes
+---
+
+## Iteration 33 - US-033: File attachments — upload on send
+- What was implemented: S3 upload API endpoint at POST /api/attachments/upload, compose modal with attach button and drag-drop zone on body editor, file chips display with filename/size/remove button, 50MB client+server validation, send API updated to pass attachment URLs to Resend
+- Files changed: package.json (added @aws-sdk/client-s3), app/api/attachments/upload/route.ts (new), components/compose-modal.tsx (rewritten with attachments support), app/api/emails/send/route.ts (added attachments handling), .env.example (added S3 env vars)
+- Learnings for future iterations:
+  - @aws-sdk/client-s3 for S3 uploads with PutObjectCommand
+  - S3Client supports endpoint option for S3-compatible services (MinIO, etc.)
+  - Resend attachments via path URL: `attachments: [{ filename, path: url }]`
+  - Compose modal drag-drop: onDragOver sets isDragging true, onDrop handles files, onDragLeave sets false
+  - FormData.getAll("files") returns File[] when multiple files uploaded
+  - Attachment state uses temp IDs while uploading, replaced with server IDs on success
+  - Prisma Json fields: store attachments as array of objects, use Prisma.JsonNull for empty
+  - File size formatting: bytes → KB → MB with toFixed(1)
+---
+
+## Iteration 34 - US-034: File attachments — display on received emails
+- What was implemented: Attachments display in thread view showing filename, size, and file type icon. Download API endpoint at GET /api/attachments/[emailId]/[attachmentId]. Image attachments show inline thumbnail preview. Non-image files show appropriate icons (FileText, FileAudio, FileVideo, FileArchive).
+- Files changed: app/(app)/inbox/[threadId]/page.tsx (added AttachmentItem + AttachmentsList components), app/api/attachments/[emailId]/[attachmentId]/route.ts (new), app/api/webhooks/resend/route.ts (updated to store attachment id and content)
+- Learnings for future iterations:
+  - Resend inbound webhooks may include `content` (base64) for attachments
+  - AttachmentItem stores attachment with id, filename, content_type, size, content (base64), url
+  - Download API decodes base64 content and returns as file with proper Content-Disposition header
+  - For S3-hosted attachments (outbound), redirect to URL instead of proxying
+  - Image preview: create data URL from base64 `data:${content_type};base64,${content}`
+  - getFileIcon() helper maps content_type to appropriate lucide-react icons
+  - Use `as unknown as Type` for Prisma JsonArray to custom type conversion
+  - Grid layout `sm:grid-cols-2` for attachment list on larger screens
+---
+
+## Iteration 35 - US-035: Search — full-text search API
+- What was implemented: GET /api/emails/search endpoint using PostgreSQL full-text search with tsvector/tsquery, GIN index, automatic search_vector update trigger, filtering by folder/from/date_range, snippet generation with context
+- Files changed: prisma/schema.prisma (added search_vector Unsupported("tsvector")?), prisma/migrations/20240105000000_email_fulltext_search/migration.sql (new), app/api/emails/search/route.ts (new)
+- Learnings for future iterations:
+  - Prisma doesn't natively support tsvector; use `Unsupported("tsvector")?` for the column type
+  - PostgreSQL full-text search uses setweight() to prioritize: 'A' for subject, 'B' for body, 'C' for from
+  - Create trigger with `BEFORE INSERT OR UPDATE` to auto-update search_vector column
+  - Use $queryRawUnsafe for complex raw SQL with ts_rank() ordering
+  - tsquery format: join terms with " & " for AND matching (e.g., "hello & world")
+  - Snippet creation: find first match position, extract surrounding context with ellipsis
+  - Filter params use parameterized queries with incrementing $N placeholders for SQL injection safety
+  - Max 50 results ordered by ts_rank DESC then received_at DESC for relevance + recency
+---
+
+## Iteration 36 - US-036: Search — UI
+- What was implemented: Search page at /search with search input (search icon, loading spinner), 300ms debounced search + Enter key trigger, results list with sender/subject/snippet/date displayed, highlighted search terms in subject and snippet, empty state for no results, initial state prompt
+- Files changed: app/(app)/search/page.tsx (rewritten from placeholder)
+- Learnings for future iterations:
+  - highlightMatch() function splits text by regex pattern containing search terms, wraps matches in <mark> tags
+  - escapeRegex() needed to safely create RegExp from user input (escape special chars)
+  - searchedQuery state tracks the query used for highlighting (vs current input value)
+  - useCallback for performSearch function to use in useEffect dependency array
+  - line-clamp-2 utility truncates snippet to 2 lines (Tailwind CSS)
+  - Mail icon from lucide-react used as avatar for search results
+  - Two empty states: "No results found" (searched=true, results=[]) vs "Search your emails" (searched=false)
+---
+
+## Iteration 37 - US-037: User invite — API
+- What was implemented: POST /api/users/invite (admin-only, creates invited user with token, sends email), POST /api/users/:id/reinvite (admin-only, regenerates token and resends email)
+- Files changed: app/api/users/invite/route.ts (new), app/api/users/[id]/reinvite/route.ts (new)
+- Learnings for future iterations:
+  - User invite creates User with status=invited, empty password_hash (set on claim)
+  - invite_token generated with crypto.randomBytes(32).toString("hex")
+  - invite_expires_at set to 7 days from creation
+  - Email domain validation: check if active domain exists, compare with email domain
+  - Reinvite endpoint only works for users with status=invited (returns 400 otherwise)
+  - Invite email contains /claim?token=xxx link for user to set password
+  - Both endpoints use getCurrentUser() + role check for admin-only access
+---
+
+## Iteration 38 - US-038: User invite — claim account page
+- What was implemented: Page at /claim?token=xxx with token validation (GET /api/auth/claim/validate), welcome message showing user name and email, password/confirm password form, POST /api/auth/claim endpoint that validates token, hashes password, sets status=active, claimed_at=now, clears token, and sets session cookie
+- Files changed: app/api/auth/claim/route.ts (new), app/api/auth/claim/validate/route.ts (new), app/claim/page.tsx (new), PRD.md
+- Learnings for future iterations:
+  - Added separate validation endpoint GET /api/auth/claim/validate?token=xxx to fetch user info before showing form
+  - Token validation checks: exists, not expired, status=invited (not already claimed)
+  - Claim endpoint sets session cookie on success, redirects to /inbox
+  - useCallback for validateToken function to use in useEffect dependency array
+  - Same Suspense pattern with useSearchParams as other auth pages
+---
+
+## Iteration 39 - US-039: Admin — user management UI
+- What was implemented: Team management page at /settings/team (admin-only) with user table showing name, email, role, status (active/invited/disabled), joined date. Invite User dialog with email/name/role fields. Reinvite button for invited users, Disable button for active users. Cannot disable yourself check.
+- Files changed: app/(app)/settings/team/page.tsx (new), app/api/users/route.ts (new), app/api/users/[id]/disable/route.ts (new), PRD.md
+- Learnings for future iterations:
+  - GET /api/users returns all org users with select fields (admin-only endpoint)
+  - PATCH /api/users/:id/disable sets status=disabled, returns 400 if trying to disable yourself
+  - Team page uses InviteUserDialog component with form state reset on success/cancel
+  - Toast variant is "destructive" not "error" in this codebase
+  - Uses same Badge component with success/warning/destructive variants for status display
+  - isInviteExpired() helper checks if invite_expires_at < now
+---
+
+## Iteration 40 - US-040: RBAC middleware enforcement
+- What was implemented: Added requireAdmin() helper in lib/session.ts that returns 401 for unauthenticated or 403 for non-admin users. Applied it to all admin-only endpoints (domains, user invite/manage). Verified email/thread queries are scoped by user_id. Sidebar already hides admin nav items for members.
+- Files changed: lib/session.ts (added requireAdmin), app/api/domains/route.ts, app/api/domains/[id]/verify/route.ts, app/api/users/route.ts, app/api/users/invite/route.ts, app/api/users/[id]/reinvite/route.ts, app/api/users/[id]/disable/route.ts
+- Learnings for future iterations:
+  - requireAdmin() pattern: `const result = await requireAdmin(); if ("error" in result) return result.error; const user = result;`
+  - Returns a union type: `CurrentUser | { error: Response }` to distinguish success from error
+  - Dynamic import of NextResponse inside requireAdmin() to avoid importing server module in potential edge runtime
+  - All email/thread queries already use `user_id: user.id` filter (inbox list, thread view, search, actions)
+  - Sidebar hides admin items via `isAdmin && (<>...</>)` conditional in app-sidebar.tsx
+---

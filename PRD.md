@@ -607,12 +607,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, admin-only routes are protected and member users cannot access admin features.
 
 **Acceptance Criteria:**
-- [ ] `requireAdmin()` middleware helper that returns 403 for non-admin users
-- [ ] Applied to: domain endpoints, user invite/manage endpoints, alias CRUD endpoints, catch-all toggle
-- [ ] Member users see only their own emails (queries filtered by user_id)
-- [ ] Admin users can view all org inboxes (future: for now, just enforce the boundary)
-- [ ] Sidebar hides admin nav items for members
-- [ ] Typecheck passes
+- [x] `requireAdmin()` middleware helper that returns 403 for non-admin users
+- [x] Applied to: domain endpoints, user invite/manage endpoints, alias CRUD endpoints, catch-all toggle
+- [x] Member users see only their own emails (queries filtered by user_id)
+- [x] Admin users can view all org inboxes (future: for now, just enforce the boundary)
+- [x] Sidebar hides admin nav items for members
+- [x] Typecheck passes
 
 ---
 
