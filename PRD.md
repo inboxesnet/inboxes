@@ -591,14 +591,14 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I can view, invite, and manage team members.
 
 **Acceptance Criteria:**
-- [ ] Page at `/settings/team` (admin-only)
-- [ ] Table showing: name, email, role, status (active/invited/disabled), joined date
-- [ ] "Invite User" button opens dialog: email, name, role select
-- [ ] "Reinvite" button on expired/invited users
-- [ ] "Disable" button on active users (sets status=disabled, cannot login)
-- [ ] Cannot disable yourself
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/settings/team` (admin-only)
+- [x] Table showing: name, email, role, status (active/invited/disabled), joined date
+- [x] "Invite User" button opens dialog: email, name, role select
+- [x] "Reinvite" button on expired/invited users
+- [x] "Disable" button on active users (sets status=disabled, cannot login)
+- [x] Cannot disable yourself
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
