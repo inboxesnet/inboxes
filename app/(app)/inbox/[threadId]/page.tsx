@@ -31,6 +31,7 @@ interface EmailMessage {
   read: boolean;
   received_at: string;
   attachments: EmailAttachment[];
+  delivered_via_alias?: string | null;
 }
 
 interface ThreadDetail {
@@ -354,6 +355,7 @@ interface ReplyFormData {
   subject: string;
   in_reply_to: string;
   references: string[];
+  fromAliasId?: string;
 }
 
 function InlineReplyForm({
@@ -401,6 +403,7 @@ function InlineReplyForm({
           body_plain: bodyPlain,
           in_reply_to: replyData.in_reply_to,
           references: replyData.references,
+          from_alias_id: replyData.fromAliasId || undefined,
         }),
       });
 
@@ -643,6 +646,8 @@ export default function ThreadViewPage() {
       subject: reSubject,
       in_reply_to: email.message_id,
       references: collectReferences(email),
+      // Auto-select alias if email was delivered via alias
+      fromAliasId: email.delivered_via_alias || undefined,
     });
   }
 
@@ -668,6 +673,8 @@ export default function ThreadViewPage() {
       subject: reSubject,
       in_reply_to: email.message_id,
       references: collectReferences(email),
+      // Auto-select alias if email was delivered via alias
+      fromAliasId: email.delivered_via_alias || undefined,
     });
   }
 
@@ -680,6 +687,8 @@ export default function ThreadViewPage() {
       to: "",
       subject: fwdSubject,
       bodyHtml: quotedHtml,
+      // Auto-select alias if email was delivered via alias
+      fromAliasId: email.delivered_via_alias || undefined,
     });
     setForwardOpen(true);
   }

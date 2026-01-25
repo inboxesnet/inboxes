@@ -10,6 +10,11 @@ interface AttachmentInput {
   url: string;
 }
 
+interface AliasInfo {
+  id: string;
+  address: string;
+}
+
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
   if (!user) {
@@ -38,6 +43,7 @@ export async function POST(request: NextRequest) {
     in_reply_to?: string;
     references?: string[];
     attachments?: AttachmentInput[];
+    from_alias_id?: string;
   };
 
   try {
@@ -46,7 +52,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { to, cc, bcc, subject, body_html, body_plain, in_reply_to, references, attachments } = body;
+  const { to, cc, bcc, subject, body_html, body_plain, in_reply_to, references, attachments, from_alias_id } = body;
 
   // Validate required fields
   if (!to) {
@@ -71,6 +77,43 @@ export async function POST(request: NextRequest) {
   const ccAddresses = cc ? (Array.isArray(cc) ? cc : [cc]) : [];
   const bccAddresses = bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : [];
 
+  // Determine the from address (personal email or alias)
+  let fromAddress = user.email;
+  let aliasInfo: AliasInfo | null = null;
+
+  if (from_alias_id) {
+    // Verify user can send as this alias
+    const aliasUser = await prisma.aliasUser.findFirst({
+      where: {
+        alias_id: from_alias_id,
+        user_id: user.id,
+        can_send_as: true,
+      },
+      include: {
+        alias: {
+          select: {
+            id: true,
+            address: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!aliasUser) {
+      return NextResponse.json(
+        { error: "You do not have permission to send from this alias" },
+        { status: 403 }
+      );
+    }
+
+    fromAddress = aliasUser.alias.address;
+    aliasInfo = {
+      id: aliasUser.alias.id,
+      address: aliasUser.alias.address,
+    };
+  }
+
   // Generate a Message-ID
   const messageId = `<${randomUUID()}@${domain.domain}>`;
 
@@ -84,7 +127,7 @@ export async function POST(request: NextRequest) {
   }
 
   const resendPayload: Record<string, unknown> = {
-    from: user.email,
+    from: fromAddress,
     to: toAddresses,
     subject,
     headers: {
@@ -218,7 +261,7 @@ export async function POST(request: NextRequest) {
       message_id: messageId,
       in_reply_to: in_reply_to || null,
       references_header: references ? references : Prisma.JsonNull,
-      from_address: user.email,
+      from_address: fromAddress,
       to_addresses: JSON.stringify(toAddresses),
       cc_addresses: JSON.stringify(ccAddresses),
       bcc_addresses: JSON.stringify(bccAddresses),
@@ -231,6 +274,7 @@ export async function POST(request: NextRequest) {
       read: true,
       folder: "sent",
       received_at: new Date(),
+      sent_as_alias: aliasInfo?.id || null,
     },
   });
 

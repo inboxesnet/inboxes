@@ -35,6 +35,7 @@ export async function GET(
           read: true,
           received_at: true,
           attachments: true,
+          delivered_via_alias: true,
         },
       },
     },
@@ -77,6 +78,7 @@ export async function GET(
       read: email.read,
       received_at: email.received_at,
       attachments: email.attachments,
+      delivered_via_alias: email.delivered_via_alias,
     })),
   });
 }

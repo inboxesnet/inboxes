@@ -148,6 +148,7 @@ model Email {
   deleted_at        DateTime?
   trash_expires_at  DateTime?
   delivered_via_alias String?
+  sent_as_alias       String?
   original_to       String?
   received_at       DateTime       @default(now())
   created_at        DateTime       @default(now())

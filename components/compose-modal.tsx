@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Bold, Italic, Link, List, ListOrdered, Send, Paperclip, X, FileIcon } from "lucide-react";
+import { Bold, Italic, Link, List, ListOrdered, Send, Paperclip, X, FileIcon, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +18,18 @@ export interface ComposePreFill {
   cc?: string;
   subject?: string;
   bodyHtml?: string;
+  fromAliasId?: string;
+}
+
+interface SendableAlias {
+  id: string;
+  address: string;
+  name: string;
+}
+
+interface UserAliasesResponse {
+  personal_email: string;
+  aliases: SendableAlias[];
 }
 
 interface AttachedFile {
@@ -59,6 +71,42 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
   const editorRef = React.useRef<HTMLDivElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  // Alias selection state
+  const [personalEmail, setPersonalEmail] = React.useState<string>("");
+  const [aliases, setAliases] = React.useState<SendableAlias[]>([]);
+  const [selectedFromId, setSelectedFromId] = React.useState<string>(""); // empty string = personal email
+  const [showFromDropdown, setShowFromDropdown] = React.useState(false);
+  const fromDropdownRef = React.useRef<HTMLDivElement>(null);
+
+  // Fetch user aliases when modal opens
+  React.useEffect(() => {
+    if (open) {
+      (async () => {
+        try {
+          const res = await fetch("/api/users/me/aliases");
+          if (res.ok) {
+            const data: UserAliasesResponse = await res.json();
+            setPersonalEmail(data.personal_email);
+            setAliases(data.aliases);
+          }
+        } catch {
+          // Silently fail - user can still send from personal email
+        }
+      })();
+    }
+  }, [open]);
+
+  // Close dropdown when clicking outside
+  React.useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (fromDropdownRef.current && !fromDropdownRef.current.contains(event.target as Node)) {
+        setShowFromDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   React.useEffect(() => {
     if (open && preFill) {
       if (preFill.to) setTo(preFill.to);
@@ -69,6 +117,9 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
       if (preFill.subject) setSubject(preFill.subject);
       if (preFill.bodyHtml && editorRef.current) {
         editorRef.current.innerHTML = preFill.bodyHtml;
+      }
+      if (preFill.fromAliasId) {
+        setSelectedFromId(preFill.fromAliasId);
       }
     }
   }, [open, preFill]);
@@ -81,6 +132,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
     setShowCcBcc(false);
     setError("");
     setAttachments([]);
+    setSelectedFromId("");
     if (editorRef.current) {
       editorRef.current.innerHTML = "";
     }
@@ -229,6 +281,12 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
     }
   }
 
+  function getSelectedFromAddress(): string {
+    if (!selectedFromId) return personalEmail;
+    const alias = aliases.find((a) => a.id === selectedFromId);
+    return alias ? alias.address : personalEmail;
+  }
+
   async function handleSend() {
     setError("");
 
@@ -287,6 +345,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                 url: a.url,
               }))
             : undefined,
+          from_alias_id: selectedFromId || undefined,
         }),
       });
 
@@ -318,6 +377,62 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
           {error && (
             <div className="rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
+            </div>
+          )}
+
+          {/* From dropdown - only show if user has sendable aliases */}
+          {aliases.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Label className="w-12 text-sm text-muted-foreground">
+                From
+              </Label>
+              <div className="relative flex-1" ref={fromDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setShowFromDropdown(!showFromDropdown)}
+                  className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  <span className="truncate">{getSelectedFromAddress()}</span>
+                  <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </button>
+                {showFromDropdown && (
+                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg">
+                    <div className="p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedFromId("");
+                          setShowFromDropdown(false);
+                        }}
+                        className={`flex w-full items-center rounded-sm px-2 py-1.5 text-sm hover:bg-accent ${
+                          !selectedFromId ? "bg-accent" : ""
+                        }`}
+                      >
+                        <span className="truncate">{personalEmail}</span>
+                        <span className="ml-2 text-xs text-muted-foreground">(Personal)</span>
+                      </button>
+                      {aliases.map((alias) => (
+                        <button
+                          key={alias.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedFromId(alias.id);
+                            setShowFromDropdown(false);
+                          }}
+                          className={`flex w-full items-center rounded-sm px-2 py-1.5 text-sm hover:bg-accent ${
+                            selectedFromId === alias.id ? "bg-accent" : ""
+                          }`}
+                        >
+                          <span className="truncate">{alias.address}</span>
+                          {alias.name && (
+                            <span className="ml-2 text-xs text-muted-foreground">({alias.name})</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

@@ -636,13 +636,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user assigned to an alias with can_send_as=true, I can send emails from the alias address.
 
 **Acceptance Criteria:**
-- [ ] Compose modal shows "From" dropdown if user has send-able aliases
-- [ ] Options: personal email + any alias with can_send_as=true
-- [ ] When sending as alias: Resend `from` field set to alias address
-- [ ] Email record stores which alias was used
-- [ ] Reply in thread auto-selects the alias if original was delivered via that alias
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Compose modal shows "From" dropdown if user has send-able aliases
+- [x] Options: personal email + any alias with can_send_as=true
+- [x] When sending as alias: Resend `from` field set to alias address
+- [x] Email record stores which alias was used
+- [x] Reply in thread auto-selects the alias if original was delivered via that alias
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
