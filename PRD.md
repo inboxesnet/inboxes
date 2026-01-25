@@ -774,12 +774,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a developer, I need to sanitize incoming email HTML to prevent XSS attacks.
 
 **Acceptance Criteria:**
-- [ ] Install DOMPurify (or isomorphic equivalent)
-- [ ] All email body_html is sanitized before rendering in thread view
-- [ ] Strips: script tags, event handlers (onclick etc), javascript: URLs
-- [ ] Preserves: basic formatting (bold, italic, links, lists, images, tables)
-- [ ] External images loaded via proxy or with user consent (to prevent tracking pixels)
-- [ ] Typecheck passes
+- [x] Install DOMPurify (or isomorphic equivalent)
+- [x] All email body_html is sanitized before rendering in thread view
+- [x] Strips: script tags, event handlers (onclick etc), javascript: URLs
+- [x] Preserves: basic formatting (bold, italic, links, lists, images, tables)
+- [x] External images loaded via proxy or with user consent (to prevent tracking pixels)
+- [x] Typecheck passes
 
 ---
 

@@ -72,18 +72,65 @@ function formatDateTime(dateStr: string): string {
   });
 }
 
-function sanitizeHtml(html: string): string {
-  return DOMPurify.sanitize(html, {
+// List of all HTML event handler attributes to forbid
+const EVENT_HANDLER_ATTRS = [
+  "onabort", "onafterprint", "onanimationend", "onanimationiteration", "onanimationstart",
+  "onbeforeprint", "onbeforeunload", "onblur", "oncanplay", "oncanplaythrough",
+  "onchange", "onclick", "oncontextmenu", "oncopy", "oncut", "ondblclick",
+  "ondrag", "ondragend", "ondragenter", "ondragleave", "ondragover", "ondragstart", "ondrop",
+  "ondurationchange", "onemptied", "onended", "onerror", "onfocus", "onfocusin", "onfocusout",
+  "onfullscreenchange", "onfullscreenerror", "onhashchange", "oninput", "oninvalid",
+  "onkeydown", "onkeypress", "onkeyup", "onload", "onloadeddata", "onloadedmetadata",
+  "onloadstart", "onmessage", "onmousedown", "onmouseenter", "onmouseleave",
+  "onmousemove", "onmouseout", "onmouseover", "onmouseup", "onmousewheel",
+  "onoffline", "ononline", "onopen", "onpagehide", "onpageshow", "onpaste",
+  "onpause", "onplay", "onplaying", "onpopstate", "onprogress", "onratechange",
+  "onreset", "onresize", "onscroll", "onsearch", "onseeked", "onseeking",
+  "onselect", "onshow", "onstalled", "onstorage", "onsubmit", "onsuspend",
+  "ontimeupdate", "ontoggle", "ontouchcancel", "ontouchend", "ontouchmove", "ontouchstart",
+  "ontransitionend", "onunload", "onvolumechange", "onwaiting", "onwheel",
+];
+
+// Placeholder data URL for blocked external images
+const BLOCKED_IMAGE_PLACEHOLDER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'%3E%3Crect fill='%23f3f4f6' width='100' height='100'/%3E%3Ctext x='50' y='50' font-family='sans-serif' font-size='10' fill='%239ca3af' text-anchor='middle' dominant-baseline='middle'%3EImage blocked%3C/text%3E%3C/svg%3E";
+
+function sanitizeHtml(html: string, showExternalImages: boolean = false): string {
+  // Configure DOMPurify with strict settings
+  const clean = DOMPurify.sanitize(html, {
     ALLOWED_TAGS: [
       "p", "br", "b", "i", "em", "strong", "a", "ul", "ol", "li",
       "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "code",
       "table", "thead", "tbody", "tr", "th", "td", "img", "div", "span",
-      "hr", "sub", "sup",
+      "hr", "sub", "sup", "u", "s", "strike", "font", "center",
     ],
-    ALLOWED_ATTR: ["href", "src", "alt", "title", "width", "height", "style", "target"],
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "form"],
-    FORBID_ATTR: ["onerror", "onclick", "onload", "onmouseover"],
+    ALLOWED_ATTR: ["href", "src", "alt", "title", "width", "height", "style", "target", "colspan", "rowspan", "data-blocked-src"],
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "button", "select", "textarea", "style", "link", "meta", "base", "noscript"],
+    FORBID_ATTR: EVENT_HANDLER_ATTRS,
+    // Block javascript:, vbscript:, data: (except for specific safe patterns) URLs
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
   });
+
+  // If not showing external images, replace external image src with placeholder
+  if (!showExternalImages) {
+    // Create a temporary DOM to process images
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = clean;
+
+    const images = tempDiv.querySelectorAll("img");
+    images.forEach((img) => {
+      const src = img.getAttribute("src");
+      if (src && !src.startsWith("data:") && !src.startsWith("cid:")) {
+        // Store original src and replace with placeholder
+        img.setAttribute("data-blocked-src", src);
+        img.setAttribute("src", BLOCKED_IMAGE_PLACEHOLDER);
+        img.setAttribute("title", "External image blocked for privacy. Click to load.");
+      }
+    });
+
+    return tempDiv.innerHTML;
+  }
+
+  return clean;
 }
 
 function formatRecipients(addresses: string[]): string {
@@ -235,6 +282,12 @@ function buildQuotedHtml(email: EmailMessage): string {
     `${email.body_html || email.body_plain || ""}</div>`;
 }
 
+// Check if email HTML contains external images (not data: or cid:)
+function hasExternalImages(html: string): boolean {
+  const imgRegex = /<img[^>]+src\s*=\s*["'](?!data:|cid:)([^"']+)["'][^>]*>/gi;
+  return imgRegex.test(html);
+}
+
 function EmailMessageItem({
   email,
   defaultExpanded,
@@ -250,8 +303,11 @@ function EmailMessageItem({
   onForward: (email: EmailMessage) => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [showExternalImages, setShowExternalImages] = useState(false);
 
-  const sanitizedBody = sanitizeHtml(email.body_html || "");
+  const rawHtml = email.body_html || "";
+  const containsExternalImages = hasExternalImages(rawHtml);
+  const sanitizedBody = sanitizeHtml(rawHtml, showExternalImages);
   const hasHtmlBody = sanitizedBody.trim().length > 0;
 
   return (
@@ -304,6 +360,23 @@ function EmailMessageItem({
 
       {expanded && (
         <div className="px-3 pb-4 sm:px-4 sm:pl-16">
+          {/* External images warning banner */}
+          {containsExternalImages && !showExternalImages && (
+            <div className="mb-3 flex items-center justify-between rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-950/30">
+              <span className="text-amber-800 dark:text-amber-200">
+                External images blocked for privacy protection.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={(e) => { e.stopPropagation(); setShowExternalImages(true); }}
+                className="ml-2 h-7 border-amber-300 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900"
+              >
+                Load Images
+              </Button>
+            </div>
+          )}
+
           {hasHtmlBody ? (
             <div
               className="prose prose-sm max-w-none overflow-x-auto dark:prose-invert"
