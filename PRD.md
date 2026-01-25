@@ -712,13 +712,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can configure my notification preferences.
 
 **Acceptance Criteria:**
-- [ ] Section on `/settings` page: Notifications
-- [ ] Toggle: Browser notifications (on/off)
-- [ ] Toggle: Notification sound (on/off)
-- [ ] Preferences stored on User model (json field or separate columns)
-- [ ] `PATCH /api/users/me/preferences` endpoint
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Section on `/settings` page: Notifications
+- [x] Toggle: Browser notifications (on/off)
+- [x] Toggle: Notification sound (on/off)
+- [x] Preferences stored on User model (json field or separate columns)
+- [x] `PATCH /api/users/me/preferences` endpoint
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

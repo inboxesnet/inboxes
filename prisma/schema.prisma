@@ -71,6 +71,7 @@ model User {
   claimed_at       DateTime?
   reset_token      String?
   reset_token_expires_at DateTime?
+  notification_preferences Json @default("{\"browser_notifications\": true, \"notification_sound\": false}")
   created_at       DateTime   @default(now())
   updated_at       DateTime   @updatedAt
 
