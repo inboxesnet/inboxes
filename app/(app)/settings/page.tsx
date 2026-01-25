@@ -3,16 +3,39 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Loader2, Bell, Volume2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Loader2, Bell, Volume2, User, Lock, Check } from "lucide-react";
 import { useNotifications } from "@/hooks/use-notifications";
 import { useNotificationContext } from "@/contexts/notification-context";
+import { useToast } from "@/components/ui/toast";
 
 interface NotificationPreferences {
   browser_notifications: boolean;
   notification_sound: boolean;
 }
 
+interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+}
+
 export default function SettingsPage() {
+  // Profile state
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [editName, setEditName] = useState("");
+  const [nameLoading, setNameLoading] = useState(false);
+
+  // Password state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+
+  // Notification preferences state
   const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
   const [loading, setLoading] = useState(true);
   const [browserToggleLoading, setBrowserToggleLoading] = useState(false);
@@ -21,26 +44,113 @@ export default function SettingsPage() {
 
   const { permission, requestPermission, isSupported } = useNotifications();
   const { setSoundEnabled } = useNotificationContext();
+  const { addToast } = useToast();
 
-  const fetchPreferences = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/users/me/preferences");
-      if (res.ok) {
-        const data = await res.json();
+      const [profileRes, prefsRes] = await Promise.all([
+        fetch("/api/users/me"),
+        fetch("/api/users/me/preferences"),
+      ]);
+
+      if (profileRes.ok) {
+        const data = await profileRes.json();
+        setProfile(data.user);
+        setEditName(data.user.name);
+      }
+
+      if (prefsRes.ok) {
+        const data = await prefsRes.json();
         setPreferences(data.preferences);
-        // Sync sound preference with notification context
         setSoundEnabled(data.preferences.notification_sound);
       }
     } catch {
-      setError("Failed to load notification preferences");
+      setError("Failed to load settings");
     } finally {
       setLoading(false);
     }
   }, [setSoundEnabled]);
 
   useEffect(() => {
-    fetchPreferences();
-  }, [fetchPreferences]);
+    fetchData();
+  }, [fetchData]);
+
+  async function handleNameSave() {
+    if (!profile || editName.trim() === profile.name) return;
+    setNameLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/users/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editName.trim() }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setProfile(data.user);
+        addToast("Name updated successfully", "default");
+      } else {
+        const data = await res.json();
+        setError(data.error || "Failed to update name");
+      }
+    } catch {
+      setError("Failed to update name");
+    } finally {
+      setNameLoading(false);
+    }
+  }
+
+  async function handlePasswordChange(e: React.FormEvent) {
+    e.preventDefault();
+    setPasswordError("");
+
+    // Validate
+    if (!currentPassword) {
+      setPasswordError("Current password is required");
+      return;
+    }
+    if (!newPassword) {
+      setPasswordError("New password is required");
+      return;
+    }
+    if (newPassword.length < 8) {
+      setPasswordError("New password must be at least 8 characters");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError("New passwords do not match");
+      return;
+    }
+
+    setPasswordLoading(true);
+
+    try {
+      const res = await fetch("/api/users/me/password", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      });
+
+      if (res.ok) {
+        addToast("Password updated successfully", "default");
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+      } else {
+        const data = await res.json();
+        setPasswordError(data.error || "Failed to update password");
+      }
+    } catch {
+      setPasswordError("Failed to update password");
+    } finally {
+      setPasswordLoading(false);
+    }
+  }
 
   async function handleBrowserNotificationsToggle() {
     if (!preferences) return;
@@ -49,7 +159,6 @@ export default function SettingsPage() {
 
     const newValue = !preferences.browser_notifications;
 
-    // If enabling, request permission first
     if (newValue && permission !== "granted") {
       const granted = await requestPermission();
       if (!granted) {
@@ -97,7 +206,6 @@ export default function SettingsPage() {
       if (res.ok) {
         const data = await res.json();
         setPreferences(data.preferences);
-        // Sync with notification context
         setSoundEnabled(data.preferences.notification_sound);
       } else {
         const data = await res.json();
@@ -118,6 +226,8 @@ export default function SettingsPage() {
     );
   }
 
+  const hasNameChanges = profile && editName.trim() !== profile.name;
+
   return (
     <div className="space-y-6">
       <div>
@@ -133,6 +243,142 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* Profile Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <User className="h-5 w-5" />
+            Profile
+          </CardTitle>
+          <CardDescription>
+            Your personal information and account details.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Name (editable) */}
+          <div className="space-y-2">
+            <Label htmlFor="name">Name</Label>
+            <div className="flex gap-2">
+              <Input
+                id="name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Your name"
+                className="max-w-sm"
+              />
+              <Button
+                onClick={handleNameSave}
+                disabled={nameLoading || !hasNameChanges}
+                size="sm"
+              >
+                {nameLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Check className="mr-1 h-4 w-4" />
+                    Save
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {/* Email (read-only) */}
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              value={profile?.email || ""}
+              disabled
+              className="max-w-sm bg-muted"
+            />
+            <p className="text-sm text-muted-foreground">
+              Your email address cannot be changed.
+            </p>
+          </div>
+
+          {/* Role (read-only) */}
+          <div className="space-y-2">
+            <Label htmlFor="role">Role</Label>
+            <Input
+              id="role"
+              value={profile?.role === "admin" ? "Admin" : "Member"}
+              disabled
+              className="max-w-sm bg-muted"
+            />
+            <p className="text-sm text-muted-foreground">
+              Your role is managed by your organization admin.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Password Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lock className="h-5 w-5" />
+            Change Password
+          </CardTitle>
+          <CardDescription>
+            Update your password to keep your account secure.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handlePasswordChange} className="space-y-4 max-w-sm">
+            {passwordError && (
+              <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {passwordError}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="current-password">Current Password</Label>
+              <Input
+                id="current-password"
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Enter current password"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="new-password">New Password</Label>
+              <Input
+                id="new-password"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Enter new password"
+              />
+              <p className="text-sm text-muted-foreground">
+                Must be at least 8 characters.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="confirm-password">Confirm New Password</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Confirm new password"
+              />
+            </div>
+
+            <Button type="submit" disabled={passwordLoading}>
+              {passwordLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Update Password
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      {/* Notifications Section */}
       <Card>
         <CardHeader>
           <CardTitle>Notifications</CardTitle>

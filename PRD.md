@@ -727,13 +727,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can view and update my profile settings.
 
 **Acceptance Criteria:**
-- [ ] Page at `/settings` showing: name, email (read-only), role (read-only)
-- [ ] Editable fields: name, password change (current + new + confirm)
-- [ ] `PATCH /api/users/me` endpoint for name update
-- [ ] `PATCH /api/users/me/password` endpoint (validates current password first)
-- [ ] Success/error toasts on save
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/settings` showing: name, email (read-only), role (read-only)
+- [x] Editable fields: name, password change (current + new + confirm)
+- [x] `PATCH /api/users/me` endpoint for name update
+- [x] `PATCH /api/users/me/password` endpoint (validates current password first)
+- [x] Success/error toasts on save
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
