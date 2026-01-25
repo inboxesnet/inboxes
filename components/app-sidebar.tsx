@@ -66,13 +66,13 @@ export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
       </div>
       <div className="px-3 pb-3">
         <Button
-          className="w-full justify-start gap-2"
+          className="h-11 w-full justify-start gap-2"
           onClick={() => {
             onCompose?.();
             onNavigate?.();
           }}
         >
-          <PenSquare className="h-4 w-4" />
+          <PenSquare className="h-5 w-5" />
           Compose
         </Button>
       </div>
@@ -89,13 +89,13 @@ export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
               href={item.href}
               onClick={onNavigate}
               className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                "flex min-h-[44px] items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors",
                 isActive
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               )}
             >
-              <item.icon className="h-4 w-4" />
+              <item.icon className="h-5 w-5" />
               <span className="flex-1">{item.label}</span>
               {showBadge && (
                 <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
@@ -119,13 +119,13 @@ export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
                   href={item.href}
                   onClick={onNavigate}
                   className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    "flex min-h-[44px] items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors",
                     isActive
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )}
                 >
-                  <item.icon className="h-4 w-4" />
+                  <item.icon className="h-5 w-5" />
                   {item.label}
                 </Link>
               );
@@ -145,8 +145,9 @@ export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
             size="icon"
             onClick={handleLogout}
             title="Logout"
+            className="h-10 w-10"
           >
-            <LogOut className="h-4 w-4" />
+            <LogOut className="h-5 w-5" />
           </Button>
         </div>
       </div>

@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useToast } from "@/components/ui/toast";
 
 export interface ComposePreFill {
@@ -369,12 +370,12 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[95vh] max-w-2xl overflow-hidden p-4 sm:max-h-[85vh] sm:p-6 fixed inset-4 sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2">
         <DialogHeader>
           <DialogTitle>New Message</DialogTitle>
         </DialogHeader>
 
-        <div className="mt-4 space-y-3">
+        <div className="mt-4 flex flex-col space-y-3 overflow-y-auto max-h-[calc(95vh-8rem)] sm:max-h-[calc(85vh-8rem)]">
           {error && (
             <div className="rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
@@ -383,15 +384,15 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
 
           {/* From dropdown - only show if user has sendable aliases */}
           {aliases.length > 0 && (
-            <div className="flex items-center gap-2">
-              <Label className="w-12 text-sm text-muted-foreground">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+              <Label className="text-sm text-muted-foreground sm:w-12">
                 From
               </Label>
               <div className="relative flex-1" ref={fromDropdownRef}>
                 <button
                   type="button"
                   onClick={() => setShowFromDropdown(!showFromDropdown)}
-                  className="flex w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 >
                   <span className="truncate">{getSelectedFromAddress()}</span>
                   <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -405,7 +406,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                           setSelectedFromId("");
                           setShowFromDropdown(false);
                         }}
-                        className={`flex w-full items-center rounded-sm px-2 py-1.5 text-sm hover:bg-accent ${
+                        className={`flex w-full items-center rounded-sm px-2 py-2.5 text-sm hover:bg-accent ${
                           !selectedFromId ? "bg-accent" : ""
                         }`}
                       >
@@ -420,7 +421,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                             setSelectedFromId(alias.id);
                             setShowFromDropdown(false);
                           }}
-                          className={`flex w-full items-center rounded-sm px-2 py-1.5 text-sm hover:bg-accent ${
+                          className={`flex w-full items-center rounded-sm px-2 py-2.5 text-sm hover:bg-accent ${
                             selectedFromId === alias.id ? "bg-accent" : ""
                           }`}
                         >
@@ -438,35 +439,37 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
           )}
 
           <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Label htmlFor="compose-to" className="w-12 shrink-0 text-sm text-muted-foreground">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+              <Label htmlFor="compose-to" className="text-sm text-muted-foreground sm:w-12 sm:shrink-0">
                 To
               </Label>
-              <RecipientAutocomplete
-                id="compose-to"
-                value={to}
-                onChange={setTo}
-                placeholder="recipient@example.com"
-                className="flex-1"
-              />
-              {!showCcBcc && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowCcBcc(true)}
-                  className="shrink-0 text-xs text-muted-foreground"
-                >
-                  CC/BCC
-                </Button>
-              )}
+              <div className="flex flex-1 items-center gap-2">
+                <RecipientAutocomplete
+                  id="compose-to"
+                  value={to}
+                  onChange={setTo}
+                  placeholder="recipient@example.com"
+                  className="flex-1"
+                />
+                {!showCcBcc && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowCcBcc(true)}
+                    className="h-10 shrink-0 text-xs text-muted-foreground"
+                  >
+                    CC/BCC
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
 
           {showCcBcc && (
             <>
-              <div className="flex items-center gap-2">
-                <Label htmlFor="compose-cc" className="w-12 shrink-0 text-sm text-muted-foreground">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+                <Label htmlFor="compose-cc" className="text-sm text-muted-foreground sm:w-12 sm:shrink-0">
                   CC
                 </Label>
                 <RecipientAutocomplete
@@ -477,8 +480,8 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                   className="flex-1"
                 />
               </div>
-              <div className="flex items-center gap-2">
-                <Label htmlFor="compose-bcc" className="w-12 shrink-0 text-sm text-muted-foreground">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+                <Label htmlFor="compose-bcc" className="text-sm text-muted-foreground sm:w-12 sm:shrink-0">
                   BCC
                 </Label>
                 <RecipientAutocomplete
@@ -492,8 +495,8 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
             </>
           )}
 
-          <div className="flex items-center gap-2">
-            <Label htmlFor="compose-subject" className="w-12 text-sm text-muted-foreground">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+            <Label htmlFor="compose-subject" className="text-sm text-muted-foreground sm:w-12">
               Subject
             </Label>
             <Input
@@ -502,72 +505,72 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
               placeholder="Subject"
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
-              className="flex-1"
+              className="h-10 flex-1"
             />
           </div>
 
-          {/* Rich text toolbar */}
-          <div className="flex items-center gap-1 border-b pb-2">
+          {/* Rich text toolbar - scrollable on mobile */}
+          <div className="flex items-center gap-1 overflow-x-auto border-b pb-2">
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-10 w-10 shrink-0 sm:h-8 sm:w-8"
               onClick={handleBold}
               title="Bold"
             >
-              <Bold className="h-4 w-4" />
+              <Bold className="h-5 w-5 sm:h-4 sm:w-4" />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-10 w-10 shrink-0 sm:h-8 sm:w-8"
               onClick={handleItalic}
               title="Italic"
             >
-              <Italic className="h-4 w-4" />
+              <Italic className="h-5 w-5 sm:h-4 sm:w-4" />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-10 w-10 shrink-0 sm:h-8 sm:w-8"
               onClick={handleLink}
               title="Insert Link"
             >
-              <Link className="h-4 w-4" />
+              <Link className="h-5 w-5 sm:h-4 sm:w-4" />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-10 w-10 shrink-0 sm:h-8 sm:w-8"
               onClick={handleUnorderedList}
               title="Bullet List"
             >
-              <List className="h-4 w-4" />
+              <List className="h-5 w-5 sm:h-4 sm:w-4" />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-10 w-10 shrink-0 sm:h-8 sm:w-8"
               onClick={handleOrderedList}
               title="Numbered List"
             >
-              <ListOrdered className="h-4 w-4" />
+              <ListOrdered className="h-5 w-5 sm:h-4 sm:w-4" />
             </Button>
             <div className="flex-1" />
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-10 w-10 shrink-0 sm:h-8 sm:w-8"
               onClick={handleAttachClick}
               title="Attach files"
             >
-              <Paperclip className="h-4 w-4" />
+              <Paperclip className="h-5 w-5 sm:h-4 sm:w-4" />
             </Button>
             <input
               ref={fileInputRef}
@@ -582,7 +585,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
           <div
             ref={editorRef}
             contentEditable
-            className={`min-h-[200px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+            className={`min-h-[150px] w-full flex-1 rounded-md border bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:min-h-[200px] ${
               isDragging
                 ? "border-primary border-2 bg-primary/5"
                 : "border-input"
@@ -611,7 +614,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                 {attachments.map((attachment) => (
                   <div
                     key={attachment.id}
-                    className={`flex items-center gap-2 rounded-full border px-3 py-1 text-sm ${
+                    className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
                       attachment.error
                         ? "border-destructive bg-destructive/10"
                         : attachment.uploading
@@ -619,8 +622,8 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                           : "border-border bg-muted/30"
                     }`}
                   >
-                    <FileIcon className="h-3 w-3 flex-shrink-0" />
-                    <span className="max-w-[150px] truncate">{attachment.filename}</span>
+                    <FileIcon className="h-4 w-4 flex-shrink-0 sm:h-3 sm:w-3" />
+                    <span className="max-w-[120px] truncate sm:max-w-[150px]">{attachment.filename}</span>
                     <span className="text-xs text-muted-foreground">
                       {formatFileSize(attachment.size)}
                     </span>
@@ -633,10 +636,10 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                     <button
                       type="button"
                       onClick={() => handleRemoveAttachment(attachment.id)}
-                      className="ml-1 rounded-full p-0.5 hover:bg-muted"
+                      className="ml-1 rounded-full p-1 hover:bg-muted"
                       title="Remove attachment"
                     >
-                      <X className="h-3 w-3" />
+                      <X className="h-4 w-4 sm:h-3 sm:w-3" />
                     </button>
                   </div>
                 ))}
@@ -647,8 +650,8 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
             </div>
           )}
 
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-2 pt-2">
+          {/* Actions - stack vertically on mobile */}
+          <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:items-center sm:justify-end">
             <Button
               type="button"
               variant="outline"
@@ -656,6 +659,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
                 resetForm();
                 onOpenChange(false);
               }}
+              className="h-11 sm:h-10"
             >
               Discard
             </Button>
@@ -663,6 +667,7 @@ export function ComposeModal({ open, onOpenChange, preFill }: ComposeModalProps)
               type="button"
               onClick={handleSend}
               disabled={sending}
+              className="h-11 sm:h-10"
             >
               {sending ? (
                 "Sending..."

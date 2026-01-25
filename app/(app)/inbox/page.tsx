@@ -225,7 +225,8 @@ export default function InboxPage() {
             <div
               key={thread.id}
               className={cn(
-                "group relative flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 cursor-pointer",
+                "group relative flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50 cursor-pointer sm:px-4",
+                "min-h-[60px]", // Touch-friendly row height
                 isUnread && "bg-blue-50/50 dark:bg-blue-950/20"
               )}
               onClick={() => {
@@ -246,7 +247,7 @@ export default function InboxPage() {
                 }
               }}
             >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary sm:h-10 sm:w-10">
                 {getInitial(thread.from_address)}
               </div>
 
@@ -268,34 +269,34 @@ export default function InboxPage() {
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground group-hover:hidden">
                     {formatTime(thread.last_message_at)}
                   </span>
-                  {/* Hover actions */}
-                  <div className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
+                  {/* Hover actions - hidden on mobile, shown on hover on desktop */}
+                  <div className="ml-auto hidden shrink-0 items-center gap-1 sm:group-hover:flex">
                     <Button
                       variant="ghost"
                       size="icon"
                       onClick={(e) => handleArchive(e, thread)}
                       title="Archive"
-                      className="h-7 w-7"
+                      className="h-9 w-9 sm:h-7 sm:w-7"
                     >
-                      <Archive className="h-3.5 w-3.5" />
+                      <Archive className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
                       onClick={(e) => handleTrash(e, thread)}
                       title="Move to trash"
-                      className="h-7 w-7"
+                      className="h-9 w-9 sm:h-7 sm:w-7"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Trash2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
                       onClick={(e) => handleStar(e, thread)}
                       title={thread.starred ? "Unstar" : "Star"}
-                      className="h-7 w-7"
+                      className="h-9 w-9 sm:h-7 sm:w-7"
                     >
-                      <Star className={cn("h-3.5 w-3.5", thread.starred && "fill-yellow-400 text-yellow-400")} />
+                      <Star className={cn("h-4 w-4 sm:h-3.5 sm:w-3.5", thread.starred && "fill-yellow-400 text-yellow-400")} />
                     </Button>
                   </div>
                 </div>
@@ -336,16 +337,17 @@ export default function InboxPage() {
       </div>
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between border-t px-4 py-3">
+        <div className="flex items-center justify-between border-t px-3 py-3 sm:px-4">
           <Button
             variant="outline"
             size="sm"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
+            className="h-10 min-w-[80px] sm:h-9"
           >
             Previous
           </Button>
-          <span className="text-sm text-muted-foreground">
+          <span className="text-xs text-muted-foreground sm:text-sm">
             Page {page} of {totalPages}
           </span>
           <Button
@@ -353,6 +355,7 @@ export default function InboxPage() {
             size="sm"
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages}
+            className="h-10 min-w-[80px] sm:h-9"
           >
             Next
           </Button>

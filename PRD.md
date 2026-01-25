@@ -757,15 +757,15 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a mobile user, the entire app is usable on small screens.
 
 **Acceptance Criteria:**
-- [ ] Inbox list: full-width, touch-friendly row height (min 48px tap targets)
-- [ ] Thread view: full-width messages, reply form stacks vertically
-- [ ] Compose: full-screen modal on mobile (Sheet component)
-- [ ] Sidebar: hidden by default on mobile, shown via hamburger menu
-- [ ] Settings pages: single-column layout on mobile
-- [ ] All interactive elements have min 44px touch target
-- [ ] No horizontal scroll on any page at 320px width
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Inbox list: full-width, touch-friendly row height (min 48px tap targets)
+- [x] Thread view: full-width messages, reply form stacks vertically
+- [x] Compose: full-screen modal on mobile (Sheet component)
+- [x] Sidebar: hidden by default on mobile, shown via hamburger menu
+- [x] Settings pages: single-column layout on mobile
+- [x] All interactive elements have min 44px touch target
+- [x] No horizontal scroll on any page at 320px width
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

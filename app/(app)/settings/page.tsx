@@ -229,10 +229,10 @@ export default function SettingsPage() {
   const hasNameChanges = profile && editName.trim() !== profile.name;
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h2 className="text-2xl font-bold">Settings</h2>
-        <p className="mt-1 text-muted-foreground">
+        <h2 className="text-xl font-bold sm:text-2xl">Settings</h2>
+        <p className="mt-1 text-sm text-muted-foreground sm:text-base">
           Manage your account settings and preferences.
         </p>
       </div>
@@ -258,18 +258,19 @@ export default function SettingsPage() {
           {/* Name (editable) */}
           <div className="space-y-2">
             <Label htmlFor="name">Name</Label>
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 id="name"
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 placeholder="Your name"
-                className="max-w-sm"
+                className="h-11 sm:h-10 sm:max-w-sm"
               />
               <Button
                 onClick={handleNameSave}
                 disabled={nameLoading || !hasNameChanges}
                 size="sm"
+                className="h-11 sm:h-10"
               >
                 {nameLoading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -290,9 +291,9 @@ export default function SettingsPage() {
               id="email"
               value={profile?.email || ""}
               disabled
-              className="max-w-sm bg-muted"
+              className="h-11 bg-muted sm:h-10 sm:max-w-sm"
             />
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs text-muted-foreground sm:text-sm">
               Your email address cannot be changed.
             </p>
           </div>
@@ -304,9 +305,9 @@ export default function SettingsPage() {
               id="role"
               value={profile?.role === "admin" ? "Admin" : "Member"}
               disabled
-              className="max-w-sm bg-muted"
+              className="h-11 bg-muted sm:h-10 sm:max-w-sm"
             />
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs text-muted-foreground sm:text-sm">
               Your role is managed by your organization admin.
             </p>
           </div>
@@ -325,7 +326,7 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handlePasswordChange} className="space-y-4 max-w-sm">
+          <form onSubmit={handlePasswordChange} className="space-y-4 sm:max-w-sm">
             {passwordError && (
               <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {passwordError}
@@ -340,6 +341,7 @@ export default function SettingsPage() {
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="Enter current password"
+                className="h-11 sm:h-10"
               />
             </div>
 
@@ -351,8 +353,9 @@ export default function SettingsPage() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Enter new password"
+                className="h-11 sm:h-10"
               />
-              <p className="text-sm text-muted-foreground">
+              <p className="text-xs text-muted-foreground sm:text-sm">
                 Must be at least 8 characters.
               </p>
             </div>
@@ -365,10 +368,11 @@ export default function SettingsPage() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Confirm new password"
+                className="h-11 sm:h-10"
               />
             </div>
 
-            <Button type="submit" disabled={passwordLoading}>
+            <Button type="submit" disabled={passwordLoading} className="h-11 w-full sm:h-10 sm:w-auto">
               {passwordLoading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : null}
@@ -388,14 +392,14 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Browser Notifications Toggle */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-3">
-              <Bell className="mt-0.5 h-5 w-5 text-muted-foreground" />
+              <Bell className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               <div className="space-y-1">
                 <Label htmlFor="browser-notifications-toggle" className="text-sm font-medium">
                   Browser notifications
                 </Label>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs text-muted-foreground sm:text-sm">
                   {!isSupported
                     ? "Browser notifications are not supported in this browser"
                     : permission === "denied"
@@ -413,12 +417,12 @@ export default function SettingsPage() {
               aria-checked={preferences?.browser_notifications ?? false}
               disabled={browserToggleLoading || !isSupported || permission === "denied"}
               onClick={handleBrowserNotificationsToggle}
-              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
+              className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 sm:h-6 sm:w-11 ${
                 preferences?.browser_notifications ? "bg-primary" : "bg-input"
               }`}
             >
               <span
-                className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${
+                className={`pointer-events-none block h-6 w-6 rounded-full bg-background shadow-lg ring-0 transition-transform sm:h-5 sm:w-5 ${
                   preferences?.browser_notifications ? "translate-x-5" : "translate-x-0"
                 }`}
               />
@@ -429,14 +433,14 @@ export default function SettingsPage() {
           </div>
 
           {/* Notification Sound Toggle */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-3">
-              <Volume2 className="mt-0.5 h-5 w-5 text-muted-foreground" />
+              <Volume2 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               <div className="space-y-1">
                 <Label htmlFor="notification-sound-toggle" className="text-sm font-medium">
                   Notification sound
                 </Label>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs text-muted-foreground sm:text-sm">
                   {preferences?.notification_sound
                     ? "Play a sound when new emails arrive"
                     : "Enable to play a sound notification for new emails"}
@@ -450,12 +454,12 @@ export default function SettingsPage() {
               aria-checked={preferences?.notification_sound ?? false}
               disabled={soundToggleLoading}
               onClick={handleSoundToggle}
-              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
+              className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 sm:h-6 sm:w-11 ${
                 preferences?.notification_sound ? "bg-primary" : "bg-input"
               }`}
             >
               <span
-                className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${
+                className={`pointer-events-none block h-6 w-6 rounded-full bg-background shadow-lg ring-0 transition-transform sm:h-5 sm:w-5 ${
                   preferences?.notification_sound ? "translate-x-5" : "translate-x-0"
                 }`}
               />

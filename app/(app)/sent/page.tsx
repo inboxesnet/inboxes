@@ -117,7 +117,7 @@ export default function SentPage() {
 
   return (
     <div className="flex flex-col">
-      <div className="border-b px-4 py-3">
+      <div className="border-b px-3 py-3 sm:px-4">
         <h1 className="text-lg font-semibold">Sent</h1>
       </div>
 
@@ -126,7 +126,7 @@ export default function SentPage() {
           <button
             key={thread.id}
             onClick={() => router.push(`/inbox/${thread.id}`)}
-            className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50"
+            className="flex min-h-[60px] w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50 sm:px-4"
           >
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
               {getInitial(thread.to_addresses)}
@@ -160,16 +160,17 @@ export default function SentPage() {
       </div>
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between border-t px-4 py-3">
+        <div className="flex items-center justify-between border-t px-3 py-3 sm:px-4">
           <Button
             variant="outline"
             size="sm"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
+            className="h-10 min-w-[80px] sm:h-9"
           >
             Previous
           </Button>
-          <span className="text-sm text-muted-foreground">
+          <span className="text-xs text-muted-foreground sm:text-sm">
             Page {page} of {totalPages}
           </span>
           <Button
@@ -177,6 +178,7 @@ export default function SentPage() {
             size="sm"
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages}
+            className="h-10 min-w-[80px] sm:h-9"
           >
             Next
           </Button>

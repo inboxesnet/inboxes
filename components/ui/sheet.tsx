@@ -65,7 +65,7 @@ function SheetContent({
   className,
 }: {
   children: React.ReactNode;
-  side?: "left" | "right";
+  side?: "left" | "right" | "bottom";
   className?: string;
 }) {
   const { open, setOpen } = React.useContext(SheetContext);
@@ -83,6 +83,7 @@ function SheetContent({
           "fixed z-50 gap-4 bg-background p-6 shadow-lg transition ease-in-out",
           side === "left" && "inset-y-0 left-0 h-full w-3/4 max-w-sm border-r",
           side === "right" && "inset-y-0 right-0 h-full w-3/4 max-w-sm border-l",
+          side === "bottom" && "inset-x-0 bottom-0 h-[95vh] w-full rounded-t-lg border-t",
           className
         )}
       >
@@ -99,4 +100,28 @@ function SheetContent({
   );
 }
 
-export { Sheet, SheetTrigger, SheetContent };
+function SheetHeader({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      className={cn("flex flex-col space-y-2 text-center sm:text-left", className)}
+      {...props}
+    />
+  );
+}
+
+function SheetTitle({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLHeadingElement>) {
+  return (
+    <h2
+      className={cn("text-lg font-semibold text-foreground", className)}
+      {...props}
+    />
+  );
+}
+
+export { Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle };

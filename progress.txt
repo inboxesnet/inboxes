@@ -639,3 +639,27 @@
   - Tab key adds valid email when input has content
   - Comma or space after valid email auto-adds it as chip
 ---
+
+## Iteration 50 - US-050: Mobile responsiveness pass
+- What was implemented: Comprehensive mobile responsiveness pass across the entire app
+- Files changed: 
+  - app/(app)/inbox/page.tsx (touch-friendly row heights, responsive padding, larger touch targets)
+  - app/(app)/inbox/[threadId]/page.tsx (responsive header, stacked reply buttons, touch-friendly toolbar)
+  - app/(app)/sent/page.tsx (touch-friendly rows, responsive pagination)
+  - app/(app)/search/page.tsx (larger search input, touch-friendly results)
+  - app/(app)/settings/page.tsx (single-column layout, larger form inputs, touch-friendly toggles)
+  - components/app-shell.tsx (removed main padding to allow full-width content)
+  - components/app-sidebar.tsx (larger nav items, touch-friendly compose button)
+  - components/compose-modal.tsx (full-screen on mobile, stacked form fields, touch-friendly toolbar)
+  - components/ui/dialog.tsx (full-screen on mobile, touch-friendly close button)
+  - components/ui/sheet.tsx (added SheetHeader, SheetTitle, bottom variant)
+- Learnings for future iterations:
+  - Use min-h-[60px] or min-h-[44px] for touch-friendly rows
+  - Use h-10/h-11 for mobile buttons, h-9 for desktop with sm: breakpoint
+  - Stack form labels vertically on mobile with flex-col gap-1 sm:flex-row sm:items-center
+  - Use overflow-x-auto for horizontal toolbars on mobile
+  - Hide non-essential elements on mobile with hidden sm:inline or hidden sm:flex
+  - Icons should be h-5 w-5 on mobile, h-4 w-4 on desktop
+  - Padding should be px-3 sm:px-4 for edge-to-edge mobile content
+  - Action buttons stack with flex-col-reverse gap-2 sm:flex-row (primary button first visually)
+---

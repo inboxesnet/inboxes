@@ -139,24 +139,24 @@ export default function SearchPage() {
 
   return (
     <div className="flex flex-col">
-      <div className="border-b px-4 py-3">
+      <div className="border-b px-3 py-3 sm:px-4">
         <h1 className="text-lg font-semibold">Search</h1>
       </div>
 
-      <div className="p-4">
+      <div className="p-3 sm:p-4">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground sm:h-4 sm:w-4" />
           <Input
             type="text"
             placeholder="Search emails by keyword..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            className="pl-10 pr-10"
+            className="h-11 pl-10 pr-10 text-base sm:h-10 sm:text-sm"
             autoFocus
           />
           {loading && (
-            <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+            <Loader2 className="absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 animate-spin text-muted-foreground sm:h-4 sm:w-4" />
           )}
         </div>
       </div>
@@ -182,7 +182,7 @@ export default function SearchPage() {
           {results.map((result) => (
             <div
               key={result.id}
-              className="flex cursor-pointer items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/50"
+              className="flex min-h-[60px] cursor-pointer items-start gap-3 px-3 py-3 transition-colors hover:bg-muted/50 sm:px-4"
               onClick={() => handleResultClick(result)}
               role="button"
               tabIndex={0}

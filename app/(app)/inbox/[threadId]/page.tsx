@@ -259,20 +259,21 @@ function EmailMessageItem({
       <button
         onClick={() => setExpanded(!expanded)}
         className={cn(
-          "flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30",
+          "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/30 sm:px-4",
+          "min-h-[56px]", // Touch-friendly height
           !expanded && "cursor-pointer"
         )}
       >
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary sm:h-9 sm:w-9">
           {getInitial(email.from_address)}
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1 sm:flex-nowrap sm:gap-2">
             <span className="text-sm font-medium">
               {extractName(email.from_address)}
             </span>
-            <span className="text-xs text-muted-foreground">
+            <span className="hidden text-xs text-muted-foreground sm:inline">
               &lt;{extractEmail(email.from_address)}&gt;
             </span>
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">
@@ -302,14 +303,14 @@ function EmailMessageItem({
       </button>
 
       {expanded && (
-        <div className="px-4 pb-4 pl-16">
+        <div className="px-3 pb-4 sm:px-4 sm:pl-16">
           {hasHtmlBody ? (
             <div
-              className="prose prose-sm max-w-none dark:prose-invert"
+              className="prose prose-sm max-w-none overflow-x-auto dark:prose-invert"
               dangerouslySetInnerHTML={{ __html: sanitizedBody }}
             />
           ) : (
-            <pre className="whitespace-pre-wrap text-sm text-foreground">
+            <pre className="whitespace-pre-wrap break-words text-sm text-foreground">
               {email.body_plain || "No content"}
             </pre>
           )}
@@ -317,29 +318,33 @@ function EmailMessageItem({
           {/* Attachments section */}
           <AttachmentsList attachments={email.attachments} emailId={email.id} />
 
-          <div className="mt-3 flex items-center gap-2">
+          {/* Action buttons - stack vertically on mobile */}
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
             <Button
               variant="outline"
               size="sm"
               onClick={(e) => { e.stopPropagation(); onReply(email); }}
+              className="h-10 justify-center sm:h-9"
             >
-              <Reply className="mr-1.5 h-3.5 w-3.5" />
+              <Reply className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
               Reply
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={(e) => { e.stopPropagation(); onReplyAll(email); }}
+              className="h-10 justify-center sm:h-9"
             >
-              <ReplyAll className="mr-1.5 h-3.5 w-3.5" />
+              <ReplyAll className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
               Reply All
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={(e) => { e.stopPropagation(); onForward(email); }}
+              className="h-10 justify-center sm:h-9"
             >
-              <Forward className="mr-1.5 h-3.5 w-3.5" />
+              <Forward className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
               Forward
             </Button>
           </div>
@@ -441,8 +446,8 @@ function InlineReplyForm({
   }
 
   return (
-    <div className="border-t bg-muted/20 p-4">
-      <div className="mb-2 text-xs text-muted-foreground">
+    <div className="border-t bg-muted/20 p-3 sm:p-4">
+      <div className="mb-2 text-xs text-muted-foreground break-all">
         To: {replyData.to}
         {replyData.cc && <span className="ml-2">CC: {replyData.cc}</span>}
       </div>
@@ -453,21 +458,21 @@ function InlineReplyForm({
         </div>
       )}
 
-      <div className="flex items-center gap-1 border-b pb-2 mb-2">
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => execCommand("bold")} title="Bold">
-          <Bold className="h-3.5 w-3.5" />
+      <div className="flex items-center gap-1 border-b pb-2 mb-2 overflow-x-auto">
+        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 sm:h-7 sm:w-7" onClick={() => execCommand("bold")} title="Bold">
+          <Bold className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
         </Button>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => execCommand("italic")} title="Italic">
-          <Italic className="h-3.5 w-3.5" />
+        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 sm:h-7 sm:w-7" onClick={() => execCommand("italic")} title="Italic">
+          <Italic className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
         </Button>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => { const url = prompt("Enter URL:"); if (url) execCommand("createLink", url); }} title="Insert Link">
-          <Link className="h-3.5 w-3.5" />
+        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 sm:h-7 sm:w-7" onClick={() => { const url = prompt("Enter URL:"); if (url) execCommand("createLink", url); }} title="Insert Link">
+          <Link className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
         </Button>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => execCommand("insertUnorderedList")} title="Bullet List">
-          <List className="h-3.5 w-3.5" />
+        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 sm:h-7 sm:w-7" onClick={() => execCommand("insertUnorderedList")} title="Bullet List">
+          <List className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
         </Button>
-        <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => execCommand("insertOrderedList")} title="Numbered List">
-          <ListOrdered className="h-3.5 w-3.5" />
+        <Button type="button" variant="ghost" size="icon" className="h-9 w-9 shrink-0 sm:h-7 sm:w-7" onClick={() => execCommand("insertOrderedList")} title="Numbered List">
+          <ListOrdered className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
         </Button>
       </div>
 
@@ -480,16 +485,17 @@ function InlineReplyForm({
         aria-multiline="true"
       />
 
-      <div className="mt-3 flex items-center gap-2">
-        <Button type="button" onClick={handleSend} disabled={sending} size="sm">
+      {/* Action buttons - stack vertically on mobile */}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <Button type="button" onClick={handleSend} disabled={sending} size="sm" className="h-10 sm:h-9">
           {sending ? "Sending..." : (
             <>
-              <Send className="mr-1.5 h-3.5 w-3.5" />
+              <Send className="mr-1.5 h-4 w-4 sm:h-3.5 sm:w-3.5" />
               Send
             </>
           )}
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+        <Button type="button" variant="outline" size="sm" onClick={onCancel} className="h-10 sm:h-9">
           Cancel
         </Button>
       </div>
@@ -741,69 +747,70 @@ export default function ThreadViewPage() {
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-2 border-b px-4 py-3">
+      <div className="flex items-center gap-1 border-b px-2 py-2 sm:gap-2 sm:px-4 sm:py-3">
         <Button
           variant="ghost"
-          size="sm"
+          size="icon"
           onClick={() => router.push("/inbox")}
-          className="shrink-0"
+          className="h-10 w-10 shrink-0 sm:h-9 sm:w-auto sm:px-3"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            width="16"
-            height="16"
+            width="20"
+            height="20"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
+            className="sm:h-4 sm:w-4"
           >
             <path d="m15 18-6-6 6-6" />
           </svg>
           <span className="ml-1 hidden sm:inline">Back</span>
         </Button>
 
-        <h1 className="min-w-0 flex-1 truncate text-lg font-semibold">
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold sm:text-lg">
           {thread.subject}
         </h1>
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center">
           <Button
             variant="ghost"
             size="icon"
             onClick={handleArchive}
             title="Archive"
-            className="h-8 w-8"
+            className="h-10 w-10 sm:h-8 sm:w-8"
           >
-            <Archive className="h-4 w-4" />
+            <Archive className="h-5 w-5 sm:h-4 sm:w-4" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={handleTrash}
             title="Move to trash"
-            className="h-8 w-8"
+            className="h-10 w-10 sm:h-8 sm:w-8"
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-5 w-5 sm:h-4 sm:w-4" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={handleStar}
             title={thread.starred ? "Unstar" : "Star"}
-            className="h-8 w-8"
+            className="h-10 w-10 sm:h-8 sm:w-8"
           >
-            <Star className={cn("h-4 w-4", thread.starred && "fill-yellow-400 text-yellow-400")} />
+            <Star className={cn("h-5 w-5 sm:h-4 sm:w-4", thread.starred && "fill-yellow-400 text-yellow-400")} />
           </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={handleMarkUnread}
             title="Mark as unread"
-            className="h-8 w-8"
+            className="hidden h-10 w-10 sm:flex sm:h-8 sm:w-8"
           >
-            <Mail className="h-4 w-4" />
+            <Mail className="h-5 w-5 sm:h-4 sm:w-4" />
           </Button>
         </div>
 
