@@ -560,13 +560,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I can invite team members to claim their email addresses.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/users/invite` accepts: email (must match org domain), name, role. Admin-only.
-- [ ] Creates User with status=invited, generates invite_token (crypto random), sets invite_expires_at (7 days)
-- [ ] Sends invite email via Resend to a fallback/personal email (or the org email if they can receive externally)
-- [ ] Invite email contains link: `/claim?token=xxx`
-- [ ] Returns 409 if email already exists in org
-- [ ] `POST /api/users/:id/reinvite` regenerates token and resends (for expired invites). Admin-only.
-- [ ] Typecheck passes
+- [x] `POST /api/users/invite` accepts: email (must match org domain), name, role. Admin-only.
+- [x] Creates User with status=invited, generates invite_token (crypto random), sets invite_expires_at (7 days)
+- [x] Sends invite email via Resend to a fallback/personal email (or the org email if they can receive externally)
+- [x] Invite email contains link: `/claim?token=xxx`
+- [x] Returns 409 if email already exists in org
+- [x] `POST /api/users/:id/reinvite` regenerates token and resends (for expired invites). Admin-only.
+- [x] Typecheck passes
 
 ---
 
