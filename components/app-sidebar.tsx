@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
+import { useNotificationContext } from "@/contexts/notification-context";
 
 interface NavItem {
   label: string;
@@ -51,6 +52,7 @@ export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isAdmin = user.role === "admin";
+  const { unreadCount } = useNotificationContext();
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -80,6 +82,7 @@ export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
           const isActive =
             pathname === item.href ||
             (item.href !== "/" && pathname.startsWith(item.href + "/"));
+          const showBadge = item.href === "/inbox" && unreadCount > 0;
           return (
             <Link
               key={item.href}
@@ -93,7 +96,12 @@ export function AppSidebar({ user, onNavigate, onCompose }: AppSidebarProps) {
               )}
             >
               <item.icon className="h-4 w-4" />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {showBadge && (
+                <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
             </Link>
           );
         })}

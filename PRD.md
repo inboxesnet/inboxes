@@ -697,13 +697,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I see unread counts and visual indicators without needing browser notifications.
 
 **Acceptance Criteria:**
-- [ ] Tab title shows unread count: "(3) Inbox — Inboxes.net"
-- [ ] Sidebar "Inbox" nav item shows unread count badge
-- [ ] Favicon updates with unread indicator (small dot overlay)
-- [ ] Counts update in real-time via WebSocket events
-- [ ] Optional notification sound (off by default)
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Tab title shows unread count: "(3) Inbox — Inboxes.net"
+- [x] Sidebar "Inbox" nav item shows unread count badge
+- [x] Favicon updates with unread indicator (small dot overlay)
+- [x] Counts update in real-time via WebSocket events
+- [x] Optional notification sound (off by default)
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

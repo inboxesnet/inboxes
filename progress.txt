@@ -586,3 +586,17 @@
   - NotificationListener subscribes to WebSocket new_email events and calls showNotification
   - 2-second delay before showing prompt to avoid overwhelming user on first load
 ---
+
+## Iteration 46 - US-046: Notifications — in-app indicators
+- What was implemented: In-app notification indicators including tab title with unread count, sidebar badge, dynamic favicon with dot overlay, real-time count updates via WebSocket, and optional notification sound using Web Audio API
+- Files changed: app/api/threads/unread-count/route.ts (new), contexts/notification-context.tsx (new), components/notification-indicators.tsx (new), components/app-shell.tsx (added NotificationProvider + NotificationIndicators), components/app-sidebar.tsx (added unread count badge), app/(app)/inbox/page.tsx (refresh unread count on actions)
+- Learnings for future iterations:
+  - NotificationContext provides global unread count state and refreshUnreadCount() function
+  - Tab title updated via document.title in NotificationIndicators component
+  - Dynamic favicon created using Canvas API: draw original favicon, overlay red dot when unread > 0
+  - Web Audio API for notification sound: creates AudioContext + OscillatorNode + GainNode for sine wave beep
+  - localStorage for notification-sound-enabled preference persistence
+  - Sidebar badge shows unreadCount with "99+" for overflow, styled as pill shape with primary colors
+  - Inbox page calls refreshUnreadCount() after archive/trash actions and when clicking unread threads
+  - setTimeout(500ms) used for thread click refresh to ensure mark-as-read API completes first
+---

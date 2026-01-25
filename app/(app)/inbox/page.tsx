@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { useNotificationContext } from "@/contexts/notification-context";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +60,7 @@ function getInitial(address: string): string {
 export default function InboxPage() {
   const router = useRouter();
   const { addToast } = useToast();
+  const { refreshUnreadCount } = useNotificationContext();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -87,12 +89,15 @@ export default function InboxPage() {
     try {
       const res = await fetch(`/api/threads/${thread.id}/archive`, { method: "PATCH" });
       if (res.ok) {
+        // Refresh unread count since thread may have been unread
+        refreshUnreadCount();
         addToast("Thread archived", "default", {
           label: "Undo",
           onClick: async () => {
             // Restore to inbox - need to move back and refresh
             await fetch(`/api/threads/${thread.id}/archive`, { method: "PATCH" });
             fetchThreads(page);
+            refreshUnreadCount();
           },
         });
       } else {
@@ -114,11 +119,14 @@ export default function InboxPage() {
     try {
       const res = await fetch(`/api/threads/${thread.id}/trash`, { method: "PATCH" });
       if (res.ok) {
+        // Refresh unread count since thread may have been unread
+        refreshUnreadCount();
         addToast("Thread moved to trash", "default", {
           label: "Undo",
           onClick: async () => {
             await fetch(`/api/threads/${thread.id}/archive`, { method: "PATCH" });
             fetchThreads(page);
+            refreshUnreadCount();
           },
         });
       } else {
@@ -220,10 +228,23 @@ export default function InboxPage() {
                 "group relative flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50 cursor-pointer",
                 isUnread && "bg-blue-50/50 dark:bg-blue-950/20"
               )}
-              onClick={() => router.push(`/inbox/${thread.id}`)}
+              onClick={() => {
+                router.push(`/inbox/${thread.id}`);
+                // Refresh unread count since opening marks thread as read
+                if (isUnread) {
+                  setTimeout(() => refreshUnreadCount(), 500);
+                }
+              }}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && router.push(`/inbox/${thread.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  router.push(`/inbox/${thread.id}`);
+                  if (isUnread) {
+                    setTimeout(() => refreshUnreadCount(), 500);
+                  }
+                }
+              }}
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
                 {getInitial(thread.from_address)}
