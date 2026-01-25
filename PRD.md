@@ -621,13 +621,13 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an admin, I can create, update, and delete aliases and assign users to them.
 
 **Acceptance Criteria:**
-- [ ] `POST /api/aliases` — create alias (address, name). Admin-only. Validates address matches org domain.
-- [ ] `GET /api/aliases` — list all org aliases with assigned users
-- [ ] `PATCH /api/aliases/:id` — update name, assigned users
-- [ ] `DELETE /api/aliases/:id` — delete alias and all AliasUser records
-- [ ] `POST /api/aliases/:id/users` — add user to alias (user_id, can_send_as)
-- [ ] `DELETE /api/aliases/:id/users/:userId` — remove user from alias
-- [ ] Typecheck passes
+- [x] `POST /api/aliases` — create alias (address, name). Admin-only. Validates address matches org domain.
+- [x] `GET /api/aliases` — list all org aliases with assigned users
+- [x] `PATCH /api/aliases/:id` — update name, assigned users
+- [x] `DELETE /api/aliases/:id` — delete alias and all AliasUser records
+- [x] `POST /api/aliases/:id/users` — add user to alias (user_id, can_send_as)
+- [x] `DELETE /api/aliases/:id/users/:userId` — remove user from alias
+- [x] Typecheck passes
 
 ---
 

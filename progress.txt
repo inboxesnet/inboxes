@@ -522,3 +522,14 @@
   - All email/thread queries already use `user_id: user.id` filter (inbox list, thread view, search, actions)
   - Sidebar hides admin items via `isAdmin && (<>...</>)` conditional in app-sidebar.tsx
 ---
+
+## Iteration 41 - US-041: Alias CRUD API
+- What was implemented: Complete alias CRUD API with 6 endpoints: POST /api/aliases (create alias), GET /api/aliases (list all org aliases with assigned users), PATCH /api/aliases/:id (update name and users), DELETE /api/aliases/:id (delete alias and AliasUser records), POST /api/aliases/:id/users (add user to alias), DELETE /api/aliases/:id/users/:userId (remove user from alias)
+- Files changed: app/api/aliases/route.ts (new), app/api/aliases/[id]/route.ts (new), app/api/aliases/[id]/users/route.ts (new), app/api/aliases/[id]/users/[userId]/route.ts (new), PRD.md
+- Learnings for future iterations:
+  - Alias address validation: extract domain with .split("@")[1], check against org's active domain
+  - AliasUser uses composite unique constraint: alias_id_user_id (accessible via where clause)
+  - PATCH endpoint can update both name and users array in one call (delete all + recreate pattern for users)
+  - Use findFirst with org_id filter to ensure alias belongs to user's org before any operations
+  - createMany for bulk alias user creation when updating users list
+---
