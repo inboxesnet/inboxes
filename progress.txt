@@ -533,3 +533,56 @@
   - Use findFirst with org_id filter to ensure alias belongs to user's org before any operations
   - createMany for bulk alias user creation when updating users list
 ---
+
+## Iteration 42 - US-042: Alias — send as alias
+- What was implemented: Compose modal From dropdown for alias selection, API endpoint to get user's sendable aliases, send email API supports from_alias_id, sent_as_alias field in Email schema, auto-select alias in reply/forward if delivered via alias
+- Files changed: prisma/schema.prisma (added sent_as_alias), prisma/migrations/20240106000000_sent_as_alias/migration.sql (new), app/api/users/me/aliases/route.ts (new), app/api/emails/send/route.ts (added from_alias_id handling), app/api/threads/[id]/route.ts (added delivered_via_alias to response), components/compose-modal.tsx (added From dropdown UI), app/(app)/inbox/[threadId]/page.tsx (auto-select alias in reply/forward)
+- Learnings for future iterations:
+  - Add sent_as_alias (not just delivered_via_alias) to track which alias was used for outbound emails
+  - GET /api/users/me/aliases returns { personal_email, aliases: [...] } for dropdown options
+  - Compose modal fetches aliases on open with IIFE async pattern (not function declaration in block)
+  - Use `(async () => { ... })()` instead of `async function foo() {}` inside conditionals to avoid ES5 strict mode error
+  - fromAliasId passed in ComposePreFill interface for auto-selection
+  - Thread API returns delivered_via_alias so reply/forward can auto-select
+  - InlineReplyForm passes from_alias_id from replyData.fromAliasId
+---
+
+## Iteration 43 - US-043: Alias — admin management UI
+- What was implemented: Admin page at /settings/aliases with full alias CRUD UI — list of aliases (address, name, user count), expandable detail view showing assigned users with can_send_as toggle, Create Alias dialog with address prefix input (auto-appends @domain), Add User dropdown for assigning org users, Remove user button, Delete alias with confirmation dialog
+- Files changed: app/(app)/settings/aliases/page.tsx (new)
+- Learnings for future iterations:
+  - Expandable rows: use expandedAliasId state + ChevronRight/ChevronDown toggle icons
+  - AddUserDropdown component filters already-assigned users from org users list
+  - Create alias dialog uses address prefix input with domain suffix shown in disabled span
+  - can_send_as toggle uses PATCH /api/aliases/:id with full users array (delete + recreate pattern)
+  - Delete confirmation uses separate dialog with deleteConfirmId state
+  - Promise.all to fetch aliases, users, and domain data in parallel on mount
+  - actionLoading state uses composite key like `${aliasId}-${userId}-toggle` for granular loading states
+---
+
+## Iteration 44 - US-044: Catch-all — admin toggle UI
+- What was implemented: Catch-all routing toggle on domain settings page, PATCH /api/orgs/settings endpoint (admin-only), inbox list "catch-all" badge for emails delivered via catch-all with original address display
+- Files changed: app/api/orgs/settings/route.ts (new), app/(app)/settings/domain/page.tsx (added catch-all toggle card), app/api/threads/route.ts (added original_to field), app/(app)/inbox/page.tsx (added catch-all badge and original address display)
+- Learnings for future iterations:
+  - Custom toggle switch: use button with role="switch", aria-checked, and translate-x classes for thumb position
+  - requireAdmin() helper returns `{ error: Response }` union for admin-only endpoints
+  - Org settings endpoint uses findUnique/update with org_id from authenticated user
+  - Catch-all badge uses Badge variant="secondary" with amber color for original address text
+  - original_to field on Email stored when catch-all routing delivers to admins
+  - Thread API includes original_to from latest email for inbox list display
+---
+
+## Iteration 45 - US-045: Notifications — browser push setup
+- What was implemented: Browser push notification system with service worker, permission prompt, and WebSocket integration
+- Files changed: public/sw.js (new), hooks/use-notifications.ts (new), components/notification-prompt.tsx (new), components/notification-listener.tsx (new), components/app-shell.tsx (added notification components)
+- Learnings for future iterations:
+  - Service worker goes in public/sw.js for Next.js to serve it at /sw.js
+  - Service worker handles notificationclick event to focus existing tab or open new one
+  - Use ServiceWorkerRegistration.showNotification() instead of new Notification() for service worker features
+  - TypeScript NotificationOptions doesn't include `renotify` or `data` props, but they work with SW - cast to NotificationOptions
+  - Client posts message to service worker listener for notification click navigation
+  - Check document.hasFocus() to avoid showing notifications when user is actively on the tab
+  - NotificationPrompt uses localStorage key to persist dismissal across sessions
+  - NotificationListener subscribes to WebSocket new_email events and calls showNotification
+  - 2-second delay before showing prompt to avoid overwhelming user on first load
+---
