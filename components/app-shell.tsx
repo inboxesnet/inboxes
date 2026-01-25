@@ -11,6 +11,7 @@ import { NotificationPrompt } from "@/components/notification-prompt";
 import { NotificationListener } from "@/components/notification-listener";
 import { NotificationProvider } from "@/contexts/notification-context";
 import { NotificationIndicators } from "@/components/notification-indicators";
+import { ConnectionStatus } from "@/components/connection-status";
 
 interface AppShellProps {
   user: {
@@ -73,6 +74,9 @@ export function AppShell({ user, children }: AppShellProps) {
           <NotificationPrompt />
           <NotificationListener />
           <NotificationIndicators />
+
+          {/* Connection status indicator */}
+          <ConnectionStatus />
         </div>
       </NotificationProvider>
     </ToastProvider>

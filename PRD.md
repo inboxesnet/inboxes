@@ -788,15 +788,15 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I see appropriate loading states and error messages throughout the app.
 
 **Acceptance Criteria:**
-- [ ] All API calls show loading spinner/skeleton while pending
-- [ ] Failed API calls show toast with error message
-- [ ] Inbox list shows skeleton loader on initial fetch
-- [ ] Thread view shows skeleton while loading messages
-- [ ] Compose shows disabled Send button while sending
-- [ ] Network error shows reconnection message
-- [ ] 404 page for invalid routes
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] All API calls show loading spinner/skeleton while pending
+- [x] Failed API calls show toast with error message
+- [x] Inbox list shows skeleton loader on initial fetch
+- [x] Thread view shows skeleton while loading messages
+- [x] Compose shows disabled Send button while sending
+- [x] Network error shows reconnection message
+- [x] 404 page for invalid routes
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

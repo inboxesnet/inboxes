@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Search, Mail, Loader2 } from "lucide-react";
+import { useToast } from "@/components/ui/toast";
 
 interface SearchResult {
   id: string;
@@ -78,6 +79,7 @@ function escapeRegex(str: string): string {
 
 export default function SearchPage() {
   const router = useRouter();
+  const { addToast } = useToast();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -104,13 +106,15 @@ export default function SearchPage() {
         setResults(data.results);
       } else {
         setResults([]);
+        addToast("Search failed. Please try again.", "destructive");
       }
     } catch {
       setResults([]);
+      addToast("Network error. Please check your connection.", "destructive");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [addToast]);
 
   // Debounce search after 300ms of no typing
   useEffect(() => {

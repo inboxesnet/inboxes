@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast";
 
 interface ThreadSummary {
   id: string;
@@ -64,6 +65,7 @@ function getInitial(toAddresses: unknown): string {
 
 export default function SentPage() {
   const router = useRouter();
+  const { addToast } = useToast();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -77,11 +79,15 @@ export default function SentPage() {
         const data: ThreadsResponse = await res.json();
         setThreads(data.threads);
         setTotalPages(data.totalPages);
+      } else {
+        addToast("Failed to load sent messages", "destructive");
       }
+    } catch {
+      addToast("Network error. Please check your connection.", "destructive");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [addToast]);
 
   useEffect(() => {
     fetchThreads(page);

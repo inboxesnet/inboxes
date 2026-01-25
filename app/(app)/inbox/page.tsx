@@ -74,11 +74,15 @@ export default function InboxPage() {
         const data: ThreadsResponse = await res.json();
         setThreads(data.threads);
         setTotalPages(data.totalPages);
+      } else {
+        addToast("Failed to load inbox", "destructive");
       }
+    } catch {
+      addToast("Network error. Please check your connection.", "destructive");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [addToast]);
 
   async function handleArchive(e: React.MouseEvent, thread: ThreadSummary) {
     e.stopPropagation();

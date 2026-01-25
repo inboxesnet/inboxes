@@ -663,3 +663,36 @@
   - Padding should be px-3 sm:px-4 for edge-to-edge mobile content
   - Action buttons stack with flex-col-reverse gap-2 sm:flex-row (primary button first visually)
 ---
+
+## Iteration 51 - US-051: Email HTML sanitization
+- What was implemented: Enhanced DOMPurify configuration for comprehensive XSS protection plus external image blocking for tracking pixel protection
+- Files changed: app/(app)/inbox/[threadId]/page.tsx
+- Learnings for future iterations:
+  - DOMPurify was already installed as isomorphic-dompurify from US-025
+  - Use FORBID_ATTR with comprehensive list of all HTML event handlers (onclick, onerror, onload, etc.)
+  - ALLOWED_URI_REGEXP blocks javascript:, vbscript:, and data: URLs (except safe patterns)
+  - External image blocking: replace src with placeholder SVG, store original in data-blocked-src
+  - hasExternalImages() helper uses regex to check for non-data:, non-cid: image sources
+  - Show warning banner with "Load Images" button for user consent
+  - Pass showExternalImages flag to sanitizeHtml() to conditionally process images
+  - BLOCKED_IMAGE_PLACEHOLDER uses inline SVG data URL with "Image blocked" text
+---
+
+## Iteration 52 - US-052: Error handling and loading states
+- What was implemented: Comprehensive error handling and loading states across the app
+- Files changed:
+  - components/connection-status.tsx (new - shows offline/reconnecting status bar)
+  - components/app-shell.tsx (added ConnectionStatus component)
+  - app/(app)/inbox/page.tsx (added error toast on API failure)
+  - app/(app)/sent/page.tsx (added error toast on API failure)
+  - app/(app)/search/page.tsx (added error toast on API failure)
+  - app/error.tsx (already existed - global error boundary)
+  - app/not-found.tsx (already existed - 404 page)
+- Learnings for future iterations:
+  - Most loading states were already implemented in previous iterations (skeletons, loaders)
+  - ConnectionStatus component uses both navigator.onLine and WebSocket isConnected for offline detection
+  - Use 3-second delay before showing reconnecting message to avoid flash during quick reconnects
+  - Fixed bottom bar with z-50 for connection status visibility
+  - useWebSocket hook already exposed isConnected state for real-time connection monitoring
+  - useToast already used in inbox page, just needed to add error cases for API failures
+---
