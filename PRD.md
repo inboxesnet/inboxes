@@ -683,12 +683,12 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As a user, I can opt-in to browser push notifications for new emails.
 
 **Acceptance Criteria:**
-- [ ] On first login, prompt for notification permission (non-blocking)
-- [ ] If granted: register service worker for push notifications
-- [ ] When `new_email` WebSocket event fires and tab is not focused: show browser notification (sender, subject preview)
-- [ ] Clicking notification focuses the app tab and navigates to thread
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] On first login, prompt for notification permission (non-blocking)
+- [x] If granted: register service worker for push notifications
+- [x] When `new_email` WebSocket event fires and tab is not focused: show browser notification (sender, subject preview)
+- [x] Clicking notification focuses the app tab and navigates to thread
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 

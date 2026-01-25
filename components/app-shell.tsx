@@ -7,6 +7,8 @@ import { Sheet, SheetTrigger, SheetContent } from "@/components/ui/sheet";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ComposeModal } from "@/components/compose-modal";
 import { ToastProvider } from "@/components/ui/toast";
+import { NotificationPrompt } from "@/components/notification-prompt";
+import { NotificationListener } from "@/components/notification-listener";
 
 interface AppShellProps {
   user: {
@@ -63,6 +65,10 @@ export function AppShell({ user, children }: AppShellProps) {
 
         {/* Compose modal */}
         <ComposeModal open={composeOpen} onOpenChange={setComposeOpen} />
+
+        {/* Notification components */}
+        <NotificationPrompt />
+        <NotificationListener />
       </div>
     </ToastProvider>
   );
