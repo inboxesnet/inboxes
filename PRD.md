@@ -575,14 +575,14 @@ Inboxes.net is a simple, affordable company email solution built on Resend's inf
 **Description:** As an invited user, I can set my password and activate my account via the invite link.
 
 **Acceptance Criteria:**
-- [ ] Page at `/claim?token=xxx`
-- [ ] Shows: "Welcome [name], set up your account for [email]"
-- [ ] Form: password, confirm password (8+ chars)
-- [ ] `POST /api/auth/claim` validates token, hashes password, sets status=active, claimed_at=now, clears token
-- [ ] Returns 400 for expired/invalid/already-claimed tokens
-- [ ] Redirects to `/inbox` on success with session set
-- [ ] Typecheck passes
-- [ ] Verify changes work in browser
+- [x] Page at `/claim?token=xxx`
+- [x] Shows: "Welcome [name], set up your account for [email]"
+- [x] Form: password, confirm password (8+ chars)
+- [x] `POST /api/auth/claim` validates token, hashes password, sets status=active, claimed_at=now, clears token
+- [x] Returns 400 for expired/invalid/already-claimed tokens
+- [x] Redirects to `/inbox` on success with session set
+- [x] Typecheck passes
+- [x] Verify changes work in browser
 
 ---
 
