@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgres://inboxes:inboxes@host.docker.internal:5432/inboxes?sslmode=disable
+      REDIS_URL: redis://host.docker.internal:6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
