@@ -33,15 +33,20 @@ export function useThreadSelection(threadIds: string[]) {
   const allSelected = threadIds.length > 0 && selectedIds.size === threadIds.length;
   const someSelected = selectedIds.size > 0 && !allSelected;
 
+  const selectIds = useCallback((ids: string[]) => {
+    setSelectedIds(new Set(ids));
+  }, []);
+
   return useMemo(
     () => ({
       selectedIds,
       toggleSelect,
       toggleSelectAll,
       clearSelection,
+      selectIds,
       allSelected,
       someSelected,
     }),
-    [selectedIds, toggleSelect, toggleSelectAll, clearSelection, allSelected, someSelected]
+    [selectedIds, toggleSelect, toggleSelectAll, clearSelection, selectIds, allSelected, someSelected]
   );
 }

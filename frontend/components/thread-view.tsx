@@ -52,13 +52,27 @@ export function ThreadView({
   const starMutation = useStarThread();
   const actionMutation = useThreadAction();
 
-  // Mark as read on first load
+  // Mark as read on first load — optimistically update cache so list reflects immediately
   useEffect(() => {
     if (thread && thread.unread_count > 0 && markedReadRef.current !== threadId) {
       markedReadRef.current = threadId;
+      // Optimistic: update thread list cache before API responds
+      qc.setQueriesData<{ threads: Array<{ id: string; unread_count: number }>; total: number }>(
+        { queryKey: queryKeys.threads.lists() },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            threads: old.threads.map((t) =>
+              t.id === threadId ? { ...t, unread_count: 0 } : t
+            ),
+          };
+        }
+      );
+      qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
       api.patch(`/api/threads/${threadId}/read`);
     }
-  }, [thread, threadId]);
+  }, [thread, threadId, qc]);
 
   // Reset state when threadId changes
   useEffect(() => {

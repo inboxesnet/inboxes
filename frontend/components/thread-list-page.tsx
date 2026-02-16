@@ -211,10 +211,12 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
             {/* Toolbar */}
             <ThreadToolbar
               folder={folder}
+              threads={threads}
               allSelected={selection.allSelected}
               someSelected={selection.someSelected}
               hasSelection={selection.selectedIds.size > 0}
               onToggleSelectAll={selection.toggleSelectAll}
+              onSelectIds={selection.selectIds}
               onBulkAction={handleBulkAction}
               onRefresh={handleRefresh}
               page={page}

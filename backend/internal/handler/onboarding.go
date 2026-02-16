@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,6 +19,7 @@ type OnboardingHandler struct {
 	ResendSvc *service.ResendService
 	EncSvc    *service.EncryptionService
 	SyncSvc   *service.SyncService
+	Bus       *event.Bus
 }
 
 type connectRequest struct {
@@ -287,7 +289,7 @@ func (h *OnboardingHandler) SyncEmails(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.SyncSvc == nil {
-		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc)
+		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc, h.Bus)
 	}
 
 	result, err := h.SyncSvc.SyncEmails(ctx, claims.OrgID, claims.UserID, domains)
@@ -340,7 +342,7 @@ func (h *OnboardingHandler) SyncEmailsStream(w http.ResponseWriter, r *http.Requ
 	}
 
 	if h.SyncSvc == nil {
-		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc)
+		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc, h.Bus)
 	}
 
 	// Progress channel — sync service writes, we read and flush SSE events

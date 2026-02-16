@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,6 +18,7 @@ type OrgHandler struct {
 	EncSvc    *service.EncryptionService
 	ResendSvc *service.ResendService
 	SyncSvc   *service.SyncService
+	Bus       *event.Bus
 }
 
 func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +124,7 @@ func (h *OrgHandler) SyncStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.SyncSvc == nil {
-		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc)
+		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc, h.Bus)
 	}
 
 	progress := make(chan service.SyncProgress, 10)

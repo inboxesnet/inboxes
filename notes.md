@@ -42,6 +42,24 @@ On sync or periodically, clean up stale Resend webhooks:
 
 Prevents pile-up of stale webhooks when re-onboarding or URL changes (localhost -> staging -> production).
 
+### Reply to specific email in thread (not just latest)
+Currently reply is thread-level — always replies to the latest message. Need the ability to reply to a specific email within a thread. This means:
+- UI: click "reply" on any individual email in the thread view, not just the bottom
+- Set `In-Reply-To` and `References` headers against that specific email's `message_id`
+- Pre-fill `To` from that email's sender, allow adding CC/BCC
+- Gmail does this — each message in a thread has its own reply button
+
+### Outbound emails missing display name in From field
+We send raw `hello@cx.agency` with no display name. Should use `"Display Name <address>"` format. Logic:
+- Alias addresses (hello@, support@) → org/company name → `"CX Agency <hello@cx.agency>"`
+- Personal addresses (harrison@) → user's full name → `"Harrison <harrison@cx.agency>"`
+
+### CC'd emails dropped on inbound
+Webhook handler only checks `To` addresses when routing inbound emails to a domain. If our domain's address is in the CC field (not To), the email gets silently dropped — `"no matching domain for received email"` warning and gone. Fix: domain matching in `handleEmailReceived` should also iterate `emailData.CC`.
+
+### Multiple TO addresses on reply/compose
+Can't add multiple recipients to the TO field when replying or composing. Need a multi-recipient input (pills/tags pattern) for To, CC, and BCC fields.
+
 ## Parked
 
 ### Self-sends and cross-domain sends

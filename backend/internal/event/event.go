@@ -25,6 +25,8 @@ const (
 	ThreadMoved     = "thread.moved"
 	ThreadDeleted   = "thread.deleted"
 	ThreadBulkAction = "thread.bulk_action"
+
+	SyncCompleted = "sync.completed"
 )
 
 type Event struct {

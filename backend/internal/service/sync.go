@@ -8,16 +8,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/inboxes/backend/internal/event"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type SyncService struct {
 	pool      *pgxpool.Pool
 	resendSvc *ResendService
+	eventBus  *event.Bus
 }
 
-func NewSyncService(pool *pgxpool.Pool, resendSvc *ResendService) *SyncService {
-	return &SyncService{pool: pool, resendSvc: resendSvc}
+func NewSyncService(pool *pgxpool.Pool, resendSvc *ResendService, eventBus *event.Bus) *SyncService {
+	return &SyncService{pool: pool, resendSvc: resendSvc, eventBus: eventBus}
 }
 
 type resendEmail struct {
@@ -434,6 +436,20 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		ThreadCount:   result.ThreadCount,
 		AddressCount:  result.AddressCount,
 	})
+
+	// Notify connected clients so the inbox updates without a manual refresh
+	if s.eventBus != nil && (result.SentCount > 0 || result.ReceivedCount > 0) {
+		s.eventBus.Publish(ctx, event.Event{
+			EventType: event.SyncCompleted,
+			OrgID:     orgID,
+			UserID:    adminUserID,
+			Payload: map[string]interface{}{
+				"sent_count":     result.SentCount,
+				"received_count": result.ReceivedCount,
+				"thread_count":   result.ThreadCount,
+			},
+		})
+	}
 
 	return result, nil
 }

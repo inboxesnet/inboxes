@@ -110,6 +110,11 @@ export function WSSync() {
             });
           }
           break;
+
+        case "sync.completed":
+          qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+          qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+          break;
       }
     });
 

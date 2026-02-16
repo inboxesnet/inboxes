@@ -26,14 +26,14 @@ func New(db *pgxpool.Pool, encSvc *service.EncryptionService, resendSvc *service
 	threads := &handler.ThreadHandler{DB: db, Bus: bus}
 	emails := &handler.EmailHandler{DB: db, ResendSvc: resendSvc, Bus: bus}
 	webhooks := &handler.WebhookHandler{DB: db, Bus: bus}
-	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc}
+	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus}
 	users := &handler.UserHandler{DB: db, ResendSvc: resendSvc}
 	aliases := &handler.AliasHandler{DB: db}
 	domains := &handler.DomainHandler{DB: db, ResendSvc: resendSvc}
 	contacts := &handler.ContactHandler{DB: db}
 	attachments := &handler.AttachmentHandler{DB: db}
 	drafts := &handler.DraftHandler{DB: db, ResendSvc: resendSvc, Bus: bus}
-	orgs := &handler.OrgHandler{DB: db, EncSvc: encSvc, ResendSvc: resendSvc}
+	orgs := &handler.OrgHandler{DB: db, EncSvc: encSvc, ResendSvc: resendSvc, Bus: bus}
 	cron := &handler.CronHandler{DB: db}
 
 	// Health
