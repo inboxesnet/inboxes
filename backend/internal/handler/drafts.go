@@ -291,9 +291,12 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve display name for From field
+	fromDisplay := resolveFromDisplay(ctx, h.DB, claims.OrgID, fromAddr)
+
 	// Send via Resend
 	resendPayload := map[string]interface{}{
-		"from":    fromAddr,
+		"from":    fromDisplay,
 		"to":      to,
 		"subject": subject,
 	}
@@ -322,10 +325,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(data, &resendResp)
 
 	// Build snippet
-	snippet := bodyPlain
-	if len(snippet) > 200 {
-		snippet = snippet[:200]
-	}
+	snippet := truncateRunes(bodyPlain, 200)
 
 	// Find or create thread
 	var finalThreadID string

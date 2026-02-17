@@ -1,4 +1,7 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+// In local dev, NEXT_PUBLIC_API_URL points to backend (http://localhost:8080).
+// In production behind Caddy, both frontend and API share the same domain,
+// so we use relative paths (empty string).
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 interface FetchOptions extends Omit<RequestInit, "body"> {
   body?: unknown;

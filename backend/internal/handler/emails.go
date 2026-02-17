@@ -19,15 +19,17 @@ type EmailHandler struct {
 }
 
 type sendRequest struct {
-	DomainID string   `json:"domain_id"`
-	From     string   `json:"from"`
-	To       []string `json:"to"`
-	CC       []string `json:"cc"`
-	BCC      []string `json:"bcc"`
-	Subject  string   `json:"subject"`
-	HTML     string   `json:"html"`
-	Text     string   `json:"text"`
-	ReplyTo  string   `json:"reply_to_thread_id"`
+	DomainID   string   `json:"domain_id"`
+	From       string   `json:"from"`
+	To         []string `json:"to"`
+	CC         []string `json:"cc"`
+	BCC        []string `json:"bcc"`
+	Subject    string   `json:"subject"`
+	HTML       string   `json:"html"`
+	Text       string   `json:"text"`
+	ReplyTo    string   `json:"reply_to_thread_id"`
+	InReplyTo  string   `json:"in_reply_to"`
+	References []string `json:"references"`
 }
 
 func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +51,12 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// Resolve display name for From field
+	fromDisplay := resolveFromDisplay(ctx, h.DB, claims.OrgID, req.From)
+
 	// Send via Resend
 	resendPayload := map[string]interface{}{
-		"from":    req.From,
+		"from":    fromDisplay,
 		"to":      req.To,
 		"subject": req.Subject,
 	}
@@ -66,6 +71,14 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.BCC) > 0 {
 		resendPayload["bcc"] = req.BCC
+	}
+	// Add threading headers if replying to a specific email
+	if req.InReplyTo != "" {
+		headers := map[string]string{"In-Reply-To": req.InReplyTo}
+		if len(req.References) > 0 {
+			headers["References"] = strings.Join(req.References, " ")
+		}
+		resendPayload["headers"] = headers
 	}
 
 	data, err := h.ResendSvc.Fetch(ctx, claims.OrgID, "POST", "/emails", resendPayload)
@@ -92,10 +105,7 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build snippet from outbound text
-	snippet := req.Text
-	if len(snippet) > 200 {
-		snippet = snippet[:200]
-	}
+	snippet := truncateRunes(req.Text, 200)
 
 	// Find or create thread
 	var threadID string
@@ -115,15 +125,18 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	toJSON, _ := json.Marshal(req.To)
 	ccJSON, _ := json.Marshal(req.CC)
 	bccJSON, _ := json.Marshal(req.BCC)
+	refsJSON, _ := json.Marshal(req.References)
 
 	var emailID string
 	h.DB.QueryRow(ctx,
 		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, direction,
-		 from_address, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_plain, status)
-		 VALUES ($1, $2, $3, $4, $5, 'outbound', $6, $7, $8, $9, $10, $11, $12, 'sent')
+		 from_address, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_plain,
+		 status, in_reply_to, references_header)
+		 VALUES ($1, $2, $3, $4, $5, 'outbound', $6, $7, $8, $9, $10, $11, $12, 'sent', $13, $14)
 		 RETURNING id`,
 		threadID, claims.UserID, claims.OrgID, domainID, resendResp.ID,
 		req.From, toJSON, ccJSON, bccJSON, req.Subject, req.HTML, req.Text,
+		req.InReplyTo, refsJSON,
 	).Scan(&emailID)
 
 	// Update thread stats and snippet
@@ -165,17 +178,23 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	query := `SELECT e.id, e.thread_id, e.from_address, e.subject, e.created_at,
-		t.folder, t.domain_id
-		FROM emails e JOIN threads t ON e.thread_id = t.id
-		WHERE e.org_id = $1 AND e.search_vector @@ plainto_tsquery('english', $2)`
+
+	// Find matching thread IDs via email full-text search, then return thread-shaped results
+	query := `SELECT DISTINCT ON (t.id)
+		t.id, t.domain_id, t.subject, t.participant_emails,
+		t.last_message_at, t.message_count, t.unread_count,
+		t.starred, t.folder, t.snippet, t.original_to, t.created_at
+		FROM threads t
+		JOIN emails e ON e.thread_id = t.id
+		WHERE e.org_id = $1 AND e.search_vector @@ plainto_tsquery('english', $2)
+		AND t.deleted_at IS NULL`
 	args := []interface{}{claims.OrgID, q}
 
 	if domainID != "" {
 		query += " AND e.domain_id = $3"
 		args = append(args, domainID)
 	}
-	query += " ORDER BY e.created_at DESC LIMIT 50"
+	query = "SELECT * FROM (" + query + ") sub ORDER BY last_message_at DESC LIMIT 50"
 
 	rows, err := h.DB.Query(ctx, query, args...)
 	if err != nil {
@@ -186,18 +205,34 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	var results []map[string]interface{}
 	for rows.Next() {
-		var eID, threadID, from, subject, folder, dID string
-		var createdAt time.Time
-		rows.Scan(&eID, &threadID, &from, &subject, &createdAt, &folder, &dID)
-		results = append(results, map[string]interface{}{
-			"id":           eID,
-			"thread_id":    threadID,
-			"from_address": from,
-			"subject":      subject,
-			"folder":       folder,
-			"domain_id":    dID,
-			"created_at":   createdAt,
-		})
+		var id, dID, subject, folder, snippet string
+		var originalTo *string
+		var participants json.RawMessage
+		var lastMessageAt, createdAt time.Time
+		var messageCount, unreadCount int
+		var starred bool
+
+		rows.Scan(&id, &dID, &subject, &participants,
+			&lastMessageAt, &messageCount, &unreadCount,
+			&starred, &folder, &snippet, &originalTo, &createdAt)
+
+		t := map[string]interface{}{
+			"id":                 id,
+			"domain_id":          dID,
+			"subject":            subject,
+			"participant_emails": participants,
+			"last_message_at":    lastMessageAt,
+			"message_count":      messageCount,
+			"unread_count":       unreadCount,
+			"starred":            starred,
+			"folder":             folder,
+			"snippet":            snippet,
+			"created_at":         createdAt,
+		}
+		if originalTo != nil {
+			t["original_to"] = *originalTo
+		}
+		results = append(results, t)
 	}
 	if results == nil {
 		results = []map[string]interface{}{}

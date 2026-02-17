@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -18,7 +16,6 @@ type OnboardingHandler struct {
 	DB        *pgxpool.Pool
 	ResendSvc *service.ResendService
 	EncSvc    *service.EncryptionService
-	SyncSvc   *service.SyncService
 	Bus       *event.Bus
 }
 
@@ -79,7 +76,21 @@ func (h *OnboardingHandler) Status(w http.ResponseWriter, r *http.Request) {
 	).Scan(&emailCount)
 
 	if emailCount == 0 {
-		writeJSON(w, http.StatusOK, map[string]string{"step": "sync"})
+		// Check if a sync is already in progress
+		var syncJobID string
+		err := h.DB.QueryRow(ctx,
+			`SELECT id FROM sync_jobs WHERE org_id = $1 AND status IN ('pending', 'running')
+			 ORDER BY created_at DESC LIMIT 1`, claims.OrgID,
+		).Scan(&syncJobID)
+		if err == nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"step":             "sync",
+				"sync_in_progress": true,
+				"sync_job_id":      syncJobID,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"step": "sync"})
 		return
 	}
 
@@ -260,124 +271,6 @@ func (h *OnboardingHandler) SetupWebhook(w http.ResponseWriter, r *http.Request)
 		"webhook_id":  webhookResp.ID,
 		"webhook_url": webhookURL,
 	})
-}
-
-func (h *OnboardingHandler) SyncEmails(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	ctx := r.Context()
-
-	// Build domain map: domain name -> domain ID
-	rows, err := h.DB.Query(ctx,
-		"SELECT id, domain FROM domains WHERE org_id = $1 AND hidden = false", claims.OrgID,
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to fetch domains")
-		return
-	}
-	defer rows.Close()
-
-	domains := make(map[string]string)
-	for rows.Next() {
-		var id, domain string
-		rows.Scan(&id, &domain)
-		domains[domain] = id
-	}
-
-	if h.SyncSvc == nil {
-		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc, h.Bus)
-	}
-
-	result, err := h.SyncSvc.SyncEmails(ctx, claims.OrgID, claims.UserID, domains)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "sync failed: "+err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, result)
-}
-
-// SyncEmailsStream handles GET /api/onboarding/sync-stream using Server-Sent Events.
-// The client connects with EventSource and receives real-time progress as emails are imported.
-func (h *OnboardingHandler) SyncEmailsStream(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	ctx := r.Context()
-
-	// Build domain map
-	rows, err := h.DB.Query(ctx,
-		"SELECT id, domain FROM domains WHERE org_id = $1 AND hidden = false", claims.OrgID,
-	)
-	if err != nil {
-		fmt.Fprintf(w, "event: error\ndata: {\"error\":\"failed to fetch domains\"}\n\n")
-		flusher.Flush()
-		return
-	}
-	defer rows.Close()
-
-	domains := make(map[string]string)
-	for rows.Next() {
-		var id, domain string
-		rows.Scan(&id, &domain)
-		domains[domain] = id
-	}
-
-	if h.SyncSvc == nil {
-		h.SyncSvc = service.NewSyncService(h.DB, h.ResendSvc, h.Bus)
-	}
-
-	// Progress channel — sync service writes, we read and flush SSE events
-	progress := make(chan service.SyncProgress, 10)
-
-	// Sync runs on a background context — not tied to the HTTP request.
-	go func() {
-		bgCtx := context.Background()
-		_, err := h.SyncSvc.SyncEmailsWithProgress(bgCtx, claims.OrgID, claims.UserID, domains, progress)
-		if err != nil {
-			slog.Error("onboarding sync: background sync failed", "error", err)
-		}
-		close(progress)
-	}()
-
-	// Stream progress to the client. If client disconnects,
-	// drain the channel so the sync goroutine doesn't block.
-	clientGone := ctx.Done()
-	for p := range progress {
-		select {
-		case <-clientGone:
-			for range progress {
-			}
-			slog.Info("onboarding sync: client disconnected, sync continues in background")
-			return
-		default:
-			data, _ := json.Marshal(p)
-			if p.Phase == "done" {
-				fmt.Fprintf(w, "event: done\ndata: %s\n\n", data)
-			} else {
-				fmt.Fprintf(w, "event: progress\ndata: %s\n\n", data)
-			}
-			flusher.Flush()
-		}
-	}
 }
 
 func (h *OnboardingHandler) GetAddresses(w http.ResponseWriter, r *http.Request) {

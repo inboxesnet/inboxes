@@ -84,6 +84,13 @@ type SyncResult struct {
 	AddressCount  int `json:"address_count"`
 }
 
+// SyncJobConfig allows resuming a sync from saved cursor positions.
+type SyncJobConfig struct {
+	JobID           string // sync_jobs row ID — when set, progress is persisted to Postgres
+	SentCursor      string // resume sent pagination from this cursor
+	ReceivedCursor  string // resume received pagination from this cursor
+}
+
 // SyncProgress is sent over the progress channel during streaming sync.
 type SyncProgress struct {
 	Phase    string `json:"phase"`    // "fetching", "importing", "addresses", "done"
@@ -100,17 +107,21 @@ type SyncProgress struct {
 
 // SyncEmails imports emails without progress reporting (legacy blocking endpoint).
 func (s *SyncService) SyncEmails(ctx context.Context, orgID, adminUserID string, domains map[string]string) (*SyncResult, error) {
-	return s.syncEmailsInternal(ctx, orgID, adminUserID, domains, nil)
+	return s.syncEmailsInternal(ctx, orgID, adminUserID, domains, nil, SyncJobConfig{})
 }
 
 // SyncEmailsWithProgress imports emails and sends progress updates to the channel.
-// The caller should close the channel when done reading, but SyncEmailsWithProgress
-// will send a final "done" event and stop writing.
 func (s *SyncService) SyncEmailsWithProgress(ctx context.Context, orgID, adminUserID string, domains map[string]string, progress chan<- SyncProgress) (*SyncResult, error) {
-	return s.syncEmailsInternal(ctx, orgID, adminUserID, domains, progress)
+	return s.syncEmailsInternal(ctx, orgID, adminUserID, domains, progress, SyncJobConfig{})
 }
 
-func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID string, domains map[string]string, progress chan<- SyncProgress) (*SyncResult, error) {
+// SyncEmailsWithJob imports emails, persists progress to the sync_jobs table,
+// and supports resuming from saved cursor positions.
+func (s *SyncService) SyncEmailsWithJob(ctx context.Context, orgID, adminUserID string, domains map[string]string, cfg SyncJobConfig, progress chan<- SyncProgress) (*SyncResult, error) {
+	return s.syncEmailsInternal(ctx, orgID, adminUserID, domains, progress, cfg)
+}
+
+func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID string, domains map[string]string, progress chan<- SyncProgress, cfg SyncJobConfig) (*SyncResult, error) {
 	result := &SyncResult{}
 
 	emit := func(p SyncProgress) {
@@ -122,12 +133,28 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		}
 	}
 
+	// updateJob persists progress to the sync_jobs row when a JobID is set.
+	updateJob := func(phase string, imported, total int) {
+		if cfg.JobID == "" {
+			return
+		}
+		s.pool.Exec(ctx,
+			`UPDATE sync_jobs SET phase=$1, imported=$2, total=$3,
+			 sent_count=$4, received_count=$5, sent_cursor=$6, received_cursor=$7,
+			 heartbeat_at=now(), updated_at=now() WHERE id=$8`,
+			phase, imported, total,
+			result.SentCount, result.ReceivedCount, cfg.SentCursor, cfg.ReceivedCursor,
+			cfg.JobID,
+		)
+	}
+
 	// ── Phase 1: Scan — fetch all sent + received to know the total ──
 
 	emit(SyncProgress{Phase: "scanning", Message: "Scanning sent emails..."})
+	updateJob("scanning", 0, 0)
 
 	var allEmails []resendEmail
-	cursor := ""
+	cursor := cfg.SentCursor
 	for {
 		path := "/emails?limit=100"
 		if cursor != "" {
@@ -150,13 +177,14 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			break
 		}
 		cursor = page.Data[len(page.Data)-1].ID
+		cfg.SentCursor = cursor
 		time.Sleep(600 * time.Millisecond)
 	}
 
 	emit(SyncProgress{Phase: "scanning", Message: fmt.Sprintf("Found %d sent. Scanning received emails...", len(allEmails))})
 
 	var allReceived []resendReceivedEmail
-	cursor = ""
+	cursor = cfg.ReceivedCursor
 	for {
 		path := "/emails/receiving?limit=100"
 		if cursor != "" {
@@ -181,6 +209,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			break
 		}
 		cursor = page.Data[len(page.Data)-1].ID
+		cfg.ReceivedCursor = cursor
 		time.Sleep(600 * time.Millisecond)
 	}
 
@@ -192,6 +221,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 
 	emit(SyncProgress{Phase: "importing", Imported: 0, Total: total,
 		Message: fmt.Sprintf("Importing %d emails (%d sent + %d received)", total, len(allEmails), len(allReceived))})
+	updateJob("importing", 0, total)
 
 	// Import sent emails
 	for _, email := range allEmails {
@@ -250,10 +280,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		}
 		time.Sleep(600 * time.Millisecond)
 
-		snippet := email.Text
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
-		}
+		snippet := truncateRunes(email.Text, 200)
 
 		threadID, err := s.findOrCreateThread(ctx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, "", "outbound")
 		if err != nil {
@@ -286,6 +313,9 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		imported++
 		emit(SyncProgress{Phase: "importing", Imported: imported, Total: total,
 			Message: fmt.Sprintf("Importing %d of %d emails", imported, total)})
+		if imported%20 == 0 {
+			updateJob("importing", imported, total)
+		}
 	}
 
 	// Import received emails
@@ -356,10 +386,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		}
 		refsJSON, _ := json.Marshal(referencesHeader)
 
-		snippet := text
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
-		}
+		snippet := truncateRunes(text, 200)
 
 		threadID, err := s.findOrCreateThread(ctx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, inReplyTo, "inbound")
 		if err != nil {
@@ -399,10 +426,14 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		imported++
 		emit(SyncProgress{Phase: "importing", Imported: imported, Total: total,
 			Message: fmt.Sprintf("Importing %d of %d emails", imported, total)})
+		if imported%20 == 0 {
+			updateJob("importing", imported, total)
+		}
 	}
 
 	// Phase: addresses
 	emit(SyncProgress{Phase: "addresses", Message: "Discovering addresses..."})
+	updateJob("addresses", imported, total)
 
 	for domainID, addresses := range discoveredAddresses {
 		for addr, count := range addresses {
@@ -436,6 +467,17 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		ThreadCount:   result.ThreadCount,
 		AddressCount:  result.AddressCount,
 	})
+
+	// Persist final counts to the job row
+	if cfg.JobID != "" {
+		s.pool.Exec(ctx,
+			`UPDATE sync_jobs SET phase='done', imported=$1, total=$2,
+			 sent_count=$3, received_count=$4, thread_count=$5, address_count=$6,
+			 heartbeat_at=now(), updated_at=now() WHERE id=$7`,
+			imported, total, result.SentCount, result.ReceivedCount,
+			result.ThreadCount, result.AddressCount, cfg.JobID,
+		)
+	}
 
 	// Notify connected clients so the inbox updates without a manual refresh
 	if s.eventBus != nil && (result.SentCount > 0 || result.ReceivedCount > 0) {
@@ -549,6 +591,14 @@ func trackOwnAddresses(discovered map[string]map[string]int, addrs []string, dom
 			trackAddress(discovered, clean, did)
 		}
 	}
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return s
 }
 
 func cleanSubjectLine(subject string) string {

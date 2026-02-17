@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api, ApiError } from "@/lib/api";
+import { useSyncJob } from "@/hooks/use-sync-job";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,10 +18,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { useDomains } from "@/contexts/domain-context";
 import { cn } from "@/lib/utils";
-import type { User, Domain } from "@/lib/types";
-import { Check, Minus, RefreshCw, User as UserIcon, Globe } from "lucide-react";
+import type { User, Domain, BillingInfo } from "@/lib/types";
+import { Check, Minus, RefreshCw, User as UserIcon, Globe, CreditCard } from "lucide-react";
 
-type Tab = "profile" | "domains";
+type Tab = "profile" | "domains" | "billing";
 
 interface SettingsModalProps {
   open: boolean;
@@ -39,25 +40,24 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   const [savingPassword, setSavingPassword] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [syncing, setSyncing] = useState(false);
+  const {
+    progress: syncProgress,
+    result: syncResult,
+    error: syncError,
+    isRunning: syncing,
+    startSync,
+  } = useSyncJob();
 
   // Domain management state
   const [allDomains, setAllDomains] = useState<Domain[]>([]);
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
   const [savingDomains, setSavingDomains] = useState(false);
   const [refreshingDomains, setRefreshingDomains] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<{
-    phase: string;
-    imported: number;
-    total: number;
-    message: string;
-  } | null>(null);
-  const [syncResult, setSyncResult] = useState<{
-    sent_count: number;
-    received_count: number;
-    thread_count: number;
-    address_count: number;
-  } | null>(null);
+
+  // Billing state
+  const [billingEnabled, setBillingEnabled] = useState(false);
+  const [billingInfo, setBillingInfo] = useState<BillingInfo | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -66,14 +66,16 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
     setSuccess("");
     async function load() {
       try {
-        const [userData, domainData] = await Promise.all([
+        const [userData, domainData, settingsData] = await Promise.all([
           api.get<User>("/api/users/me"),
           api.get<Domain[]>("/api/domains/all"),
+          api.get<{ billing_enabled: boolean }>("/api/orgs/settings"),
         ]);
         setUser(userData);
         setName(userData.name);
         setAllDomains(domainData);
         setVisibleIds(new Set(domainData.filter((d) => !d.hidden).map((d) => d.id)));
+        setBillingEnabled(settingsData.billing_enabled);
       } catch {
         // handled
       } finally {
@@ -151,52 +153,47 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
   function handleSync() {
     setError("");
-    setSyncing(true);
-    setSyncProgress(null);
-    setSyncResult(null);
+    startSync();
+  }
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-    const source = new EventSource(`${API_URL}/api/orgs/sync-stream`, {
-      withCredentials: true,
-    });
+  async function loadBilling() {
+    setBillingLoading(true);
+    try {
+      const data = await api.get<BillingInfo>("/api/billing");
+      setBillingInfo(data);
+    } catch {
+      // handled
+    } finally {
+      setBillingLoading(false);
+    }
+  }
 
-    source.addEventListener("progress", (e) => {
-      const data = JSON.parse((e as MessageEvent).data);
-      setSyncProgress(data);
-    });
+  async function handleCheckout() {
+    setError("");
+    try {
+      const data = await api.post<{ url: string }>("/api/billing/checkout");
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to start checkout");
+    }
+  }
 
-    source.addEventListener("done", (e) => {
-      const data = JSON.parse((e as MessageEvent).data);
-      setSyncResult(data);
-      source.close();
-      setSyncing(false);
-      setSuccess("Sync completed");
-    });
-
-    source.addEventListener("error", (e) => {
-      try {
-        const data = JSON.parse((e as MessageEvent).data);
-        setError(data.error || "Sync failed");
-      } catch {
-        setError("Connection lost during sync");
-      }
-      source.close();
-      setSyncing(false);
-    });
-
-    source.onerror = () => {
-      if (source.readyState === EventSource.CLOSED) return;
-      source.close();
-      if (!syncResult) {
-        setError("Connection lost during sync");
-        setSyncing(false);
-      }
-    };
+  async function handleManageBilling() {
+    setError("");
+    try {
+      const data = await api.post<{ url: string }>("/api/billing/portal");
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to open billing portal");
+    }
   }
 
   const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: "profile", label: "Profile", icon: <UserIcon className="h-4 w-4" /> },
     { key: "domains", label: "Domains", icon: <Globe className="h-4 w-4" /> },
+    ...(billingEnabled
+      ? [{ key: "billing" as Tab, label: "Billing", icon: <CreditCard className="h-4 w-4" /> }]
+      : []),
   ];
 
   return (
@@ -216,6 +213,9 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   setActiveTab(tab.key);
                   setError("");
                   setSuccess("");
+                  if (tab.key === "billing" && !billingInfo && !billingLoading) {
+                    loadBilling();
+                  }
                 }}
                 className={cn(
                   "flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-sm transition-colors",
@@ -327,10 +327,20 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        {syncProgress && syncProgress.total > 0 && (
+                        {syncError && (
+                          <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+                            {syncError}
+                          </div>
+                        )}
+                        {syncProgress && (syncProgress.phase === "scanning" || syncProgress.phase === "pending") && (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Spinner /> {syncProgress.message}
+                          </div>
+                        )}
+                        {syncProgress && syncProgress.phase === "importing" && syncProgress.total > 0 && (
                           <div className="space-y-2">
                             <div className="flex justify-between text-sm text-muted-foreground">
-                              <span>{syncProgress.phase === "done" ? "Complete" : "Importing..."}</span>
+                              <span>Importing...</span>
                               <span>{syncProgress.imported} / {syncProgress.total}</span>
                             </div>
                             <div className="h-2 rounded-full bg-muted overflow-hidden">
@@ -339,11 +349,6 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                                 style={{ width: `${Math.round((syncProgress.imported / syncProgress.total) * 100)}%` }}
                               />
                             </div>
-                          </div>
-                        )}
-                        {syncProgress && syncProgress.phase === "fetching" && (
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Spinner /> Fetching emails from Resend...
                           </div>
                         )}
                         {syncResult && (
@@ -365,6 +370,71 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                         <Button onClick={handleSync} disabled={syncing}>
                           {syncing ? <><Spinner className="mr-2" /> Syncing...</> : "Sync emails"}
                         </Button>
+                      </CardFooter>
+                    </Card>
+                  </div>
+                )}
+
+                {activeTab === "billing" && billingEnabled && (
+                  <div className="space-y-6">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Subscription</CardTitle>
+                        <CardDescription>
+                          Manage your subscription and billing
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {billingLoading ? (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Spinner /> Loading billing info...
+                          </div>
+                        ) : billingInfo ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">Plan:</span>
+                              <Badge variant={billingInfo.plan === "pro" ? "default" : "secondary"}>
+                                {billingInfo.plan === "pro" ? "Pro" : billingInfo.plan === "cancelled" ? "Cancelled" : "Free"}
+                              </Badge>
+                            </div>
+                            {billingInfo.subscription && (
+                              <>
+                                {billingInfo.subscription.cancel_at_period_end && (
+                                  <p className="text-sm text-muted-foreground">
+                                    Your subscription will end on{" "}
+                                    {new Date(billingInfo.subscription.current_period_end).toLocaleDateString()}
+                                  </p>
+                                )}
+                                {!billingInfo.subscription.cancel_at_period_end && billingInfo.plan === "pro" && (
+                                  <p className="text-sm text-muted-foreground">
+                                    Next billing date:{" "}
+                                    {new Date(billingInfo.subscription.current_period_end).toLocaleDateString()}
+                                  </p>
+                                )}
+                              </>
+                            )}
+                            {billingInfo.plan === "cancelled" && billingInfo.plan_expires_at && (
+                              <p className="text-sm text-muted-foreground">
+                                Access until: {new Date(billingInfo.plan_expires_at).toLocaleDateString()}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            Unable to load billing information.
+                          </p>
+                        )}
+                      </CardContent>
+                      <CardFooter>
+                        {billingInfo?.plan === "pro" || (billingInfo?.plan === "cancelled" && billingInfo?.subscription) ? (
+                          <Button onClick={handleManageBilling}>
+                            Manage subscription
+                          </Button>
+                        ) : (
+                          <Button onClick={handleCheckout} disabled={user?.role !== "admin"}>
+                            Upgrade to Pro
+                          </Button>
+                        )}
                       </CardFooter>
                     </Card>
                   </div>

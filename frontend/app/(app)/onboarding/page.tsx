@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useDomains } from "@/contexts/domain-context";
 import { api, ApiError } from "@/lib/api";
+import { useSyncJob } from "@/hooks/use-sync-job";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -25,7 +26,39 @@ import {
   Download,
   Users,
   ArrowRight,
+  Star,
+  Archive,
+  Search,
+  Mail,
 } from "lucide-react";
+
+const IMPORT_TIPS = [
+  {
+    icon: <Star className="h-5 w-5 text-yellow-500" />,
+    title: "Star important threads",
+    description: "Click the star icon on any thread to keep it at the top of your mind.",
+  },
+  {
+    icon: <Archive className="h-5 w-5 text-blue-500" />,
+    title: "Archive to stay organized",
+    description: "Done with a conversation? Archive it to keep your inbox clean without losing it.",
+  },
+  {
+    icon: <Search className="h-5 w-5 text-green-500" />,
+    title: "Search across everything",
+    description: "Use the search bar to find any email by subject, sender, or content.",
+  },
+  {
+    icon: <Mail className="h-5 w-5 text-purple-500" />,
+    title: "Compose from any view",
+    description: "Hit the compose button to start a new email from anywhere in the app.",
+  },
+  {
+    icon: <Users className="h-5 w-5 text-orange-500" />,
+    title: "Manage your team",
+    description: "Invite team members and assign aliases so everyone can send from shared addresses.",
+  },
+];
 
 type Step = "connect" | "domains" | "sync" | "addresses";
 
@@ -51,24 +84,21 @@ export default function OnboardingPage() {
   >({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<{
-    phase: string;
-    imported: number;
-    total: number;
-    message: string;
-  } | null>(null);
-  const [syncResult, setSyncResult] = useState<{
-    sent_count: number;
-    received_count: number;
-    thread_count: number;
-    address_count: number;
-  } | null>(null);
+  const {
+    progress: syncProgress,
+    result: syncResult,
+    error: syncError,
+    isRunning: syncRunning,
+    isComplete: syncComplete,
+    startSync,
+    resumeJob,
+  } = useSyncJob();
 
   // Resume onboarding at the right step based on server state
   useEffect(() => {
     async function checkStatus() {
       try {
-        const res = await api.get<{ step: Step }>("/api/onboarding/status");
+        const res = await api.get<{ step: Step; sync_in_progress?: boolean; sync_job_id?: string }>("/api/onboarding/status");
         setStep(res.step);
 
         // If resuming at domains step, load domains from DB
@@ -76,6 +106,11 @@ export default function OnboardingPage() {
           const domainData = await api.get<Domain[]>("/api/domains/all");
           setDomains(domainData);
           setSelectedDomainIds(new Set(domainData.filter((d) => !d.hidden).map((d) => d.id)));
+        }
+
+        // If a sync is already in progress, resume polling
+        if (res.step === "sync" && res.sync_in_progress && res.sync_job_id) {
+          resumeJob(res.sync_job_id);
         }
 
         // If resuming at addresses step, load addresses
@@ -93,17 +128,25 @@ export default function OnboardingPage() {
       }
     }
     checkStatus();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const syncTriggeredRef = useRef(false);
-
-  // Auto-trigger sync when entering the sync step
+  // Auto-trigger sync when entering the sync step (only if not already running)
   useEffect(() => {
-    if (step === "sync" && !syncTriggeredRef.current && !loading && !syncResult) {
-      syncTriggeredRef.current = true;
-      handleSync();
+    if (step === "sync" && !syncRunning && !syncComplete && !syncResult) {
+      startSync();
     }
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [tipIndex, setTipIndex] = useState(0);
+
+  // Auto-rotate tips during sync
+  useEffect(() => {
+    if (step !== "sync" || syncComplete) return;
+    const interval = setInterval(() => {
+      setTipIndex((prev) => (prev + 1) % IMPORT_TIPS.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [step, syncComplete]);
 
   const currentIdx = step ? STEPS.findIndex((s) => s.key === step) : -1;
 
@@ -135,6 +178,8 @@ export default function OnboardingPage() {
       });
       // Set up webhook in background — don't block the user
       api.post("/api/onboarding/webhook").catch(() => {});
+      // Auto-trigger sync before transitioning to the sync step
+      startSync();
       setStep("sync");
     } catch (err) {
       setError(
@@ -145,66 +190,22 @@ export default function OnboardingPage() {
     }
   }
 
-  function handleSync() {
-    setError("");
-    setLoading(true);
-    setSyncProgress(null);
-    setSyncResult(null);
-
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-    const source = new EventSource(`${API_URL}/api/onboarding/sync-stream`, {
-      withCredentials: true,
-    });
-
-    source.addEventListener("progress", (e) => {
-      const data = JSON.parse((e as MessageEvent).data);
-      setSyncProgress(data);
-    });
-
-    source.addEventListener("done", async (e) => {
-      const data = JSON.parse((e as MessageEvent).data);
-      setSyncResult(data);
-      source.close();
-      setLoading(false);
-
-      // Fetch discovered addresses for the next step
-      try {
-        const rows = await api.get<DiscoveredAddress[]>(
-          "/api/onboarding/addresses"
-        );
-        setDiscoveredAddresses(rows || []);
-        const defaults: Record<string, "alias"> = {};
-        (rows || []).forEach((a) => {
-          defaults[a.id] = "alias";
-        });
-        setAddressAssignments(defaults);
-      } catch {
-        // addresses will be empty, user can set them up later
-      }
-    });
-
-    source.addEventListener("error", (e) => {
-      // SSE error event — could be a stream error or connection drop
-      try {
-        const data = JSON.parse((e as MessageEvent).data);
-        setError(data.error || "Sync failed");
-      } catch {
-        setError("Connection lost during sync");
-      }
-      source.close();
-      setLoading(false);
-    });
-
-    source.onerror = () => {
-      // Built-in EventSource error (connection failure)
-      if (source.readyState === EventSource.CLOSED) return;
-      source.close();
-      if (!syncResult) {
-        setError("Connection lost during sync");
-        setLoading(false);
-      }
-    };
-  }
+  // When sync completes, fetch addresses for the next step
+  useEffect(() => {
+    if (syncComplete && syncResult) {
+      api
+        .get<DiscoveredAddress[]>("/api/onboarding/addresses")
+        .then((rows) => {
+          setDiscoveredAddresses(rows || []);
+          const defaults: Record<string, "alias"> = {};
+          (rows || []).forEach((a) => {
+            defaults[a.id] = "alias";
+          });
+          setAddressAssignments(defaults);
+        })
+        .catch(() => {});
+    }
+  }, [syncComplete, syncResult]);
 
   async function handleComplete() {
     setError("");
@@ -423,14 +424,14 @@ export default function OnboardingPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {error && (
+              {(error || syncError) && (
                 <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
-                  {error}
+                  {error || syncError}
                 </div>
               )}
 
-              {/* Scanning phase (counting emails before import) */}
-              {syncProgress && syncProgress.phase === "scanning" && (
+              {/* Scanning / pending phase */}
+              {syncProgress && (syncProgress.phase === "scanning" || syncProgress.phase === "pending") && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Spinner />
                   {syncProgress.message}
@@ -462,6 +463,35 @@ export default function OnboardingPage() {
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Spinner />
                   Discovering addresses...
+                </div>
+              )}
+
+              {/* Tips slideshow during import */}
+              {!syncResult && (
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <div className="flex items-start gap-3 min-h-[56px]">
+                    <div className="shrink-0 mt-0.5">
+                      {IMPORT_TIPS[tipIndex].icon}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">{IMPORT_TIPS[tipIndex].title}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {IMPORT_TIPS[tipIndex].description}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex justify-center gap-1 mt-3">
+                    {IMPORT_TIPS.map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setTipIndex(i)}
+                        className={`h-1.5 rounded-full transition-all ${
+                          i === tipIndex ? "w-4 bg-primary" : "w-1.5 bg-muted-foreground/30"
+                        }`}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
 

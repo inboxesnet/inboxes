@@ -31,13 +31,20 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      await api.post("/api/auth/signup", {
-        org_name: orgName,
-        name,
-        email,
-        password,
-      });
-      router.push("/onboarding");
+      const res = await api.post<{ requires_verification?: boolean; email?: string }>(
+        "/api/auth/signup",
+        {
+          org_name: orgName,
+          name,
+          email,
+          password,
+        }
+      );
+      if (res.requires_verification) {
+        router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+      } else {
+        router.push("/onboarding");
+      }
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);

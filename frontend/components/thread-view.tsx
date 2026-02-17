@@ -9,6 +9,7 @@ import { useThread, useStarThread, useThreadAction } from "@/hooks/use-threads";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
 import { TipTapEditor } from "@/components/tiptap-editor";
+import { RecipientInput } from "@/components/recipient-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -26,6 +27,7 @@ import {
   Send,
   X,
 } from "lucide-react";
+import { ContactCard } from "@/components/contact-card";
 import type { Thread, Email } from "@/lib/types";
 
 interface ThreadViewProps {
@@ -48,6 +50,7 @@ export function ThreadView({
   const markedReadRef = useRef<string | null>(null);
   const [showCollapsed, setShowCollapsed] = useState(false);
   const [replyMode, setReplyMode] = useState<ReplyMode>(null);
+  const [replyToEmail, setReplyToEmail] = useState<Email | null>(null);
 
   const starMutation = useStarThread();
   const actionMutation = useThreadAction();
@@ -79,6 +82,7 @@ export function ThreadView({
     markedReadRef.current = null;
     setShowCollapsed(false);
     setReplyMode(null);
+    setReplyToEmail(null);
   }, [threadId]);
 
   // Scroll to bottom when reply opens or thread loads
@@ -191,25 +195,42 @@ export function ThreadView({
         {/* Show older emails if expanded */}
         {showCollapsed &&
           olderEmails.map((email) => (
-            <EmailMessage key={email.id} email={email} defaultExpanded={false} />
+            <EmailMessage
+              key={email.id}
+              email={email}
+              defaultExpanded={false}
+              onReply={(em, mode) => {
+                setReplyToEmail(em);
+                setReplyMode(mode);
+              }}
+            />
           ))}
 
         {/* Most recent email — always expanded */}
         {lastEmail && (
-          <EmailMessage key={lastEmail.id} email={lastEmail} defaultExpanded />
+          <EmailMessage
+            key={lastEmail.id}
+            email={lastEmail}
+            defaultExpanded
+            onReply={(em, mode) => {
+              setReplyToEmail(em);
+              setReplyMode(mode);
+            }}
+          />
         )}
 
         {/* Inline reply editor */}
         {replyMode && lastEmail && (
           <InlineReplyEditor
             thread={thread}
-            lastEmail={lastEmail}
+            lastEmail={replyToEmail || lastEmail}
             mode={replyMode}
             domainId={domainId}
             domainName={activeDomain?.domain || ""}
-            onClose={() => setReplyMode(null)}
+            onClose={() => { setReplyMode(null); setReplyToEmail(null); }}
             onSent={() => {
               setReplyMode(null);
+              setReplyToEmail(null);
               qc.invalidateQueries({ queryKey: queryKeys.threads.detail(threadId) });
               qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
             }}
@@ -225,7 +246,7 @@ export function ThreadView({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setReplyMode("reply")}
+            onClick={() => { setReplyToEmail(lastEmail); setReplyMode("reply"); }}
           >
             <Reply className="h-3.5 w-3.5 mr-1.5" />
             Reply
@@ -233,7 +254,7 @@ export function ThreadView({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setReplyMode("replyAll")}
+            onClick={() => { setReplyToEmail(lastEmail); setReplyMode("replyAll"); }}
           >
             <ReplyAll className="h-3.5 w-3.5 mr-1.5" />
             Reply All
@@ -241,7 +262,7 @@ export function ThreadView({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setReplyMode("forward")}
+            onClick={() => { setReplyToEmail(lastEmail); setReplyMode("forward"); }}
           >
             <Forward className="h-3.5 w-3.5 mr-1.5" />
             Forward
@@ -278,8 +299,8 @@ function InlineReplyEditor({
   const quotedHtml = getQuotedHtml(lastEmail, mode);
 
   const [fromAddress, setFromAddress] = useState(defaultFrom);
-  const [to, setTo] = useState(defaultTo);
-  const [cc, setCc] = useState(defaultCc);
+  const [to, setTo] = useState<string[]>(defaultTo);
+  const [cc, setCc] = useState<string[]>(defaultCc);
   const [subject, setSubject] = useState(defaultSubject);
   const [bodyHtml, setBodyHtml] = useState("");
   const [bodyPlain, setBodyPlain] = useState("");
@@ -291,8 +312,7 @@ function InlineReplyEditor({
     e.preventDefault();
     setError("");
 
-    const toAddresses = to.split(",").map((s) => s.trim()).filter(Boolean);
-    if (toAddresses.length === 0) {
+    if (to.length === 0) {
       setError("To is required");
       return;
     }
@@ -303,16 +323,24 @@ function InlineReplyEditor({
       const fullHtml = bodyHtml + quotedHtml;
       const fullPlain = bodyPlain;
 
-      await api.post("/api/emails/send", {
+      // Build threading headers from the email being replied to
+      const replyPayload: Record<string, unknown> = {
         from: fromAddress,
-        to: toAddresses,
-        cc: cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        to,
+        cc,
         subject,
         html: fullHtml,
         text: fullPlain,
         domain_id: domainId,
         reply_to_thread_id: thread.id,
-      });
+      };
+      if (lastEmail.message_id) {
+        replyPayload.in_reply_to = lastEmail.message_id;
+        // Build references chain: existing references + the message we're replying to
+        const existingRefs = lastEmail.references || [];
+        replyPayload.references = [...existingRefs, lastEmail.message_id];
+      }
+      await api.post("/api/emails/send", replyPayload);
       onSent();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send");
@@ -350,10 +378,10 @@ function InlineReplyEditor({
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">To</label>
-            <Input
+            <RecipientInput
               value={to}
-              onChange={(e) => setTo(e.target.value)}
-              className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1 bg-transparent"
+              onChange={setTo}
+              placeholder="recipient@example.com"
             />
             {!showCc && (
               <button
@@ -368,10 +396,10 @@ function InlineReplyEditor({
           {showCc && (
             <div className="flex items-center gap-2">
               <label className="text-xs text-muted-foreground w-10 text-right shrink-0">Cc</label>
-              <Input
+              <RecipientInput
                 value={cc}
-                onChange={(e) => setCc(e.target.value)}
-                className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1 bg-transparent"
+                onChange={setCc}
+                placeholder="cc@example.com"
               />
             </div>
           )}
@@ -428,7 +456,15 @@ function InlineReplyEditor({
 
 // ─── Email Message ─────────────────────────────────────────────────────
 
-function EmailMessage({ email, defaultExpanded = true }: { email: Email; defaultExpanded?: boolean }) {
+function EmailMessage({
+  email,
+  defaultExpanded = true,
+  onReply,
+}: {
+  email: Email;
+  defaultExpanded?: boolean;
+  onReply?: (email: Email, mode: "reply" | "replyAll") => void;
+}) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   const sanitizedHtml = email.body_html
@@ -456,9 +492,11 @@ function EmailMessage({ email, defaultExpanded = true }: { email: Email; default
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium truncate">
-              {email.from_address}
-            </span>
+            <ContactCard email={email.from_address}>
+              <span className="text-sm font-medium truncate">
+                {email.from_address}
+              </span>
+            </ContactCard>
             <span className="text-xs text-muted-foreground shrink-0">
               {formatRelativeTime(email.created_at)}
             </span>
@@ -506,6 +544,28 @@ function EmailMessage({ email, defaultExpanded = true }: { email: Email; default
               ))}
             </div>
           )}
+          {onReply && (
+            <div className="mt-3 flex items-center gap-2 pt-2 border-t">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onReply(email, "reply")}
+                className="h-7 text-xs"
+              >
+                <Reply className="h-3 w-3 mr-1" />
+                Reply
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onReply(email, "replyAll")}
+                className="h-7 text-xs"
+              >
+                <ReplyAll className="h-3 w-3 mr-1" />
+                Reply All
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -536,9 +596,9 @@ function getReplyRecipients(
   lastEmail: Email,
   mode: "reply" | "replyAll" | "forward",
   myAddress: string
-): { defaultTo: string; defaultCc: string } {
+): { defaultTo: string[]; defaultCc: string[] } {
   if (mode === "forward") {
-    return { defaultTo: "", defaultCc: "" };
+    return { defaultTo: [], defaultCc: [] };
   }
 
   const toAddresses = parseAddresses(lastEmail.to_addresses);
@@ -546,23 +606,21 @@ function getReplyRecipients(
 
   if (lastEmail.direction === "outbound") {
     // Replying to our own sent email — keep same recipients
-    const defaultTo = toAddresses.join(", ");
     if (mode === "replyAll") {
       const allCc = ccAddresses.filter((a) => a !== myAddress);
-      return { defaultTo, defaultCc: allCc.join(", ") };
+      return { defaultTo: toAddresses, defaultCc: allCc };
     }
-    return { defaultTo, defaultCc: "" };
+    return { defaultTo: toAddresses, defaultCc: [] };
   }
 
   // Inbound — reply to sender
-  const defaultTo = lastEmail.from_address;
   if (mode === "replyAll") {
     const allRecipients = [...toAddresses, ...ccAddresses].filter(
       (a) => a !== myAddress && a !== lastEmail.from_address
     );
-    return { defaultTo, defaultCc: allRecipients.join(", ") };
+    return { defaultTo: [lastEmail.from_address], defaultCc: allRecipients };
   }
-  return { defaultTo, defaultCc: "" };
+  return { defaultTo: [lastEmail.from_address], defaultCc: [] };
 }
 
 function getReplySubject(subject: string, mode: "reply" | "replyAll" | "forward"): string {

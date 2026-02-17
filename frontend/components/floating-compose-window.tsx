@@ -5,6 +5,7 @@ import { useEmailWindow } from "@/contexts/email-window-context";
 import { useDomains } from "@/contexts/domain-context";
 import { api } from "@/lib/api";
 import { TipTapEditor } from "@/components/tiptap-editor";
+import { RecipientInput } from "@/components/recipient-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -22,9 +23,9 @@ export function FloatingComposeWindow() {
   const { activeDomain } = useDomains();
 
   const [fromAddress, setFromAddress] = useState("");
-  const [to, setTo] = useState("");
-  const [cc, setCc] = useState("");
-  const [bcc, setBcc] = useState("");
+  const [to, setTo] = useState<string[]>([]);
+  const [cc, setCc] = useState<string[]>([]);
+  const [bcc, setBcc] = useState<string[]>([]);
   const [subject, setSubject] = useState("");
   const [bodyHtml, setBodyHtml] = useState("");
   const [bodyPlain, setBodyPlain] = useState("");
@@ -40,9 +41,9 @@ export function FloatingComposeWindow() {
   useEffect(() => {
     if (composeState === "open" && composeData) {
       setFromAddress(composeData.fromAddress || "");
-      setTo((composeData.toAddresses || []).join(", "));
-      setCc((composeData.ccAddresses || []).join(", "));
-      setBcc((composeData.bccAddresses || []).join(", "));
+      setTo(composeData.toAddresses || []);
+      setCc(composeData.ccAddresses || []);
+      setBcc(composeData.bccAddresses || []);
       setSubject(composeData.subject || "");
       setBodyHtml(composeData.bodyHtml || "");
       setBodyPlain(composeData.bodyPlain || "");
@@ -61,9 +62,9 @@ export function FloatingComposeWindow() {
   useEffect(() => {
     if (composeState === "closed") {
       setFromAddress("");
-      setTo("");
-      setCc("");
-      setBcc("");
+      setTo([]);
+      setCc([]);
+      setBcc([]);
       setSubject("");
       setBodyHtml("");
       setBodyPlain("");
@@ -78,12 +79,9 @@ export function FloatingComposeWindow() {
 
   const saveDraft = useCallback(async () => {
     if (!activeDomain) return;
-    const toAddresses = to.split(",").map((s) => s.trim()).filter(Boolean);
-    const ccAddresses = cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : [];
-    const bccAddresses = bcc ? bcc.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
     // Don't save empty drafts
-    if (!subject && !bodyPlain && toAddresses.length === 0) return;
+    if (!subject && !bodyPlain && to.length === 0) return;
 
     setSaveStatus("saving");
     try {
@@ -91,9 +89,9 @@ export function FloatingComposeWindow() {
         await api.patch(`/api/drafts/${draftId}`, {
           subject,
           from_address: fromAddress || `me@${activeDomain.domain}`,
-          to_addresses: toAddresses,
-          cc_addresses: ccAddresses,
-          bcc_addresses: bccAddresses,
+          to_addresses: to,
+          cc_addresses: cc,
+          bcc_addresses: bcc,
           body_html: bodyHtml,
           body_plain: bodyPlain,
         });
@@ -103,9 +101,9 @@ export function FloatingComposeWindow() {
           kind: "compose",
           subject,
           from_address: fromAddress || `me@${activeDomain.domain}`,
-          to_addresses: toAddresses,
-          cc_addresses: ccAddresses,
-          bcc_addresses: bccAddresses,
+          to_addresses: to,
+          cc_addresses: cc,
+          bcc_addresses: bcc,
           body_html: bodyHtml,
           body_plain: bodyPlain,
         });
@@ -141,8 +139,7 @@ export function FloatingComposeWindow() {
     e.preventDefault();
     setError("");
 
-    const toAddresses = to.split(",").map((s) => s.trim()).filter(Boolean);
-    if (toAddresses.length === 0 || !subject) {
+    if (to.length === 0 || !subject) {
       setError("To and Subject are required");
       return;
     }
@@ -156,9 +153,9 @@ export function FloatingComposeWindow() {
         await api.patch(`/api/drafts/${draftId}`, {
           subject,
           from_address: fromAddress || `me@${activeDomain?.domain}`,
-          to_addresses: toAddresses,
-          cc_addresses: cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : [],
-          bcc_addresses: bcc ? bcc.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          to_addresses: to,
+          cc_addresses: cc,
+          bcc_addresses: bcc,
           body_html: bodyHtml,
           body_plain: bodyPlain,
         });
@@ -166,9 +163,9 @@ export function FloatingComposeWindow() {
       } else {
         await api.post("/api/emails/send", {
           from: fromAddress || `me@${activeDomain?.domain}`,
-          to: toAddresses,
-          cc: cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : [],
-          bcc: bcc ? bcc.split(",").map((s) => s.trim()).filter(Boolean) : [],
+          to,
+          cc,
+          bcc,
           subject,
           html: bodyHtml,
           text: bodyPlain,
@@ -270,11 +267,10 @@ export function FloatingComposeWindow() {
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">To</label>
-            <Input
+            <RecipientInput
               value={to}
-              onChange={(e) => { setTo(e.target.value); scheduleSave(); }}
+              onChange={(v) => { setTo(v); scheduleSave(); }}
               placeholder="recipient@example.com"
-              className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
             />
             {!showCcBcc && (
               <button
@@ -290,20 +286,18 @@ export function FloatingComposeWindow() {
             <>
               <div className="flex items-center gap-2">
                 <label className="text-xs text-muted-foreground w-10 text-right shrink-0">Cc</label>
-                <Input
+                <RecipientInput
                   value={cc}
-                  onChange={(e) => { setCc(e.target.value); scheduleSave(); }}
+                  onChange={(v) => { setCc(v); scheduleSave(); }}
                   placeholder="cc@example.com"
-                  className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
                 />
               </div>
               <div className="flex items-center gap-2">
                 <label className="text-xs text-muted-foreground w-10 text-right shrink-0">Bcc</label>
-                <Input
+                <RecipientInput
                   value={bcc}
-                  onChange={(e) => { setBcc(e.target.value); scheduleSave(); }}
+                  onChange={(v) => { setBcc(v); scheduleSave(); }}
                   placeholder="bcc@example.com"
-                  className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
                 />
               </div>
             </>

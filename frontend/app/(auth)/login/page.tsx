@@ -40,6 +40,10 @@ export default function LoginPage() {
       }
     } catch (err) {
       if (err instanceof ApiError) {
+        if (err.message === "email_not_verified") {
+          router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+          return;
+        }
         setError(err.message);
       } else {
         setError("Something went wrong");

@@ -9,15 +9,26 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { api } from "@/lib/api";
 import type { WSMessage } from "@/lib/types";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8080";
+// In local dev, NEXT_PUBLIC_WS_URL points to backend (ws://localhost:8080).
+// In production behind Caddy, derive from current page origin.
+function getWsUrl() {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (typeof window !== "undefined") {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}`;
+  }
+  return "ws://localhost:8080";
+}
 
 type EventHandler = (msg: WSMessage) => void;
 
 interface NotificationContextType {
   connected: boolean;
   subscribe: (event: string, handler: EventHandler) => () => void;
+  setLastEventId: (id: number) => void;
 }
 
 const NotificationContext = createContext<NotificationContextType | null>(null);
@@ -27,32 +38,57 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const handlersRef = useRef<Map<string, Set<EventHandler>>>(new Map());
   const [connected, setConnected] = useState(false);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastEventIdRef = useRef<number>(0);
+  const hadConnectionRef = useRef(false);
+
+  const dispatch = useCallback((msg: WSMessage) => {
+    // Dispatch to event-specific handlers
+    const handlers = handlersRef.current.get(msg.event);
+    if (handlers) {
+      handlers.forEach((handler) => handler(msg));
+    }
+    // Dispatch to wildcard handlers
+    const wildcardHandlers = handlersRef.current.get("*");
+    if (wildcardHandlers) {
+      wildcardHandlers.forEach((handler) => handler(msg));
+    }
+  }, []);
+
+  // Fetch missed events after reconnection
+  const catchupEvents = useCallback(async () => {
+    if (lastEventIdRef.current === 0) return;
+    try {
+      const data = await api.get<{ events: WSMessage[] }>(
+        `/api/events?since=${lastEventIdRef.current}&limit=100`
+      );
+      for (const evt of data.events) {
+        dispatch(evt);
+      }
+    } catch {
+      // Catchup failed — handlers will refetch on next interaction
+    }
+  }, [dispatch]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const ws = new WebSocket(`${WS_URL}/api/ws`);
+    const isReconnect = hadConnectionRef.current;
+    const ws = new WebSocket(`${getWsUrl()}/api/ws`);
     wsRef.current = ws;
 
     ws.onopen = () => {
       setConnected(true);
+      hadConnectionRef.current = true;
+      // Catch up on missed events if this is a reconnection
+      if (isReconnect) {
+        catchupEvents();
+      }
     };
 
     ws.onmessage = (wsEvent) => {
       try {
         const msg: WSMessage = JSON.parse(wsEvent.data);
-
-        // Dispatch to event-specific handlers
-        const handlers = handlersRef.current.get(msg.event);
-        if (handlers) {
-          handlers.forEach((handler) => handler(msg));
-        }
-
-        // Dispatch to wildcard handlers
-        const wildcardHandlers = handlersRef.current.get("*");
-        if (wildcardHandlers) {
-          wildcardHandlers.forEach((handler) => handler(msg));
-        }
+        dispatch(msg);
       } catch {
         // ignore malformed messages
       }
@@ -66,7 +102,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     ws.onerror = () => {
       ws.close();
     };
-  }, []);
+  }, [dispatch, catchupEvents]);
 
   useEffect(() => {
     connect();
@@ -87,8 +123,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const setLastEventId = useCallback((id: number) => {
+    if (id > lastEventIdRef.current) {
+      lastEventIdRef.current = id;
+    }
+  }, []);
+
   return (
-    <NotificationContext.Provider value={{ connected, subscribe }}>
+    <NotificationContext.Provider value={{ connected, subscribe, setLastEventId }}>
       {children}
     </NotificationContext.Provider>
   );

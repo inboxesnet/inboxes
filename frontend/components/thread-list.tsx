@@ -17,6 +17,7 @@ interface ThreadListProps {
   onToggleSelectAll: () => void;
   onStar: (id: string) => void;
   onAction: (id: string, action: string) => void;
+  onThreadClick?: (threadId: string) => void;
 }
 
 function extractSender(emails: string[]): string {
@@ -49,6 +50,7 @@ function ThreadRow({
   onToggleSelect,
   onStar,
   onAction,
+  onThreadClick,
 }: {
   thread: Thread;
   index: number;
@@ -60,6 +62,7 @@ function ThreadRow({
   onToggleSelect: (id: string) => void;
   onStar: (id: string) => void;
   onAction: (id: string, action: string) => void;
+  onThreadClick?: (threadId: string) => void;
 }) {
   const router = useRouter();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -84,9 +87,11 @@ function ThreadRow({
       {...attributes}
       role="button"
       tabIndex={0}
-      onClick={() => router.push(`/d/${domainId}/${folder}/${thread.id}`)}
+      onClick={() => onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${folder}/${thread.id}`)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") router.push(`/d/${domainId}/${folder}/${thread.id}`);
+        if (e.key === "Enter") {
+          onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${folder}/${thread.id}`);
+        }
       }}
       className={cn(
         "group flex items-center gap-2 w-full text-left px-3 h-10 transition-colors cursor-pointer select-none",
@@ -226,6 +231,7 @@ export function ThreadList({
   onToggleSelectAll,
   onStar,
   onAction,
+  onThreadClick,
 }: ThreadListProps) {
   if (threads.length === 0) {
     return null;
@@ -246,6 +252,7 @@ export function ThreadList({
           onToggleSelect={onToggleSelect}
           onStar={onStar}
           onAction={onAction}
+          onThreadClick={onThreadClick}
         />
       ))}
     </div>

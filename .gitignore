@@ -5,6 +5,7 @@ frontend/node_modules/
 # Build outputs
 frontend/.next/
 backend/bin/
+backend/api
 
 # Environment
 .env

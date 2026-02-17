@@ -3,6 +3,8 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ type AuthHandler struct {
 	Secret    string
 	AppURL    string
 	ResendSvc *service.ResendService
+	StripeKey string
 }
 
 type signupRequest struct {
@@ -91,10 +94,16 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = strings.Split(req.Email, "@")[0]
 	}
+	// In hosted mode, new users need email verification
+	emailVerified := true
+	if h.StripeKey != "" {
+		emailVerified = false
+	}
+
 	err = tx.QueryRow(ctx,
-		`INSERT INTO users (org_id, email, name, password_hash, role, status)
-		 VALUES ($1, $2, $3, $4, 'admin', 'active') RETURNING id`,
-		orgID, req.Email, name, string(hash),
+		`INSERT INTO users (org_id, email, name, password_hash, role, status, email_verified)
+		 VALUES ($1, $2, $3, $4, 'admin', 'active', $5) RETURNING id`,
+		orgID, req.Email, name, string(hash), emailVerified,
 	).Scan(&userID)
 	if err != nil {
 		if strings.Contains(err.Error(), "unique") {
@@ -102,6 +111,39 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	// If hosted, generate verification code and send email
+	if h.StripeKey != "" {
+		code := generateVerificationCode()
+		expires := time.Now().Add(15 * time.Minute)
+		_, err = tx.Exec(ctx,
+			"UPDATE users SET verification_code = $1, verification_expires_at = $2 WHERE id = $3",
+			code, expires, userID,
+		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set verification code")
+			return
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to commit")
+			return
+		}
+
+		// Send verification email
+		h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+			"from":    "noreply@inboxes.app",
+			"to":      []string{req.Email},
+			"subject": "Verify your email",
+			"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),
+		})
+
+		writeJSON(w, http.StatusCreated, map[string]interface{}{
+			"requires_verification": true,
+			"email":                 req.Email,
+		})
 		return
 	}
 
@@ -142,10 +184,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var userID, orgID, name, role, passwordHash string
 	var status string
+	var emailVerified bool
 	err := h.DB.QueryRow(ctx,
-		`SELECT id, org_id, name, role, status, password_hash FROM users WHERE email = $1`,
+		`SELECT id, org_id, name, role, status, password_hash, email_verified FROM users WHERE email = $1`,
 		req.Email,
-	).Scan(&userID, &orgID, &name, &role, &status, &passwordHash)
+	).Scan(&userID, &orgID, &name, &role, &status, &passwordHash, &emailVerified)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -157,6 +200,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	// In hosted mode, require email verification
+	if h.StripeKey != "" && !emailVerified {
+		writeError(w, http.StatusForbidden, "email_not_verified")
 		return
 	}
 
@@ -312,6 +361,95 @@ func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
 			"role":   role,
 		},
 	})
+}
+
+func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+		Code  string `json:"code"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Email == "" || req.Code == "" {
+		writeError(w, http.StatusBadRequest, "email and code are required")
+		return
+	}
+
+	ctx := r.Context()
+	var userID, orgID, name, role string
+	err := h.DB.QueryRow(ctx,
+		`UPDATE users SET email_verified = true, verification_code = NULL, verification_expires_at = NULL
+		 WHERE email = $1 AND verification_code = $2 AND verification_expires_at > now()
+		 RETURNING id, org_id, name, role`,
+		req.Email, req.Code,
+	).Scan(&userID, &orgID, &name, &role)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or expired verification code")
+		return
+	}
+
+	token, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+	middleware.SetTokenCookie(w, token, h.AppURL)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"user": map[string]string{
+			"id":     userID,
+			"org_id": orgID,
+			"email":  req.Email,
+			"name":   name,
+			"role":   role,
+		},
+	})
+}
+
+func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	ctx := r.Context()
+	code := generateVerificationCode()
+	expires := time.Now().Add(15 * time.Minute)
+
+	tag, err := h.DB.Exec(ctx,
+		`UPDATE users SET verification_code = $1, verification_expires_at = $2
+		 WHERE email = $3 AND email_verified = false AND status = 'active'`,
+		code, expires, req.Email,
+	)
+	if err != nil || tag.RowsAffected() == 0 {
+		// Don't reveal whether user exists
+		writeJSON(w, http.StatusOK, map[string]string{"message": "if that email needs verification, a new code has been sent"})
+		return
+	}
+
+	h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+		"from":    "noreply@inboxes.app",
+		"to":      []string{req.Email},
+		"subject": "Verify your email",
+		"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "if that email needs verification, a new code has been sent"})
+}
+
+// generateVerificationCode returns a cryptographically random 6-digit code.
+func generateVerificationCode() string {
+	n, _ := rand.Int(rand.Reader, big.NewInt(1000000))
+	return fmt.Sprintf("%06d", n.Int64())
 }
 
 func (h *AuthHandler) ValidateClaim(w http.ResponseWriter, r *http.Request) {

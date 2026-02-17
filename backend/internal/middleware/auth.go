@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type contextKey string
@@ -100,4 +101,46 @@ func ClearTokenCookie(w http.ResponseWriter, appURL string) {
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// RequirePlan enforces an active subscription when Stripe is configured.
+// When stripeKey is empty (self-hosted), all requests pass through.
+func RequirePlan(stripeKey string, db *pgxpool.Pool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if stripeKey == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			claims := GetCurrentUser(r.Context())
+			if claims == nil {
+				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				return
+			}
+
+			var plan string
+			var planExpiresAt *time.Time
+			err := db.QueryRow(r.Context(),
+				"SELECT plan, plan_expires_at FROM orgs WHERE id = $1", claims.OrgID,
+			).Scan(&plan, &planExpiresAt)
+			if err != nil {
+				http.Error(w, `{"error":"subscription_required"}`, http.StatusPaymentRequired)
+				return
+			}
+
+			if plan == "pro" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if plan == "cancelled" && planExpiresAt != nil && planExpiresAt.After(time.Now()) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			w.Write([]byte(`{"error":"subscription_required"}`))
+		})
+	}
 }

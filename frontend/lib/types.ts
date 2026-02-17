@@ -75,6 +75,8 @@ export interface Email {
   body_plain: string;
   status: "received" | "sent" | "delivered" | "bounced" | "failed";
   attachments: Attachment[];
+  in_reply_to?: string;
+  references?: string[];
   delivered_via_alias: string;
   sent_as_alias: string;
   spam_score: number;
@@ -141,7 +143,35 @@ export interface Draft {
   updated_at: string;
 }
 
+export interface SyncJob {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  phase: string;
+  imported: number;
+  total: number;
+  sent_count: number;
+  received_count: number;
+  thread_count: number;
+  address_count: number;
+  error_message?: string;
+  already_active?: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface BillingInfo {
+  plan: "free" | "pro" | "cancelled";
+  plan_expires_at: string | null;
+  billing_enabled: boolean;
+  subscription?: {
+    status: string;
+    current_period_end: string;
+    cancel_at_period_end: boolean;
+  };
+}
+
 export interface WSMessage {
+  id?: number;
   event: string;
   thread_id?: string;
   domain_id?: string;

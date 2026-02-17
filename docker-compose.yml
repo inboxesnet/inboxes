@@ -1,12 +1,75 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inboxes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inboxes}
+      POSTGRES_DB: ${POSTGRES_DB:-inboxes}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inboxes}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build: ./backend
-    ports:
-      - "8080:8080"
-    env_file:
-      - ./backend/.env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      DATABASE_URL: postgres://inboxes:inboxes@host.docker.internal:5432/inboxes?sslmode=disable
-      REDIS_URL: redis://host.docker.internal:6379
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      DATABASE_URL: postgres://${POSTGRES_USER:-inboxes}:${POSTGRES_PASSWORD:-inboxes}@postgres:5432/${POSTGRES_DB:-inboxes}?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      APP_URL: https://${DOMAIN}
+      API_PORT: "8080"
+      RESEND_SYSTEM_API_KEY: ${RESEND_SYSTEM_API_KEY:-}
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: https://${DOMAIN}
+      NEXT_PUBLIC_WS_URL: wss://${DOMAIN}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    depends_on:
+      - backend
+      - frontend
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

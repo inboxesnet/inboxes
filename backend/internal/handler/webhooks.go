@@ -2,11 +2,18 @@ package handler
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/event"
@@ -58,7 +65,15 @@ func (h *WebhookHandler) HandleResend(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// TODO: Verify Svix signature with org-specific webhook secret
+	// Verify Svix signature with org-specific webhook secret
+	var webhookSecret string
+	if err := h.DB.QueryRow(r.Context(), "SELECT resend_webhook_secret FROM orgs WHERE id = $1", orgID).Scan(&webhookSecret); err == nil && webhookSecret != "" {
+		if err := verifySvixSignature(body, r.Header, webhookSecret); err != nil {
+			slog.Warn("webhook: signature verification failed", "org_id", orgID, "error", err)
+			http.Error(w, "invalid signature", http.StatusUnauthorized)
+			return
+		}
+	}
 
 	var payload webhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -106,8 +121,34 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 			break
 		}
 	}
+	// If no match found in To, check CC addresses
 	if domainID == "" {
-		slog.Warn("webhook: no matching domain for received email", "to", emailData.To)
+		for _, cc := range emailData.CC {
+			parts := strings.Split(cc, "@")
+			if len(parts) != 2 {
+				continue
+			}
+			err := h.DB.QueryRow(ctx,
+				"SELECT id FROM domains WHERE org_id = $1 AND domain = $2",
+				orgID, parts[1],
+			).Scan(&domainID)
+			if err == nil {
+				recipientAddress = cc
+				break
+			}
+		}
+	}
+	if domainID == "" {
+		slog.Warn("webhook: no matching domain for received email", "to", emailData.To, "cc", emailData.CC)
+		return
+	}
+
+	// Idempotency: skip if we already processed this email
+	var existingID string
+	if err := h.DB.QueryRow(ctx,
+		"SELECT id FROM emails WHERE resend_email_id = $1", emailData.EmailID,
+	).Scan(&existingID); err == nil {
+		slog.Info("webhook: duplicate email, skipping", "resend_email_id", emailData.EmailID)
 		return
 	}
 
@@ -134,10 +175,7 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 	var threadID string
 	found := false
 
-	snippet := emailData.Text
-	if len(snippet) > 200 {
-		snippet = snippet[:200]
-	}
+	snippet := truncateRunes(emailData.Text, 200)
 
 	// Step 1: Match by In-Reply-To header
 	inReplyToHeader := ""
@@ -304,6 +342,62 @@ func (h *WebhookHandler) routeEmail(ctx context.Context, orgID, domainID, addres
 	}
 
 	return ""
+}
+
+// verifySvixSignature verifies a Svix-signed webhook payload.
+// secret is the webhook signing secret (with or without "whsec_" prefix).
+func verifySvixSignature(payload []byte, headers http.Header, secret string) error {
+	msgID := headers.Get("svix-id")
+	timestamp := headers.Get("svix-timestamp")
+	signature := headers.Get("svix-signature")
+
+	if msgID == "" || timestamp == "" || signature == "" {
+		return fmt.Errorf("missing svix headers")
+	}
+
+	// Validate timestamp is within 5 minutes
+	ts, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid timestamp")
+	}
+	diff := math.Abs(float64(time.Now().Unix() - ts))
+	if diff > 300 {
+		return fmt.Errorf("timestamp too old or too new")
+	}
+
+	// Decode secret key (strip "whsec_" prefix if present)
+	keyStr := strings.TrimPrefix(secret, "whsec_")
+	key, err := base64.StdEncoding.DecodeString(keyStr)
+	if err != nil {
+		return fmt.Errorf("invalid secret key")
+	}
+
+	// Compute expected signature: HMAC-SHA256(msgID.timestamp.body)
+	signedContent := fmt.Sprintf("%s.%s.%s", msgID, timestamp, string(payload))
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(signedContent))
+	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+
+	// Compare against all provided signatures (comma-separated, each prefixed with "v1,")
+	for _, sig := range strings.Split(signature, " ") {
+		parts := strings.SplitN(sig, ",", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if hmac.Equal([]byte(expected), []byte(parts[1])) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no matching signature found")
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes])
+	}
+	return s
 }
 
 func cleanSubjectForThread(subject string) string {

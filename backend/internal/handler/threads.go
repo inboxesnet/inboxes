@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -147,7 +148,7 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 	// Fetch emails
 	emailRows, err := h.DB.Query(ctx,
 		`SELECT id, direction, from_address, to_addresses, cc_addresses, subject,
-		 body_html, body_plain, status, attachments, created_at
+		 body_html, body_plain, status, attachments, message_id, in_reply_to, references_header, created_at
 		 FROM emails WHERE thread_id = $1 ORDER BY created_at ASC`, threadID,
 	)
 	if err != nil {
@@ -160,12 +161,12 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 	for emailRows.Next() {
 		var eID, dir, from, eSubject, eStatus string
 		var eTo, eCC json.RawMessage
-		var bodyHTML, bodyPlain *string
-		var attachments json.RawMessage
+		var bodyHTML, bodyPlain, messageID, inReplyTo *string
+		var attachments, refsHeader json.RawMessage
 		var eCreatedAt time.Time
 
 		emailRows.Scan(&eID, &dir, &from, &eTo, &eCC, &eSubject,
-			&bodyHTML, &bodyPlain, &eStatus, &attachments, &eCreatedAt)
+			&bodyHTML, &bodyPlain, &eStatus, &attachments, &messageID, &inReplyTo, &refsHeader, &eCreatedAt)
 
 		email := map[string]interface{}{
 			"id":           eID,
@@ -183,6 +184,15 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 		if bodyPlain != nil {
 			email["body_plain"] = *bodyPlain
+		}
+		if messageID != nil {
+			email["message_id"] = *messageID
+		}
+		if inReplyTo != nil {
+			email["in_reply_to"] = *inReplyTo
+		}
+		if refsHeader != nil {
+			email["references"] = refsHeader
 		}
 		emails = append(emails, email)
 	}
@@ -344,7 +354,10 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 		UserID:    claims.UserID,
 		DomainID:  domainID,
 		ThreadID:  threadID,
-		Payload:   map[string]interface{}{"to_folder": req.Folder},
+		Payload: map[string]interface{}{
+			"to_folder": req.Folder,
+			"thread":    h.fetchThreadSummary(ctx, threadID, claims.OrgID),
+		},
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "moved"})
@@ -377,6 +390,9 @@ func (h *ThreadHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		UserID:    claims.UserID,
 		DomainID:  domainID,
 		ThreadID:  threadID,
+		Payload: map[string]interface{}{
+			"thread": h.fetchThreadSummary(ctx, threadID, claims.OrgID),
+		},
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "updated"})
@@ -409,6 +425,9 @@ func (h *ThreadHandler) MarkUnread(w http.ResponseWriter, r *http.Request) {
 		UserID:    claims.UserID,
 		DomainID:  domainID,
 		ThreadID:  threadID,
+		Payload: map[string]interface{}{
+			"thread": h.fetchThreadSummary(ctx, threadID, claims.OrgID),
+		},
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "updated"})
@@ -454,6 +473,9 @@ func (h *ThreadHandler) Star(w http.ResponseWriter, r *http.Request) {
 		UserID:    claims.UserID,
 		DomainID:  domainID,
 		ThreadID:  threadID,
+		Payload: map[string]interface{}{
+			"thread": h.fetchThreadSummary(ctx, threadID, claims.OrgID),
+		},
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "updated"})
@@ -486,6 +508,9 @@ func (h *ThreadHandler) Archive(w http.ResponseWriter, r *http.Request) {
 		UserID:    claims.UserID,
 		DomainID:  domainID,
 		ThreadID:  threadID,
+		Payload: map[string]interface{}{
+			"thread": h.fetchThreadSummary(ctx, threadID, claims.OrgID),
+		},
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "updated"})
@@ -518,6 +543,9 @@ func (h *ThreadHandler) Trash(w http.ResponseWriter, r *http.Request) {
 		UserID:    claims.UserID,
 		DomainID:  domainID,
 		ThreadID:  threadID,
+		Payload: map[string]interface{}{
+			"thread": h.fetchThreadSummary(ctx, threadID, claims.OrgID),
+		},
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "updated"})
@@ -553,7 +581,9 @@ func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload := map[string]interface{}{}
+	payload := map[string]interface{}{
+		"thread": h.fetchThreadSummary(ctx, threadID, claims.OrgID),
+	}
 	if req.Action == "not_spam" {
 		payload["to_folder"] = "inbox"
 	}
@@ -644,6 +674,44 @@ func (h *ThreadHandler) UnreadCount(w http.ResponseWriter, r *http.Request) {
 		counts[dID] = count
 	}
 	writeJSON(w, http.StatusOK, counts)
+}
+
+// fetchThreadSummary returns a thread map suitable for event payloads.
+func (h *ThreadHandler) fetchThreadSummary(ctx context.Context, threadID, orgID string) map[string]interface{} {
+	var id, dID, subject, folder, snippet string
+	var originalTo *string
+	var participants json.RawMessage
+	var lastMessageAt, createdAt time.Time
+	var messageCount, unreadCount int
+	var starred bool
+
+	err := h.DB.QueryRow(ctx,
+		`SELECT id, domain_id, subject, participant_emails,
+		 last_message_at, message_count, unread_count, starred, folder, snippet, original_to, created_at
+		 FROM threads WHERE id = $1 AND org_id = $2`,
+		threadID, orgID,
+	).Scan(&id, &dID, &subject, &participants,
+		&lastMessageAt, &messageCount, &unreadCount, &starred, &folder, &snippet, &originalTo, &createdAt)
+	if err != nil {
+		return nil
+	}
+	t := map[string]interface{}{
+		"id":                 id,
+		"domain_id":          dID,
+		"subject":            subject,
+		"participant_emails": participants,
+		"last_message_at":    lastMessageAt,
+		"message_count":      messageCount,
+		"unread_count":       unreadCount,
+		"starred":            starred,
+		"folder":             folder,
+		"snippet":            snippet,
+		"created_at":         createdAt,
+	}
+	if originalTo != nil {
+		t["original_to"] = *originalTo
+	}
+	return t
 }
 
 func (h *ThreadHandler) updateThread(w http.ResponseWriter, r *http.Request, query string) {

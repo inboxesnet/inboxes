@@ -13,6 +13,11 @@ type Config struct {
 	SessionSecret     string
 	AppURL            string
 	APIPort           string
+
+	// Stripe (optional — when empty, billing is disabled for self-hosted)
+	StripeKey           string
+	StripeWebhookSecret string
+	StripePriceID       string
 }
 
 func Load() (*Config, error) {
@@ -24,6 +29,10 @@ func Load() (*Config, error) {
 		SessionSecret:   os.Getenv("SESSION_SECRET"),
 		AppURL:          getEnv("APP_URL", "http://localhost:3000"),
 		APIPort:         getEnv("API_PORT", "8080"),
+
+		StripeKey:           os.Getenv("STRIPE_KEY"),
+		StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
+		StripePriceID:       os.Getenv("STRIPE_PRICE_ID"),
 	}
 
 	if cfg.SessionSecret == "" {

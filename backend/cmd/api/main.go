@@ -19,6 +19,7 @@ import (
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/router"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/worker"
 	"github.com/inboxes/backend/internal/ws"
 )
 
@@ -76,12 +77,24 @@ func main() {
 	// Event Bus
 	bus := event.NewBus(pool, rdb)
 
+	// Sync service + worker
+	syncSvc := service.NewSyncService(pool, resendSvc, bus)
+	syncWorker := worker.NewSyncWorker(pool, rdb, syncSvc, resendSvc, bus)
+	go syncWorker.Run(ctx)
+	go syncWorker.RunStaleRecovery(ctx)
+
 	// WebSocket Hub
 	wsHub := ws.NewHub(rdb)
 	go wsHub.Run(ctx)
 
 	// Router
-	r := router.New(pool, encSvc, resendSvc, bus, wsHub, cfg.SessionSecret, cfg.AppURL)
+	r := router.New(pool, rdb, encSvc, resendSvc, bus, wsHub, router.Config{
+		Secret:              cfg.SessionSecret,
+		AppURL:              cfg.AppURL,
+		StripeKey:           cfg.StripeKey,
+		StripePriceID:       cfg.StripePriceID,
+		StripeWebhookSecret: cfg.StripeWebhookSecret,
+	})
 
 	// Server
 	srv := &http.Server{
