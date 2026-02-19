@@ -27,6 +27,15 @@ function extractSender(emails: string[]): string {
   return atIndex > 0 ? first.substring(0, atIndex) : first;
 }
 
+function cleanSnippet(text: string): string {
+  return text
+    .replace(/https?:\/\/\S+/g, "")   // strip URLs
+    .replace(/\[(?:image|img)\]/gi, "") // strip [image] tags
+    .replace(/\s*[\[\]()]\s*/g, " ")   // strip leftover brackets/parens
+    .replace(/\s{2,}/g, " ")           // collapse whitespace
+    .trim();
+}
+
 function parseParticipants(raw: string[] | string): string[] {
   if (Array.isArray(raw)) return raw;
   if (typeof raw === "string") {
@@ -94,7 +103,7 @@ function ThreadRow({
         }
       }}
       className={cn(
-        "group flex items-center gap-2 w-full text-left px-3 h-10 transition-colors cursor-pointer select-none",
+        "group flex items-center gap-2 w-full text-left px-3 h-10 transition-colors cursor-pointer select-none overflow-hidden",
         isDragging && "opacity-50",
         isActive && "bg-accent",
         isSelected && !isActive && "bg-accent/60",
@@ -152,17 +161,23 @@ function ThreadRow({
       </span>
 
       {/* Subject — snippet */}
-      <span className="flex-1 min-w-0 text-sm truncate">
-        <span className={isUnread ? "font-medium" : ""}>
-          {thread.subject}
-        </span>
-        {thread.snippet && (
-          <span className="text-muted-foreground hidden md:inline">
-            {" "}
-            — {thread.snippet}
-          </span>
-        )}
-      </span>
+      {(() => {
+        const maxTotal = 110;
+        const subjectText = thread.subject.length > 55 ? thread.subject.slice(0, 55) + "…" : thread.subject;
+        const snippetBudget = maxTotal - Math.min(thread.subject.length, 55);
+        const cleaned = thread.snippet ? cleanSnippet(thread.snippet) : "";
+        const snippetText = cleaned.length > snippetBudget ? cleaned.slice(0, snippetBudget) + "…" : cleaned;
+        return (
+          <div className="flex-1 min-w-0 text-sm truncate">
+            <span className={isUnread ? "font-medium" : ""}>{subjectText}</span>
+            {snippetText && (
+              <span className="text-muted-foreground hidden md:inline">
+                {" — "}{snippetText}
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Time (default) / Hover actions */}
       <div className="shrink-0 w-[100px] flex items-center justify-end">

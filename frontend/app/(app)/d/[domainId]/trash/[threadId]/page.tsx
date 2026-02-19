@@ -13,6 +13,7 @@ export default function TrashThreadPage() {
     <ThreadView
       threadId={threadId}
       domainId={domainId}
+      folder="trash"
       onBack={() => router.push(`/d/${domainId}/trash`)}
     />
   );

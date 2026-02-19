@@ -13,6 +13,7 @@ export default function SpamThreadPage() {
     <ThreadView
       threadId={threadId}
       domainId={domainId}
+      folder="spam"
       onBack={() => router.push(`/d/${domainId}/spam`)}
     />
   );

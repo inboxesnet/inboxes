@@ -71,17 +71,27 @@ export function useThreadAction() {
     }: {
       threadId: string;
       action: string;
-    }) => api.patch(`/api/threads/${threadId}/${action}`),
+    }) => {
+      if (action.startsWith("move:")) {
+        const folder = action.split(":")[1];
+        return api.patch(`/api/threads/${threadId}/move`, { folder });
+      }
+      if (action === "delete") {
+        return api.delete(`/api/threads/${threadId}`);
+      }
+      return api.patch(`/api/threads/${threadId}/${action}`);
+    },
     onMutate: async ({ threadId, action }) => {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
-      const movingActions = ["archive", "trash", "spam"];
+      const movingActions = ["archive", "trash", "spam", "delete"];
+      const isMoving = movingActions.includes(action) || action.startsWith("move:");
 
       qc.setQueriesData<ThreadListResponse>(
         { queryKey: queryKeys.threads.lists() },
         (old) => {
           if (!old) return old;
-          if (movingActions.includes(action)) {
+          if (isMoving) {
             return {
               ...old,
               threads: old.threads.filter((t) => t.id !== threadId),

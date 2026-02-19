@@ -14,6 +14,7 @@ export default function ThreadDetailPage() {
     <ThreadView
       threadId={threadId}
       domainId={domainId}
+      folder={folder}
       onBack={() => router.push(`/d/${domainId}/${folder}`)}
     />
   );

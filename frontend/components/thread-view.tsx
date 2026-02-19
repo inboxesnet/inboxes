@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  AlertTriangle,
   Archive,
   Trash2,
   Star,
@@ -25,6 +26,7 @@ import {
   ArrowLeft,
   ChevronDown,
   Send,
+  Inbox,
   X,
 } from "lucide-react";
 import { ContactCard } from "@/components/contact-card";
@@ -33,6 +35,7 @@ import type { Thread, Email } from "@/lib/types";
 interface ThreadViewProps {
   threadId: string;
   domainId: string;
+  folder?: string;
   onBack?: () => void;
 }
 
@@ -41,6 +44,7 @@ type ReplyMode = "reply" | "replyAll" | "forward" | null;
 export function ThreadView({
   threadId,
   domainId,
+  folder,
   onBack,
 }: ThreadViewProps) {
   const { data: thread, isLoading } = useThread(threadId);
@@ -117,8 +121,8 @@ export function ThreadView({
 
   function handleAction(action: string) {
     actionMutation.mutate({ threadId, action });
-    const navigateAway = ["archive", "trash", "spam", "unread"];
-    if (navigateAway.includes(action)) {
+    const navigateAway = ["archive", "trash", "spam", "delete", "unread"];
+    if (navigateAway.includes(action) || action.startsWith("move:")) {
       onBack?.();
     }
   }
@@ -160,22 +164,58 @@ export function ThreadView({
               <Mail className="h-4 w-4" />
             )}
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleAction("archive")}
-            title="Archive"
-          >
-            <Archive className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleAction("trash")}
-            title="Trash"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {/* Primary: Archive or Move to Inbox */}
+          {(folder === "trash" || folder === "archive" || folder === "spam") ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleAction("move:inbox")}
+              title="Move to Inbox"
+            >
+              <Inbox className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleAction("archive")}
+              title="Archive"
+            >
+              <Archive className="h-4 w-4" />
+            </Button>
+          )}
+          {/* Report Spam — not on sent or spam */}
+          {folder !== "sent" && folder !== "spam" && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleAction("spam")}
+              title="Report spam"
+            >
+              <AlertTriangle className="h-4 w-4" />
+            </Button>
+          )}
+          {/* Destructive: Trash or Delete permanently */}
+          {folder === "trash" ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleAction("delete")}
+              title="Delete permanently"
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleAction("trash")}
+              title="Trash"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 

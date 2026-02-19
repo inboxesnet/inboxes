@@ -13,6 +13,7 @@ export default function SentThreadPage() {
     <ThreadView
       threadId={threadId}
       domainId={domainId}
+      folder="sent"
       onBack={() => router.push(`/d/${domainId}/sent`)}
     />
   );

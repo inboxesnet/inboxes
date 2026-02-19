@@ -101,8 +101,8 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
     (threadId: string, action: string) => {
       actionMutation.mutate({ threadId, action });
       // Close reading pane when thread is moved/archived/trashed
-      const closingActions = ["archive", "trash", "spam"];
-      if (closingActions.includes(action) && threadId === selectedThreadId) {
+      const closingActions = ["archive", "trash", "spam", "delete"];
+      if ((closingActions.includes(action) || action.startsWith("move:")) && threadId === selectedThreadId) {
         setSelectedThreadId(null);
       }
     },
@@ -183,7 +183,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
 
       {searchQuery ? (
         /* Search results */
-        <div className="flex-1 overflow-y-auto relative">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
           {searchFetching ? (
             <div className="flex items-center justify-center h-32">
               <Spinner className="h-6 w-6" />
@@ -214,6 +214,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
           <ThreadToolbar
             folder={folder}
             threads={threads}
+            selectedIds={selection.selectedIds}
             allSelected={selection.allSelected}
             someSelected={selection.someSelected}
             hasSelection={selection.selectedIds.size > 0}
@@ -229,7 +230,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
           />
 
           {/* Thread list or empty state */}
-          <div className={`flex-1 overflow-y-auto relative ${refreshing ? "opacity-60" : ""}`}>
+          <div className={`flex-1 overflow-y-auto overflow-x-hidden relative ${refreshing ? "opacity-60" : ""}`}>
             {threads.length === 0 ? (
               <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
                 {EMPTY_MESSAGES[folder]}
@@ -284,6 +285,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
               key={selectedThreadId}
               threadId={selectedThreadId}
               domainId={domainId}
+              folder={folder}
               onBack={() => setSelectedThreadId(null)}
             />
           </div>

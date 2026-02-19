@@ -20,6 +20,7 @@ import type { Folder, Thread } from "@/lib/types";
 interface ThreadToolbarProps {
   folder: Folder;
   threads: Thread[];
+  selectedIds: Set<string>;
   allSelected: boolean;
   someSelected: boolean;
   hasSelection: boolean;
@@ -37,6 +38,7 @@ interface ThreadToolbarProps {
 export function ThreadToolbar({
   folder,
   threads,
+  selectedIds,
   allSelected,
   someSelected,
   hasSelection,
@@ -120,28 +122,29 @@ export function ThreadToolbar({
       )}
 
       {/* Bulk actions — visible when selection exists */}
-      {hasSelection && (
-        <div className="flex items-center gap-0.5 ml-1">
-          {(folder === "inbox" || folder === "sent" || folder === "spam") && (
-            <button
-              title="Archive"
-              onClick={() => onBulkAction("archive")}
-              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <Archive className="h-4 w-4" />
-            </button>
-          )}
-          {folder !== "trash" && (
-            <button
-              title="Trash"
-              onClick={() => onBulkAction("trash")}
-              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          )}
-          {folder === "trash" && (
-            <>
+      {hasSelection && (() => {
+        const selected = threads.filter((t) => selectedIds.has(t.id));
+        const hasUnread = selected.some((t) => t.unread_count > 0);
+        const hasRead = selected.some((t) => t.unread_count === 0);
+        const showArchive = folder === "inbox" || folder === "sent";
+        const showMoveToInbox = folder === "archive" || folder === "trash" || folder === "spam";
+        const showSpam = folder !== "sent" && folder !== "spam";
+        const showTrash = folder !== "trash";
+        const showDelete = folder === "trash";
+
+        return (
+          <div className="flex items-center gap-0.5 ml-1">
+            {/* Primary: Archive or Move to Inbox */}
+            {showArchive && (
+              <button
+                title="Archive"
+                onClick={() => onBulkAction("archive")}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <Archive className="h-4 w-4" />
+              </button>
+            )}
+            {showMoveToInbox && (
               <button
                 title="Move to Inbox"
                 onClick={() => onBulkAction("move:inbox")}
@@ -149,6 +152,50 @@ export function ThreadToolbar({
               >
                 <Inbox className="h-4 w-4" />
               </button>
+            )}
+
+            {/* Read/Unread — contextual */}
+            {hasUnread && (
+              <button
+                title="Mark as read"
+                onClick={() => onBulkAction("read")}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <MailOpen className="h-4 w-4" />
+              </button>
+            )}
+            {hasRead && (
+              <button
+                title="Mark as unread"
+                onClick={() => onBulkAction("unread")}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <Mail className="h-4 w-4" />
+              </button>
+            )}
+
+            {/* Report Spam */}
+            {showSpam && (
+              <button
+                title="Report spam"
+                onClick={() => onBulkAction("spam")}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <AlertTriangle className="h-4 w-4" />
+              </button>
+            )}
+
+            {/* Destructive: Trash or Delete permanently */}
+            {showTrash && (
+              <button
+                title="Trash"
+                onClick={() => onBulkAction("trash")}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
+            {showDelete && (
               <button
                 title="Delete permanently"
                 onClick={() => onBulkAction("delete")}
@@ -156,42 +203,10 @@ export function ThreadToolbar({
               >
                 <Trash2 className="h-4 w-4" />
               </button>
-            </>
-          )}
-          {folder === "spam" && (
-            <button
-              title="Not spam"
-              onClick={() => onBulkAction("move:inbox")}
-              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <Inbox className="h-4 w-4" />
-            </button>
-          )}
-          <button
-            title="Mark as read"
-            onClick={() => onBulkAction("read")}
-            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-          >
-            <MailOpen className="h-4 w-4" />
-          </button>
-          <button
-            title="Mark as unread"
-            onClick={() => onBulkAction("unread")}
-            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-          >
-            <Mail className="h-4 w-4" />
-          </button>
-          {folder !== "spam" && folder !== "trash" && (
-            <button
-              title="Spam"
-              onClick={() => onBulkAction("spam")}
-              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-            >
-              <AlertTriangle className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        );
+      })()}
 
       {/* Spacer */}
       <div className="flex-1" />

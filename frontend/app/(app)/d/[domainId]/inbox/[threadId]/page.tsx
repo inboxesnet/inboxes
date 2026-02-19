@@ -13,6 +13,7 @@ export default function InboxThreadPage() {
     <ThreadView
       threadId={threadId}
       domainId={domainId}
+      folder="inbox"
       onBack={() => router.push(`/d/${domainId}/inbox`)}
     />
   );
