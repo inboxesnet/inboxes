@@ -105,6 +105,9 @@ set -a
 source "$PROJECT_DIR/.env"
 set +a
 
+# Ensure frontend knows where the backend is
+export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:8080}"
+
 # ─── Start backend ───────────────────────────────────────────────────────────
 echo ""
 info "Starting backend on :8080..."
