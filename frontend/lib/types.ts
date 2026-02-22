@@ -55,7 +55,7 @@ export interface ThreadListResponse {
   total: number;
 }
 
-export type Folder = "inbox" | "sent" | "drafts" | "archive" | "trash" | "spam";
+export type Folder = "inbox" | "sent" | "drafts" | "archive" | "trash" | "spam" | "deleted_forever";
 
 export interface Email {
   id: string;

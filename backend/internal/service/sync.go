@@ -398,7 +398,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 
 		s.pool.Exec(ctx,
 			`UPDATE threads SET folder = 'inbox', unread_count = unread_count + 1, updated_at = now()
-			 WHERE id = $1 AND folder = 'sent'`, threadID,
+			 WHERE id = $1 AND folder IN ('sent', 'archive', 'trash')`, threadID,
 		)
 
 		createdAt := parseTime(email.CreatedAt)
@@ -500,14 +500,19 @@ func (s *SyncService) findOrCreateThread(ctx context.Context, orgID, userID, dom
 	var threadID string
 	cleanSubject := cleanSubjectLine(subject)
 
-	// Step 1: Match by In-Reply-To header
+	// Step 1: Match by In-Reply-To header (skip if thread is deleted_forever)
 	if inReplyTo != "" {
 		err := s.pool.QueryRow(ctx,
 			`SELECT thread_id FROM emails WHERE message_id = $1 AND org_id = $2 LIMIT 1`,
 			inReplyTo, orgID,
 		).Scan(&threadID)
 		if err == nil {
-			return threadID, nil
+			var folder string
+			s.pool.QueryRow(ctx, `SELECT folder FROM threads WHERE id = $1`, threadID).Scan(&folder)
+			if folder != "deleted_forever" {
+				return threadID, nil
+			}
+			threadID = ""
 		}
 	}
 
@@ -523,7 +528,7 @@ func (s *SyncService) findOrCreateThread(ctx context.Context, orgID, userID, dom
 	counterpartyJSON, _ := json.Marshal([]string{matchAddr})
 	err := s.pool.QueryRow(ctx,
 		`SELECT id FROM threads WHERE org_id = $1 AND domain_id = $2 AND subject = $3
-		 AND participant_emails @> $4::jsonb
+		 AND participant_emails @> $4::jsonb AND folder != 'deleted_forever'
 		 ORDER BY last_message_at DESC LIMIT 1`,
 		orgID, domainID, cleanSubject, counterpartyJSON,
 	).Scan(&threadID)

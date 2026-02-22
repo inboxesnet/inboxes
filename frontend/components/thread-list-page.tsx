@@ -25,6 +25,7 @@ const EMPTY_MESSAGES: Record<Folder, string> = {
   archive: "No archived messages",
   trash: "Trash is empty",
   spam: "No spam messages",
+  deleted_forever: "No deleted messages",
 };
 
 interface ThreadListPageProps {

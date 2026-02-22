@@ -83,6 +83,10 @@ func main() {
 	go syncWorker.Run(ctx)
 	go syncWorker.RunStaleRecovery(ctx)
 
+	// Trash collector
+	trashCollector := worker.NewTrashCollector(pool, os.Getenv("TRASH_COLLECTOR_ENABLED") == "true")
+	go trashCollector.Run(ctx)
+
 	// WebSocket Hub
 	wsHub := ws.NewHub(rdb)
 	go wsHub.Run(ctx)
@@ -91,6 +95,7 @@ func main() {
 	r := router.New(pool, rdb, encSvc, resendSvc, bus, wsHub, router.Config{
 		Secret:              cfg.SessionSecret,
 		AppURL:              cfg.AppURL,
+		PublicURL:           cfg.PublicURL,
 		StripeKey:           cfg.StripeKey,
 		StripePriceID:       cfg.StripePriceID,
 		StripeWebhookSecret: cfg.StripeWebhookSecret,

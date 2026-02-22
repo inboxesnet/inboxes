@@ -18,6 +18,7 @@ import (
 type Config struct {
 	Secret              string
 	AppURL              string
+	PublicURL           string
 	StripeKey           string
 	StripePriceID       string
 	StripeWebhookSecret string
@@ -39,7 +40,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	threads := &handler.ThreadHandler{DB: db, Bus: bus}
 	emails := &handler.EmailHandler{DB: db, ResendSvc: resendSvc, Bus: bus}
 	webhooks := &handler.WebhookHandler{DB: db, Bus: bus}
-	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus}
+	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus, PublicURL: cfg.PublicURL}
 	users := &handler.UserHandler{DB: db, ResendSvc: resendSvc}
 	aliases := &handler.AliasHandler{DB: db}
 	domains := &handler.DomainHandler{DB: db, ResendSvc: resendSvc}
@@ -74,9 +75,10 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=3600")
-		json.NewEncoder(w).Encode(map[string]string{
-			"api_url": appURL,
-			"ws_url":  wsURL,
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"api_url":    appURL,
+			"ws_url":     wsURL,
+			"commercial": stripeKey != "",
 		})
 	})
 

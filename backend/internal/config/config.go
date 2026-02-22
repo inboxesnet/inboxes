@@ -12,6 +12,7 @@ type Config struct {
 	ResendSystemKey   string
 	SessionSecret     string
 	AppURL            string
+	PublicURL         string
 	APIPort           string
 
 	// Stripe (optional — when empty, billing is disabled for self-hosted)
@@ -28,6 +29,7 @@ func Load() (*Config, error) {
 		ResendSystemKey: os.Getenv("RESEND_SYSTEM_API_KEY"),
 		SessionSecret:   os.Getenv("SESSION_SECRET"),
 		AppURL:          getEnv("APP_URL", "http://localhost:3000"),
+		PublicURL:       getEnv("PUBLIC_URL", "http://localhost:8080"),
 		APIPort:         getEnv("API_PORT", "8080"),
 
 		StripeKey:           os.Getenv("STRIPE_KEY"),

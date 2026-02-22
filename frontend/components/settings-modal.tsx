@@ -16,6 +16,7 @@ import {
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
+import { useAppConfig } from "@/contexts/app-config-context";
 import { useDomains } from "@/contexts/domain-context";
 import { cn } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
@@ -29,6 +30,7 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
+  const { commercial } = useAppConfig();
   const { refreshDomains } = useDomains();
   const [activeTab, setActiveTab] = useState<Tab>("profile");
   const [user, setUser] = useState<User | null>(null);
@@ -55,7 +57,6 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   const [refreshingDomains, setRefreshingDomains] = useState(false);
 
   // Billing state
-  const [billingEnabled, setBillingEnabled] = useState(false);
   const [billingInfo, setBillingInfo] = useState<BillingInfo | null>(null);
   const [billingLoading, setBillingLoading] = useState(false);
 
@@ -66,16 +67,14 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
     setSuccess("");
     async function load() {
       try {
-        const [userData, domainData, settingsData] = await Promise.all([
+        const [userData, domainData] = await Promise.all([
           api.get<User>("/api/users/me"),
           api.get<Domain[]>("/api/domains/all"),
-          api.get<{ billing_enabled: boolean }>("/api/orgs/settings"),
         ]);
         setUser(userData);
         setName(userData.name);
         setAllDomains(domainData);
         setVisibleIds(new Set(domainData.filter((d) => !d.hidden).map((d) => d.id)));
-        setBillingEnabled(settingsData.billing_enabled);
       } catch {
         // handled
       } finally {
@@ -191,7 +190,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: "profile", label: "Profile", icon: <UserIcon className="h-4 w-4" /> },
     { key: "domains", label: "Domains", icon: <Globe className="h-4 w-4" /> },
-    ...(billingEnabled
+    ...(commercial
       ? [{ key: "billing" as Tab, label: "Billing", icon: <CreditCard className="h-4 w-4" /> }]
       : []),
   ];
@@ -375,7 +374,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   </div>
                 )}
 
-                {activeTab === "billing" && billingEnabled && (
+                {activeTab === "billing" && commercial && (
                   <div className="space-y-6">
                     <Card>
                       <CardHeader>

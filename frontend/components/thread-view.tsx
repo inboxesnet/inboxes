@@ -629,6 +629,14 @@ function getReplyFromAddress(emails: Email[], domainName: string): string {
       return emails[i].from_address;
     }
   }
+  // No outbound emails yet — use the address the last inbound was sent to
+  for (let i = emails.length - 1; i >= 0; i--) {
+    if (emails[i].direction === "inbound") {
+      const toAddrs = parseAddresses(emails[i].to_addresses);
+      const match = toAddrs.find((a) => a.endsWith(`@${domainName}`));
+      if (match) return match;
+    }
+  }
   return `me@${domainName}`;
 }
 

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -17,6 +16,7 @@ type OnboardingHandler struct {
 	ResendSvc *service.ResendService
 	EncSvc    *service.EncryptionService
 	Bus       *event.Bus
+	PublicURL string
 }
 
 type connectRequest struct {
@@ -225,13 +225,7 @@ func (h *OnboardingHandler) SetupWebhook(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 
-	// Determine webhook URL
-	// The API URL is derived from the request or configured
-	apiURL := r.Header.Get("X-API-URL")
-	if apiURL == "" {
-		apiURL = fmt.Sprintf("https://%s", r.Host)
-	}
-	webhookURL := apiURL + "/api/webhooks/resend/" + claims.OrgID
+	webhookURL := h.PublicURL + "/api/webhooks/resend/" + claims.OrgID
 
 	// Register webhook with Resend
 	data, err := h.ResendSvc.Fetch(ctx, claims.OrgID, "POST", "/webhooks", map[string]interface{}{

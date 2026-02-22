@@ -269,7 +269,7 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 			query = "UPDATE threads SET folder = '" + req.Folder + "', trash_expires_at = NULL, updated_at = now() WHERE id = ANY($1) AND org_id = $2"
 		}
 	case "delete":
-		query = "DELETE FROM threads WHERE id = ANY($1) AND org_id = $2 AND folder = 'trash'"
+		query = "UPDATE threads SET folder = 'deleted_forever', updated_at = now() WHERE id = ANY($1) AND org_id = $2 AND folder = 'trash'"
 	default:
 		writeError(w, http.StatusBadRequest, "unknown action: "+req.Action)
 		return
@@ -613,7 +613,7 @@ func (h *ThreadHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	// Only allow deleting threads that are in trash
 	tag, err := h.DB.Exec(ctx,
-		"DELETE FROM threads WHERE id = $1 AND org_id = $2 AND folder = 'trash'",
+		"UPDATE threads SET folder = 'deleted_forever', updated_at = now() WHERE id = $1 AND org_id = $2 AND folder = 'trash'",
 		threadID, claims.OrgID,
 	)
 	if err != nil || tag.RowsAffected() == 0 {

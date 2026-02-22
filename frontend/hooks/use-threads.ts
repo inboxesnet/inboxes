@@ -84,7 +84,7 @@ export function useThreadAction() {
     onMutate: async ({ threadId, action }) => {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
-      const movingActions = ["archive", "trash", "spam", "delete"];
+      const movingActions = ["archive", "trash", "spam", "delete", "move:deleted_forever"];
       const isMoving = movingActions.includes(action) || action.startsWith("move:");
 
       qc.setQueriesData<ThreadListResponse>(
