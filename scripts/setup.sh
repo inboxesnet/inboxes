@@ -29,7 +29,7 @@ NC='\033[0m'
 
 info()  { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -ne "${YELLOW}[…]${NC} $1\r"; }
-ok()  { echo -e "${GREEN}[✓]${NC} $1"; }
+ok()  { echo -e "\r\033[K${GREEN}[✓]${NC} $1"; }
 fail()  { echo -e "\n${RED}[✗]${NC} $1"; exit 1; }
 
 # Compare version strings: returns 0 if $1 >= $2
