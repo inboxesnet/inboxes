@@ -28,8 +28,9 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 info()  { echo -e "${GREEN}[✓]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-fail()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+warn()  { echo -ne "${YELLOW}[…]${NC} $1\r"; }
+done()  { echo -e "${GREEN}[✓]${NC} $1"; }
+fail()  { echo -e "\n${RED}[✗]${NC} $1"; exit 1; }
 
 # Compare version strings: returns 0 if $1 >= $2
 version_gte() {
@@ -56,7 +57,7 @@ else
     warn "Cloning Inboxes into $INSTALL_DIR..."
     if git clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
       PROJECT_DIR="$INSTALL_DIR"
-      info "Cloned to $PROJECT_DIR"
+      done "Cloned to $PROJECT_DIR"
     else
       echo ""
       fail "Could not clone $REPO_URL
@@ -73,12 +74,13 @@ fi
 
 # ─── 2. Homebrew ─────────────────────────────────────────────────────────────
 if ! command -v brew &>/dev/null; then
-  warn "Homebrew not found. Installing..."
+  warn "Installing Homebrew...                    "
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
   if [[ -f /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   fi
+  done "Homebrew installed"
 else
   info "Homebrew found"
 fi
@@ -92,9 +94,9 @@ if command -v go &>/dev/null; then
     fail "Go $GO_VER found but $MIN_GO+ required. Run: brew upgrade go"
   fi
 else
-  warn "Go not found. Installing..."
+  warn "Installing Go...                          "
   brew install go
-  info "Go installed"
+  done "Go installed"
 fi
 
 # ─── 4. Node ─────────────────────────────────────────────────────────────────
@@ -106,9 +108,9 @@ if command -v node &>/dev/null; then
     fail "Node v$NODE_VER found but v$MIN_NODE+ required. Run: brew upgrade node"
   fi
 else
-  warn "Node not found. Installing..."
+  warn "Installing Node...                        "
   brew install node
-  info "Node installed"
+  done "Node installed"
 fi
 
 # ─── 5. PostgreSQL ───────────────────────────────────────────────────────────
@@ -120,9 +122,9 @@ if command -v psql &>/dev/null; then
     fail "PostgreSQL $PG_VER found but $MIN_PG+ required. Run: brew upgrade postgresql"
   fi
 else
-  warn "PostgreSQL not found. Installing..."
+  warn "Installing PostgreSQL...                  "
   brew install postgresql@16
-  info "PostgreSQL installed"
+  done "PostgreSQL installed"
 fi
 
 # ─── 6. Redis ────────────────────────────────────────────────────────────────
@@ -134,9 +136,9 @@ if command -v redis-cli &>/dev/null; then
     fail "Redis $REDIS_VER found but $MIN_REDIS+ required. Run: brew upgrade redis"
   fi
 else
-  warn "Redis not found. Installing..."
+  warn "Installing Redis...                       "
   brew install redis
-  info "Redis installed"
+  done "Redis installed"
 fi
 
 # ─── 7. Start services ──────────────────────────────────────────────────────
@@ -149,24 +151,26 @@ fi
 if brew services list | grep "$PG_SERVICE" | grep -q started; then
   info "$PG_SERVICE already running"
 else
-  warn "Starting $PG_SERVICE..."
+  warn "Starting $PG_SERVICE...                   "
   brew services start "$PG_SERVICE"
   sleep 3
+  done "$PG_SERVICE started"
 fi
 
 if brew services list | grep "redis" | grep -q started; then
   info "Redis already running"
 else
-  warn "Starting Redis..."
+  warn "Starting Redis...                         "
   brew services start redis
   sleep 2
+  done "Redis started"
 fi
 
 # ─── 8. Database ─────────────────────────────────────────────────────────────
 if psql -lqt 2>/dev/null | cut -d\| -f1 | grep -qw inboxes; then
   info "Database 'inboxes' already exists"
 else
-  warn "Creating database..."
+  warn "Creating database...                      "
   createdb inboxes 2>/dev/null || true
   psql inboxes -c "
     DO \$\$
@@ -179,7 +183,7 @@ else
     GRANT ALL PRIVILEGES ON DATABASE inboxes TO inboxes;
     GRANT ALL ON SCHEMA public TO inboxes;
   " 2>/dev/null
-  info "Database 'inboxes' created"
+  done "Database 'inboxes' created"
 fi
 
 # ─── 9. .env file ───────────────────────────────────────────────────────────
@@ -187,7 +191,7 @@ ENV_FILE="$PROJECT_DIR/.env"
 if [[ -f "$ENV_FILE" ]]; then
   info ".env already exists (not overwriting)"
 else
-  warn "Generating .env with random secrets..."
+  warn "Generating .env...                        "
   cat > "$ENV_FILE" <<EOF
 DATABASE_URL=postgres://inboxes:inboxes@localhost:5432/inboxes?sslmode=disable
 REDIS_URL=redis://localhost:6379
@@ -196,16 +200,16 @@ ENCRYPTION_KEY=$(openssl rand -base64 32)
 PUBLIC_URL=http://localhost:8080
 NEXT_PUBLIC_API_URL=http://localhost:8080
 EOF
-  info ".env created"
+  done ".env created"
 fi
 
 # ─── 10. Frontend dependencies ──────────────────────────────────────────────
 if [[ -d "$PROJECT_DIR/frontend/node_modules" ]]; then
   info "Frontend dependencies already installed"
 else
-  warn "Installing frontend dependencies..."
-  (cd "$PROJECT_DIR/frontend" && npm install)
-  info "Frontend dependencies installed"
+  warn "Installing frontend dependencies...       "
+  (cd "$PROJECT_DIR/frontend" && npm install --silent 2>/dev/null)
+  done "Frontend dependencies installed"
 fi
 
 # ─── Done ────────────────────────────────────────────────────────────────────
