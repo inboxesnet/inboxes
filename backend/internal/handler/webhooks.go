@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"math"
@@ -393,6 +394,7 @@ func verifySvixSignature(payload []byte, headers http.Header, secret string) err
 }
 
 func truncateRunes(s string, maxRunes int) string {
+	s = html.UnescapeString(s)
 	runes := []rune(s)
 	if len(runes) > maxRunes {
 		return string(runes[:maxRunes])

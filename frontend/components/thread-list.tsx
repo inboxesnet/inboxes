@@ -27,8 +27,19 @@ function extractSender(emails: string[]): string {
   return atIndex > 0 ? first.substring(0, atIndex) : first;
 }
 
-function cleanSnippet(text: string): string {
+function decodeHtmlEntities(text: string): string {
   return text
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function cleanSnippet(text: string): string {
+  return decodeHtmlEntities(text)
     .replace(/https?:\/\/\S+/g, "")   // strip URLs
     .replace(/\[(?:image|img)\]/gi, "") // strip [image] tags
     .replace(/\s*[\[\]()]\s*/g, " ")   // strip leftover brackets/parens

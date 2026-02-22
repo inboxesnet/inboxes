@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"time"
@@ -599,6 +600,7 @@ func trackOwnAddresses(discovered map[string]map[string]int, addrs []string, dom
 }
 
 func truncateRunes(s string, maxRunes int) string {
+	s = html.UnescapeString(s)
 	runes := []rune(s)
 	if len(runes) > maxRunes {
 		return string(runes[:maxRunes])
