@@ -102,8 +102,8 @@ FRONTEND_PID=$!
 
 echo ""
 echo -e "${GREEN}  ┌──────────────────────────────────────┐${NC}"
-echo -e "${GREEN}  │  App:  http://localhost:3000          │${NC}"
-echo -e "${GREEN}  │  API:  http://localhost:8080          │${NC}"
+echo -e "${GREEN}  │  App:  http://localhost:3000         │${NC}"
+echo -e "${GREEN}  │  API:  http://localhost:8080         │${NC}"
 echo -e "${GREEN}  │                                      │${NC}"
 echo -e "${GREEN}  │  Press Ctrl+C to stop                │${NC}"
 echo -e "${GREEN}  └──────────────────────────────────────┘${NC}"
