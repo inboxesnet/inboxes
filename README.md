@@ -46,7 +46,7 @@ Caddy handles HTTPS automatically via Let's Encrypt. Visit `https://your.domain.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DOMAIN` | Production | — | Your domain (e.g. `mail.example.com`) |
-| `ENCRYPTION_KEY` | Yes | — | `openssl rand -hex 32` |
+| `ENCRYPTION_KEY` | Yes | — | `openssl rand -base64 32` |
 | `SESSION_SECRET` | Yes | — | `openssl rand -hex 32` |
 | `DATABASE_URL` | No | `postgres://inboxes:inboxes@localhost:5432/inboxes?sslmode=disable` | PostgreSQL connection |
 | `REDIS_URL` | No | `redis://localhost:6379` | Redis connection |

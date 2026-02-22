@@ -192,7 +192,7 @@ else
 DATABASE_URL=postgres://inboxes:inboxes@localhost:5432/inboxes?sslmode=disable
 REDIS_URL=redis://localhost:6379
 SESSION_SECRET=$(openssl rand -hex 32)
-ENCRYPTION_KEY=$(openssl rand -hex 32)
+ENCRYPTION_KEY=$(openssl rand -base64 32)
 PUBLIC_URL=http://localhost:8080
 EOF
   info ".env created"

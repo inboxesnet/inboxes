@@ -4,6 +4,7 @@ set -euo pipefail
 # ─── Inboxes — Dev runner ────────────────────────────────────────────────────
 # Starts Postgres, Redis, backend, and frontend.
 # Ctrl+C stops everything cleanly.
+# Safe to run multiple times — kills previous instances first.
 # Usage: ./scripts/dev.sh
 
 RED='\033[0;31m'
@@ -63,6 +64,12 @@ kill_port() {
     warn "Killing existing process on port $port..."
     echo "$pids" | xargs kill 2>/dev/null || true
     sleep 1
+    # Force kill anything that didn't die gracefully
+    pids=$(lsof -ti :"$port" 2>/dev/null || true)
+    if [[ -n "$pids" ]]; then
+      echo "$pids" | xargs kill -9 2>/dev/null || true
+      sleep 1
+    fi
   fi
 }
 
@@ -76,8 +83,17 @@ FRONTEND_PID=""
 cleanup() {
   echo ""
   echo -e "${YELLOW}Shutting down...${NC}"
+
+  # Kill our direct children
   [[ -n "$BACKEND_PID" ]]  && kill "$BACKEND_PID"  2>/dev/null
   [[ -n "$FRONTEND_PID" ]] && kill "$FRONTEND_PID" 2>/dev/null
+
+  # Give them a moment, then force-kill anything still on our ports
+  # (Next.js spawns child processes that survive parent kill)
+  sleep 1
+  lsof -ti :8080 2>/dev/null | xargs kill -9 2>/dev/null || true
+  lsof -ti :3000 2>/dev/null | xargs kill -9 2>/dev/null || true
+
   wait 2>/dev/null
   info "Stopped."
   exit 0
