@@ -29,7 +29,7 @@ NC='\033[0m'
 
 info()  { echo -e "${GREEN}[✓]${NC} $1"; }
 warn()  { echo -ne "${YELLOW}[…]${NC} $1\r"; }
-done()  { echo -e "${GREEN}[✓]${NC} $1"; }
+ok()  { echo -e "${GREEN}[✓]${NC} $1"; }
 fail()  { echo -e "\n${RED}[✗]${NC} $1"; exit 1; }
 
 # Compare version strings: returns 0 if $1 >= $2
@@ -57,7 +57,7 @@ else
     warn "Cloning Inboxes into $INSTALL_DIR..."
     if git clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
       PROJECT_DIR="$INSTALL_DIR"
-      done "Cloned to $PROJECT_DIR"
+      ok "Cloned to $PROJECT_DIR"
     else
       echo ""
       fail "Could not clone $REPO_URL
@@ -80,7 +80,7 @@ if ! command -v brew &>/dev/null; then
   if [[ -f /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   fi
-  done "Homebrew installed"
+  ok "Homebrew installed"
 else
   info "Homebrew found"
 fi
@@ -96,7 +96,7 @@ if command -v go &>/dev/null; then
 else
   warn "Installing Go...                          "
   brew install go
-  done "Go installed"
+  ok "Go installed"
 fi
 
 # ─── 4. Node ─────────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ if command -v node &>/dev/null; then
 else
   warn "Installing Node...                        "
   brew install node
-  done "Node installed"
+  ok "Node installed"
 fi
 
 # ─── 5. PostgreSQL ───────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ if command -v psql &>/dev/null; then
 else
   warn "Installing PostgreSQL...                  "
   brew install postgresql@16
-  done "PostgreSQL installed"
+  ok "PostgreSQL installed"
 fi
 
 # ─── 6. Redis ────────────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ if command -v redis-cli &>/dev/null; then
 else
   warn "Installing Redis...                       "
   brew install redis
-  done "Redis installed"
+  ok "Redis installed"
 fi
 
 # ─── 7. Start services ──────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ else
   warn "Starting $PG_SERVICE...                   "
   brew services start "$PG_SERVICE"
   sleep 3
-  done "$PG_SERVICE started"
+  ok "$PG_SERVICE started"
 fi
 
 if brew services list | grep "redis" | grep -q started; then
@@ -163,7 +163,7 @@ else
   warn "Starting Redis...                         "
   brew services start redis
   sleep 2
-  done "Redis started"
+  ok "Redis started"
 fi
 
 # ─── 8. Database ─────────────────────────────────────────────────────────────
@@ -183,7 +183,7 @@ else
     GRANT ALL PRIVILEGES ON DATABASE inboxes TO inboxes;
     GRANT ALL ON SCHEMA public TO inboxes;
   " 2>/dev/null
-  done "Database 'inboxes' created"
+  ok "Database 'inboxes' created"
 fi
 
 # ─── 9. .env file ───────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ ENCRYPTION_KEY=$(openssl rand -base64 32)
 PUBLIC_URL=http://localhost:8080
 NEXT_PUBLIC_API_URL=http://localhost:8080
 EOF
-  done ".env created"
+  ok ".env created"
 fi
 
 # ─── 10. Frontend dependencies ──────────────────────────────────────────────
@@ -209,7 +209,7 @@ if [[ -d "$PROJECT_DIR/frontend/node_modules" ]]; then
 else
   warn "Installing frontend dependencies...       "
   (cd "$PROJECT_DIR/frontend" && npm install --silent 2>/dev/null)
-  done "Frontend dependencies installed"
+  ok "Frontend dependencies installed"
 fi
 
 # ─── Done ────────────────────────────────────────────────────────────────────
