@@ -34,12 +34,18 @@ if [[ ! -f "$PROJECT_DIR/.env" ]]; then
 fi
 
 # ─── Ensure services are running ─────────────────────────────────────────────
-if ! brew services list | grep "postgresql@16" | grep -q started; then
+PG_SERVICE="$(brew services list 2>/dev/null | grep -oE 'postgresql(@[0-9]+)?' | head -1 || echo "")"
+if [[ -z "$PG_SERVICE" ]]; then
+  echo -e "${RED}PostgreSQL not found. Run ./scripts/setup.sh first.${NC}"
+  exit 1
+fi
+
+if ! brew services list | grep "$PG_SERVICE" | grep -q started; then
   warn "Starting PostgreSQL..."
-  brew services start postgresql@16
+  brew services start "$PG_SERVICE"
   sleep 2
 fi
-info "PostgreSQL running"
+info "PostgreSQL running ($PG_SERVICE)"
 
 if ! brew services list | grep "redis" | grep -q started; then
   warn "Starting Redis..."
