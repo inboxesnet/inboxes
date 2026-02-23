@@ -179,7 +179,6 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		}
 		cursor = page.Data[len(page.Data)-1].ID
 		cfg.SentCursor = cursor
-		time.Sleep(600 * time.Millisecond)
 	}
 
 	emit(SyncProgress{Phase: "scanning", Message: fmt.Sprintf("Found %d sent. Scanning received emails...", len(allEmails))})
@@ -211,7 +210,6 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		}
 		cursor = page.Data[len(page.Data)-1].ID
 		cfg.ReceivedCursor = cursor
-		time.Sleep(600 * time.Millisecond)
 	}
 
 	// ── Phase 2: Import — one unified progress bar ──
@@ -265,7 +263,6 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 				email.Text = full.Text
 			}
 		}
-		time.Sleep(600 * time.Millisecond)
 
 		// Fetch attachments for this sent email
 		var attachmentsJSON []byte
@@ -279,7 +276,6 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		if attachmentsJSON == nil {
 			attachmentsJSON = []byte("[]")
 		}
-		time.Sleep(600 * time.Millisecond)
 
 		snippet := truncateRunes(email.Text, 200)
 
@@ -364,7 +360,6 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 				attachments = full.Attachments
 			}
 		}
-		time.Sleep(600 * time.Millisecond)
 
 		fromClean := ExtractEmail(email.From)
 		trackOwnAddresses(discoveredAddresses, email.To, domains)

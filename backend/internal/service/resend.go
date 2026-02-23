@@ -7,11 +7,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const resendBaseURL = "https://api.resend.com"
+
+// Global rate limiter: one Resend API call at a time, 600ms between calls.
+var resendMu sync.Mutex
+var resendLastCall time.Time
 
 type ResendService struct {
 	encSvc    *EncryptionService
@@ -51,6 +57,14 @@ func ResendDirectFetch(apiKey, method, path string, body interface{}) ([]byte, e
 }
 
 func doRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
+	// Global rate limit: wait until 600ms since last call
+	resendMu.Lock()
+	if elapsed := time.Since(resendLastCall); elapsed < 600*time.Millisecond {
+		time.Sleep(600*time.Millisecond - elapsed)
+	}
+	resendLastCall = time.Now()
+	resendMu.Unlock()
+
 	var reqBody io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)

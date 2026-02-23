@@ -4,6 +4,7 @@ frontend/node_modules/
 
 # Build outputs
 frontend/.next/
+frontend/test-results/
 backend/bin/
 backend/api
 
@@ -27,3 +28,6 @@ backend/tmp/
 
 # Misc
 *.log
+CODEBASE_BRIEFING_AGENT.md
+SUMMARY.md
+onboarding_flow_notes.md
