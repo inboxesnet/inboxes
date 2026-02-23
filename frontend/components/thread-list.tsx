@@ -40,10 +40,7 @@ function decodeHtmlEntities(text: string): string {
 
 function cleanSnippet(text: string): string {
   return decodeHtmlEntities(text)
-    .replace(/https?:\/\/\S+/g, "")   // strip URLs
-    .replace(/\[(?:image|img)\]/gi, "") // strip [image] tags
-    .replace(/\s*[\[\]()]\s*/g, " ")   // strip leftover brackets/parens
-    .replace(/\s{2,}/g, " ")           // collapse whitespace
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -114,7 +111,7 @@ function ThreadRow({
         }
       }}
       className={cn(
-        "group flex items-center gap-2 w-full text-left px-3 h-10 transition-colors cursor-pointer select-none overflow-hidden",
+        "group grid grid-cols-[14px_18px_160px_1fr_100px] md:grid-cols-[14px_18px_200px_1fr_100px] items-center gap-2 w-full text-left px-3 h-10 transition-colors cursor-pointer select-none overflow-hidden",
         isDragging && "opacity-50",
         isActive && "bg-accent",
         isSelected && !isActive && "bg-accent/60",
@@ -133,7 +130,7 @@ function ThreadRow({
         }}
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
-        className="h-3.5 w-3.5 rounded border-muted-foreground/40 shrink-0 cursor-pointer accent-primary"
+        className="h-3.5 w-3.5 rounded border-muted-foreground/40 cursor-pointer accent-primary"
       />
 
       {/* Star */}
@@ -143,7 +140,7 @@ function ThreadRow({
           onStar(thread.id);
         }}
         onPointerDown={(e) => e.stopPropagation()}
-        className="shrink-0 p-0.5 -m-0.5"
+        className="p-0.5 -m-0.5"
       >
         <Star
           className={cn(
@@ -158,7 +155,7 @@ function ThreadRow({
       {/* Sender / Recipient */}
       <span
         className={cn(
-          "w-[160px] md:w-[200px] shrink-0 text-sm truncate",
+          "text-sm truncate",
           isUnread ? "font-semibold" : "font-normal"
         )}
       >
@@ -172,26 +169,17 @@ function ThreadRow({
       </span>
 
       {/* Subject — snippet */}
-      {(() => {
-        const maxTotal = 110;
-        const subjectText = thread.subject.length > 55 ? thread.subject.slice(0, 55) + "…" : thread.subject;
-        const snippetBudget = maxTotal - Math.min(thread.subject.length, 55);
-        const cleaned = thread.snippet ? cleanSnippet(thread.snippet) : "";
-        const snippetText = cleaned.length > snippetBudget ? cleaned.slice(0, snippetBudget) + "…" : cleaned;
-        return (
-          <div className="flex-1 min-w-0 text-sm truncate">
-            <span className={isUnread ? "font-medium" : ""}>{subjectText}</span>
-            {snippetText && (
-              <span className="text-muted-foreground hidden md:inline">
-                {" — "}{snippetText}
-              </span>
-            )}
-          </div>
-        );
-      })()}
+      <div className="min-w-0 text-sm truncate">
+        <span className={isUnread ? "font-medium" : ""}>{thread.subject}</span>
+        {thread.snippet && (
+          <span className="text-muted-foreground hidden md:inline">
+            {" — "}{cleanSnippet(thread.snippet)}
+          </span>
+        )}
+      </div>
 
       {/* Time (default) / Hover actions */}
-      <div className="shrink-0 w-[100px] flex items-center justify-end">
+      <div className="flex items-center justify-end">
         {/* Time - visible by default, hidden on hover */}
         <span className="text-xs text-muted-foreground group-hover:hidden whitespace-nowrap">
           {formatThreadTime(thread.last_message_at)}
