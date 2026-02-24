@@ -107,6 +107,7 @@ set +a
 
 # Ensure frontend knows where the backend is
 export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:8080}"
+export BACKEND_URL="${BACKEND_URL:-http://localhost:8080}"
 
 # ─── Start backend ───────────────────────────────────────────────────────────
 echo ""
