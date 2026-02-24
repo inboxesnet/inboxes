@@ -178,8 +178,6 @@ export default function OnboardingPage() {
       });
       // Set up webhook in background — don't block the user
       api.post("/api/onboarding/webhook").catch(() => {});
-      // Auto-trigger sync before transitioning to the sync step
-      startSync();
       setStep("sync");
     } catch (err) {
       setError(
