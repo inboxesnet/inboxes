@@ -23,8 +23,9 @@ import (
 )
 
 type WebhookHandler struct {
-	DB  *pgxpool.Pool
-	Bus *event.Bus
+	DB        *pgxpool.Pool
+	Bus       *event.Bus
+	ResendSvc *service.ResendService
 }
 
 type webhookPayload struct {
@@ -153,6 +154,43 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 		return
 	}
 
+	// Fetch full email (body, headers, attachments) from Resend API —
+	// the webhook payload only contains metadata, not the actual content.
+	type resendFullEmail struct {
+		HTML        string            `json:"html"`
+		Text        string            `json:"text"`
+		Headers     map[string]string `json:"headers"`
+		ReplyTo     []string          `json:"reply_to"`
+		Attachments []struct {
+			Filename    string `json:"filename"`
+			ContentType string `json:"content_type"`
+			Size        int    `json:"size"`
+			URL         string `json:"url"`
+		} `json:"attachments"`
+	}
+	var full resendFullEmail
+	bodyData, err := h.ResendSvc.Fetch(ctx, orgID, "GET", "/emails/receiving/"+emailData.EmailID, nil)
+	if err != nil {
+		slog.Error("webhook: fetch full email from Resend", "error", err, "email_id", emailData.EmailID)
+		// Fall back to whatever the webhook payload contained (likely empty)
+	} else {
+		if err := json.Unmarshal(bodyData, &full); err != nil {
+			slog.Error("webhook: parse full email response", "error", err)
+		}
+	}
+
+	// Merge fetched data — prefer API response over webhook payload
+	bodyHTML := full.HTML
+	bodyPlain := full.Text
+	headers := full.Headers
+	if headers == nil {
+		headers = emailData.Headers
+	}
+	replyTo := full.ReplyTo
+	if replyTo == nil {
+		replyTo = emailData.ReplyTo
+	}
+
 	// 3-phase routing: direct user -> alias -> catch-all
 	userID := h.routeEmail(ctx, orgID, domainID, recipientAddress)
 	if userID == "" {
@@ -161,7 +199,7 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 	}
 
 	// Spam classification
-	spamResult := service.ClassifySpam(emailData.Headers, emailData.From, emailData.Subject, emailData.Text)
+	spamResult := service.ClassifySpam(headers, emailData.From, emailData.Subject, bodyPlain)
 	folder := "inbox"
 	if spamResult.IsSpam {
 		folder = "spam"
@@ -176,12 +214,12 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 	var threadID string
 	found := false
 
-	snippet := truncateRunes(emailData.Text, 200)
+	snippet := truncateRunes(bodyPlain, 200)
 
 	// Step 1: Match by In-Reply-To header
 	inReplyToHeader := ""
-	if emailData.Headers != nil {
-		inReplyToHeader = emailData.Headers["In-Reply-To"]
+	if headers != nil {
+		inReplyToHeader = headers["In-Reply-To"]
 	}
 	if inReplyToHeader != "" {
 		err := h.DB.QueryRow(ctx,
@@ -222,16 +260,22 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 	toJSON, _ := json.Marshal(emailData.To)
 	ccJSON, _ := json.Marshal(emailData.CC)
 	bccJSON, _ := json.Marshal(emailData.BCC)
-	replyToJSON, _ := json.Marshal(emailData.ReplyTo)
-	headersJSON, _ := json.Marshal(emailData.Headers)
+	replyToJSON, _ := json.Marshal(replyTo)
+	headersJSON, _ := json.Marshal(headers)
 	spamReasons, _ := json.Marshal(spamResult.Reasons)
+
+	// Build attachments JSON from API response
+	attachmentsJSON := []byte("[]")
+	if len(full.Attachments) > 0 {
+		attachmentsJSON, _ = json.Marshal(full.Attachments)
+	}
 
 	// Extract threading headers
 	var inReplyTo string
 	var refsJSON []byte
-	if emailData.Headers != nil {
-		inReplyTo = emailData.Headers["In-Reply-To"]
-		if refs, ok := emailData.Headers["References"]; ok {
+	if headers != nil {
+		inReplyTo = headers["In-Reply-To"]
+		if refs, ok := headers["References"]; ok {
 			refsJSON, _ = json.Marshal(strings.Fields(refs))
 		}
 	}
@@ -244,14 +288,14 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, message_id,
 		 direction, from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses,
 		 subject, body_html, body_plain, status, headers, in_reply_to, references_header,
-		 spam_score, spam_reasons)
+		 spam_score, spam_reasons, attachments)
 		 VALUES ($1, $2, $3, $4, $5, $6, 'inbound', $7, $8, $9, $10, $11, $12, $13, $14, 'received',
-		 $15, $16, $17, $18, $19)
+		 $15, $16, $17, $18, $19, $20)
 		 RETURNING id`,
 		threadID, userID, orgID, domainID, emailData.EmailID, emailData.MessageID,
 		emailData.From, toJSON, ccJSON, bccJSON, replyToJSON,
-		emailData.Subject, emailData.HTML, emailData.Text,
-		headersJSON, inReplyTo, refsJSON, spamResult.Score, spamReasons,
+		emailData.Subject, bodyHTML, bodyPlain,
+		headersJSON, inReplyTo, refsJSON, spamResult.Score, spamReasons, attachmentsJSON,
 	).Scan(&emailID)
 
 	// Update thread stats and snippet

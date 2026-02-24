@@ -87,6 +87,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
       sensors={sensors}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      accessibility={{ screenReaderInstructions: { draggable: "" } }}
     >
       <div className="flex h-screen">
         <DomainSidebar onCompose={handleCompose} onOpenSettings={() => setSettingsOpen(true)} />

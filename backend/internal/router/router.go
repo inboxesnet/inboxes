@@ -39,7 +39,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	auth := &handler.AuthHandler{DB: db, Secret: secret, AppURL: appURL, ResendSvc: resendSvc, StripeKey: stripeKey}
 	threads := &handler.ThreadHandler{DB: db, Bus: bus}
 	emails := &handler.EmailHandler{DB: db, ResendSvc: resendSvc, Bus: bus}
-	webhooks := &handler.WebhookHandler{DB: db, Bus: bus}
+	webhooks := &handler.WebhookHandler{DB: db, Bus: bus, ResendSvc: resendSvc}
 	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus, PublicURL: cfg.PublicURL}
 	users := &handler.UserHandler{DB: db, ResendSvc: resendSvc}
 	aliases := &handler.AliasHandler{DB: db}
