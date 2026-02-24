@@ -9,7 +9,6 @@ type Config struct {
 	DatabaseURL       string
 	RedisURL          string
 	EncryptionKey     string
-	ResendSystemKey   string
 	SessionSecret     string
 	AppURL            string
 	PublicURL         string
@@ -26,7 +25,6 @@ func Load() (*Config, error) {
 		DatabaseURL:     getEnv("DATABASE_URL", "postgres://inboxes:inboxes@localhost:5432/inboxes?sslmode=disable"),
 		RedisURL:        getEnv("REDIS_URL", "redis://localhost:6379"),
 		EncryptionKey:   os.Getenv("ENCRYPTION_KEY"),
-		ResendSystemKey: os.Getenv("RESEND_SYSTEM_API_KEY"),
 		SessionSecret:   os.Getenv("SESSION_SECRET"),
 		AppURL:          getEnv("APP_URL", "http://localhost:3000"),
 		PublicURL:       getEnv("PUBLIC_URL", "http://localhost:8080"),

@@ -192,11 +192,13 @@ if [[ -f "$ENV_FILE" ]]; then
   info ".env already exists (not overwriting)"
 else
   warn "Generating .env...                        "
+  SESSION_SECRET="$(openssl rand -hex 32)"
+  ENCRYPTION_KEY="$(openssl rand -base64 32)"
   cat > "$ENV_FILE" <<EOF
 DATABASE_URL=postgres://inboxes:inboxes@localhost:5432/inboxes?sslmode=disable
 REDIS_URL=redis://localhost:6379
-SESSION_SECRET=$(openssl rand -hex 32)
-ENCRYPTION_KEY=$(openssl rand -base64 32)
+SESSION_SECRET="${SESSION_SECRET}"
+ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 PUBLIC_URL=http://localhost:8080
 NEXT_PUBLIC_API_URL=http://localhost:8080
 EOF
