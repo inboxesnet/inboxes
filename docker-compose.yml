@@ -51,25 +51,23 @@ services:
       NEXT_PUBLIC_API_URL: https://${DOMAIN}
       NEXT_PUBLIC_WS_URL: wss://${DOMAIN}
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    depends_on:
-      - backend
-      - frontend
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    environment:
-      DOMAIN: ${DOMAIN}
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #     - "443:443/udp"
+  #   depends_on:
+  #     - backend
+  #     - frontend
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+  #   environment:
+  #     DOMAIN: ${DOMAIN}
 
 volumes:
   postgres_data:
   redis_data:
-  caddy_data:
-  caddy_config:
