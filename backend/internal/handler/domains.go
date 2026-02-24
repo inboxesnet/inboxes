@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -161,6 +162,8 @@ func (h *DomainHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slog.Info("domain: created", "domain", req.Domain, "domain_id", domainID, "resend_domain_id", resendDomain.ID)
+
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":               domainID,
 		"domain":           req.Domain,
@@ -197,9 +200,13 @@ func (h *DomainHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(respBytes, &result)
 
 	// Update local record
-	h.DB.Exec(r.Context(),
+	if _, err := h.DB.Exec(r.Context(),
 		`UPDATE domains SET status = $1, dns_records = $2, updated_at = now() WHERE id = $3`,
-		result.Status, result.Records, domainID)
+		result.Status, result.Records, domainID); err != nil {
+		slog.Error("domain: update after verify failed", "domain_id", domainID, "error", err)
+	}
+
+	slog.Info("domain: verified", "domain_id", domainID, "status", result.Status)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":      result.Status,

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -114,6 +115,8 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slog.Info("auth: signup", "email", req.Email, "org_id", orgID)
+
 	// If hosted, generate verification code and send email
 	if h.StripeKey != "" {
 		code := generateVerificationCode()
@@ -190,21 +193,25 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		req.Email,
 	).Scan(&userID, &orgID, &name, &role, &status, &passwordHash, &emailVerified)
 	if err != nil {
+		slog.Warn("auth: login failed", "email", req.Email, "reason", "user not found")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 	if status != "active" {
+		slog.Warn("auth: login failed", "email", req.Email, "reason", "inactive account")
 		writeError(w, http.StatusUnauthorized, "account is not active")
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+		slog.Warn("auth: login failed", "email", req.Email, "reason", "bad password")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	// In hosted mode, require email verification
 	if h.StripeKey != "" && !emailVerified {
+		slog.Warn("auth: login failed", "email", req.Email, "reason", "email not verified")
 		writeError(w, http.StatusForbidden, "email_not_verified")
 		return
 	}
@@ -215,6 +222,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	middleware.SetTokenCookie(w, token, h.AppURL)
+
+	slog.Info("auth: login", "email", req.Email)
 
 	var onboardingCompleted bool
 	h.DB.QueryRow(ctx, "SELECT onboarding_completed FROM orgs WHERE id = $1", orgID).Scan(&onboardingCompleted)
@@ -262,6 +271,8 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"message": "if that email exists, a reset link has been sent"})
 		return
 	}
+
+	slog.Info("auth: password reset requested", "email", req.Email)
 
 	// Send reset email via system Resend key
 	resetURL := h.AppURL + "/reset-password?token=" + resetToken

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -51,6 +52,8 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	slog.Info("email: sending", "from", req.From, "to", req.To, "subject", req.Subject, "domain_id", req.DomainID)
+
 	// Resolve display name for From field
 	fromDisplay := resolveFromDisplay(ctx, h.DB, claims.OrgID, req.From)
 
@@ -83,6 +86,7 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	data, err := h.ResendSvc.Fetch(ctx, claims.OrgID, "POST", "/emails", resendPayload)
 	if err != nil {
+		slog.Error("email: send failed", "from", req.From, "to", req.To, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to send email: "+err.Error())
 		return
 	}
@@ -90,17 +94,22 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	var resendResp struct {
 		ID string `json:"id"`
 	}
-	json.Unmarshal(data, &resendResp)
+	if err := json.Unmarshal(data, &resendResp); err != nil {
+		slog.Error("email: parse resend response", "error", err, "body", string(data))
+	}
+	slog.Info("email: sent via resend", "resend_email_id", resendResp.ID)
 
 	// Determine domain_id
 	domainID := req.DomainID
 	if domainID == "" {
 		parts := strings.Split(req.From, "@")
 		if len(parts) == 2 {
-			h.DB.QueryRow(ctx,
+			if err := h.DB.QueryRow(ctx,
 				"SELECT id FROM domains WHERE org_id = $1 AND domain = $2",
 				claims.OrgID, parts[1],
-			).Scan(&domainID)
+			).Scan(&domainID); err != nil {
+				slog.Warn("email: domain lookup failed", "domain", parts[1], "error", err)
+			}
 		}
 	}
 
@@ -114,11 +123,13 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Create new thread
 		participants, _ := json.Marshal(append([]string{req.From}, req.To...))
-		h.DB.QueryRow(ctx,
+		if err := h.DB.QueryRow(ctx,
 			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, folder, snippet)
 			 VALUES ($1, $2, $3, $4, $5, 'sent', $6) RETURNING id`,
 			claims.OrgID, claims.UserID, domainID, req.Subject, participants, snippet,
-		).Scan(&threadID)
+		).Scan(&threadID); err != nil {
+			slog.Error("email: create thread failed", "error", err)
+		}
 	}
 
 	// Store email
@@ -128,7 +139,7 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	refsJSON, _ := json.Marshal(req.References)
 
 	var emailID string
-	h.DB.QueryRow(ctx,
+	if err := h.DB.QueryRow(ctx,
 		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, direction,
 		 from_address, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_plain,
 		 status, in_reply_to, references_header)
@@ -137,13 +148,19 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		threadID, claims.UserID, claims.OrgID, domainID, resendResp.ID,
 		req.From, toJSON, ccJSON, bccJSON, req.Subject, req.HTML, req.Text,
 		req.InReplyTo, refsJSON,
-	).Scan(&emailID)
+	).Scan(&emailID); err != nil {
+		slog.Error("email: insert email failed", "thread_id", threadID, "resend_email_id", resendResp.ID, "error", err)
+	}
 
 	// Update thread stats and snippet
-	h.DB.Exec(ctx,
+	if _, err := h.DB.Exec(ctx,
 		`UPDATE threads SET message_count = message_count + 1, last_message_at = now(), snippet = $2, updated_at = now()
 		 WHERE id = $1`, threadID, snippet,
-	)
+	); err != nil {
+		slog.Error("email: update thread failed", "thread_id", threadID, "error", err)
+	}
+
+	slog.Info("email: stored", "email_id", emailID, "thread_id", threadID, "resend_email_id", resendResp.ID)
 
 	h.Bus.Publish(ctx, event.Event{
 		EventType: event.EmailSent,

@@ -249,11 +249,14 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 	// Step 3: Create new thread
 	if !found {
 		participants, _ := json.Marshal(append([]string{emailData.From}, emailData.To...))
-		h.DB.QueryRow(ctx,
+		if err := h.DB.QueryRow(ctx,
 			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, folder, original_to, snippet)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
 			orgID, userID, domainID, cleanSubject, participants, folder, recipientAddress, snippet,
-		).Scan(&threadID)
+		).Scan(&threadID); err != nil {
+			slog.Error("webhook: create thread failed", "org_id", orgID, "from", emailData.From, "error", err)
+			return
+		}
 	}
 
 	// Insert email with all available fields
@@ -284,7 +287,7 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 	}
 
 	var emailID string
-	h.DB.QueryRow(ctx,
+	if err := h.DB.QueryRow(ctx,
 		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, message_id,
 		 direction, from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses,
 		 subject, body_html, body_plain, status, headers, in_reply_to, references_header,
@@ -296,13 +299,20 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 		emailData.From, toJSON, ccJSON, bccJSON, replyToJSON,
 		emailData.Subject, bodyHTML, bodyPlain,
 		headersJSON, inReplyTo, refsJSON, spamResult.Score, spamReasons, attachmentsJSON,
-	).Scan(&emailID)
+	).Scan(&emailID); err != nil {
+		slog.Error("webhook: insert email failed", "thread_id", threadID, "resend_email_id", emailData.EmailID, "error", err)
+		return
+	}
 
 	// Update thread stats and snippet
-	h.DB.Exec(ctx,
+	if _, err := h.DB.Exec(ctx,
 		`UPDATE threads SET message_count = message_count + 1, unread_count = unread_count + 1,
 		 last_message_at = now(), snippet = $2, updated_at = now() WHERE id = $1`, threadID, snippet,
-	)
+	); err != nil {
+		slog.Error("webhook: update thread failed", "thread_id", threadID, "error", err)
+	}
+
+	slog.Info("webhook: email processed", "email_id", emailID, "thread_id", threadID, "folder", folder, "from", emailData.From, "resend_email_id", emailData.EmailID)
 
 	// Publish event
 	h.Bus.Publish(ctx, event.Event{
@@ -323,19 +333,26 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 func (h *WebhookHandler) handleEmailStatus(ctx context.Context, orgID, status string, data json.RawMessage) {
 	var statusData emailStatusData
 	if err := json.Unmarshal(data, &statusData); err != nil {
+		slog.Error("webhook: parse status event", "status", status, "error", err)
 		return
 	}
 
 	var threadID, domainID string
-	h.DB.QueryRow(ctx,
+	if err := h.DB.QueryRow(ctx,
 		"SELECT thread_id, domain_id FROM emails WHERE resend_email_id = $1",
 		statusData.EmailID,
-	).Scan(&threadID, &domainID)
+	).Scan(&threadID, &domainID); err != nil {
+		slog.Warn("webhook: email not found for status update", "resend_email_id", statusData.EmailID, "status", status)
+	}
 
-	h.DB.Exec(ctx,
+	if _, err := h.DB.Exec(ctx,
 		"UPDATE emails SET status = $1, updated_at = now() WHERE resend_email_id = $2",
 		status, statusData.EmailID,
-	)
+	); err != nil {
+		slog.Error("webhook: update email status failed", "resend_email_id", statusData.EmailID, "status", status, "error", err)
+	}
+
+	slog.Info("webhook: status update", "resend_email_id", statusData.EmailID, "status", status)
 
 	h.Bus.Publish(ctx, event.Event{
 		EventType: event.EmailStatusUpdated,

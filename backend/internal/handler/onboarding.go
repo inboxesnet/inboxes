@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -173,6 +174,8 @@ func (h *OnboardingHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	slog.Info("onboarding: connected", "org_id", claims.OrgID, "domains_imported", len(domains))
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"domains": domains,
 	})
@@ -257,9 +260,12 @@ func (h *OnboardingHandler) SetupWebhook(w http.ResponseWriter, r *http.Request)
 		webhookResp.ID, webhookResp.Secret, claims.OrgID,
 	)
 	if err != nil {
+		slog.Error("onboarding: store webhook config failed", "org_id", claims.OrgID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to store webhook config")
 		return
 	}
+
+	slog.Info("onboarding: webhook registered", "org_id", claims.OrgID, "webhook_id", webhookResp.ID, "webhook_url", webhookURL)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"webhook_id":  webhookResp.ID,
@@ -440,6 +446,8 @@ func (h *OnboardingHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		"SELECT id FROM domains WHERE org_id = $1 AND hidden = false ORDER BY display_order LIMIT 1",
 		claims.OrgID,
 	).Scan(&firstDomainID)
+
+	slog.Info("onboarding: completed", "org_id", claims.OrgID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message":         "onboarding completed",

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +59,9 @@ func ResendDirectFetch(apiKey, method, path string, body interface{}) ([]byte, e
 }
 
 func doRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
+	// Extract path for logging (strip base URL, never log full URL with key params)
+	path := strings.TrimPrefix(url, resendBaseURL)
+
 	// Global rate limit: wait until 600ms since last call
 	resendMu.Lock()
 	if elapsed := time.Since(resendLastCall); elapsed < 600*time.Millisecond {
@@ -64,6 +69,8 @@ func doRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
 	}
 	resendLastCall = time.Now()
 	resendMu.Unlock()
+
+	slog.Info("resend: request", "method", method, "path", path)
 
 	var reqBody io.Reader
 	if body != nil {
@@ -82,6 +89,7 @@ func doRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		slog.Error("resend: request failed", "method", method, "path", path, "error", err)
 		return nil, fmt.Errorf("resend: request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -91,7 +99,16 @@ func doRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("resend: read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		slog.Error("resend: error response", "method", method, "path", path, "status", resp.StatusCode, "body", string(respBody))
 		return nil, fmt.Errorf("resend: %d: %s", resp.StatusCode, string(respBody))
 	}
+
+	// Truncate response body for success logging (max 500 chars)
+	logBody := string(respBody)
+	if len(logBody) > 500 {
+		logBody = logBody[:500] + "..."
+	}
+	slog.Info("resend: response", "method", method, "path", path, "status", resp.StatusCode, "body", logBody)
+
 	return respBody, nil
 }
