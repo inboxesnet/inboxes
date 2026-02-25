@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect } from "react";
+import DOMPurify from "dompurify";
 
 interface TipTapEditorProps {
   content?: string;
@@ -23,6 +24,12 @@ interface TipTapEditorProps {
   onChange?: (html: string, plain: string) => void;
   autofocus?: boolean;
   className?: string;
+  /** Rendered left of formatting buttons (e.g. Send button) */
+  toolbarLeft?: React.ReactNode;
+  /** Rendered at the far right of the toolbar (e.g. Discard) */
+  toolbarRight?: React.ReactNode;
+  /** Quoted text shown as read-only preview below editor content */
+  quotedHtml?: string;
 }
 
 export function TipTapEditor({
@@ -31,6 +38,9 @@ export function TipTapEditor({
   onChange,
   autofocus = false,
   className,
+  toolbarLeft,
+  toolbarRight,
+  quotedHtml,
 }: TipTapEditorProps) {
   const editor = useEditor({
     immediatelyRender: false,
@@ -49,7 +59,7 @@ export function TipTapEditor({
     autofocus,
     editorProps: {
       attributes: {
-        class: "prose prose-sm max-w-none focus:outline-none min-h-[120px] px-3 py-2",
+        class: "text-[13px] leading-relaxed max-w-none focus:outline-none min-h-[120px] px-3 py-2 [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary [&_a]:underline",
       },
     },
     onUpdate: ({ editor }) => {
@@ -67,9 +77,27 @@ export function TipTapEditor({
   if (!editor) return null;
 
   return (
-    <div className={cn("border rounded-md overflow-hidden", className)}>
+    <div className={cn("border rounded-md overflow-hidden flex flex-col", className)}>
+      {/* Editor + quoted text share scrollable area */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        <EditorContent editor={editor} />
+        {quotedHtml && (
+          <div
+            className="text-xs text-muted-foreground border-l-2 border-muted pl-3 mx-3 mb-2 max-h-[200px] overflow-y-auto"
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(quotedHtml, {
+                ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
+                ALLOWED_ATTR: ["href"],
+              }),
+            }}
+          />
+        )}
+      </div>
+
       {/* Toolbar */}
-      <div className="flex items-center gap-0.5 border-b px-1 py-1 bg-muted/30">
+      <div className="flex items-center gap-0.5 border-t px-1 py-1 bg-muted/30 shrink-0">
+        {toolbarLeft}
+        {toolbarLeft && <div className="w-px h-5 bg-border mx-1" />}
         <ToolbarButton
           active={editor.isActive("bold")}
           onClick={() => editor.chain().focus().toggleBold().run()}
@@ -128,10 +156,9 @@ export function TipTapEditor({
         >
           <Quote className="h-3.5 w-3.5" />
         </ToolbarButton>
+        {toolbarRight && <div className="flex-1" />}
+        {toolbarRight}
       </div>
-
-      {/* Editor */}
-      <EditorContent editor={editor} />
     </div>
   );
 }

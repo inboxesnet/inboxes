@@ -111,7 +111,7 @@ function ThreadRow({
         }
       }}
       className={cn(
-        "group grid grid-cols-[14px_18px_160px_1fr_100px] md:grid-cols-[14px_18px_200px_1fr_100px] items-center gap-2 w-full text-left px-3 h-10 transition-colors cursor-pointer select-none overflow-hidden",
+        "group grid grid-cols-[14px_16px_1fr_auto] md:grid-cols-[14px_16px_200px_1fr_100px] items-center gap-1.5 w-full text-left px-3 h-14 md:h-10 transition-colors cursor-pointer select-none overflow-hidden",
         isDragging && "opacity-50",
         isActive && "bg-accent",
         isSelected && !isActive && "bg-accent/60",
@@ -120,7 +120,7 @@ function ThreadRow({
         !isActive && !isSelected && !isUnread && "hover:bg-muted/50"
       )}
     >
-      {/* Checkbox */}
+      {/* Checkbox — hidden on mobile */}
       <input
         type="checkbox"
         checked={isSelected}
@@ -152,10 +152,33 @@ function ThreadRow({
         />
       </button>
 
-      {/* Sender / Recipient */}
+      {/* Mobile: two-line layout */}
+      <div className="min-w-0 md:hidden flex flex-col justify-center gap-0.5">
+        <div className="flex items-baseline min-w-0">
+          <span className={cn("text-sm truncate", isUnread ? "font-semibold" : "font-normal")}>
+            {folder === "sent" && <span className="text-muted-foreground font-normal">To </span>}
+            {displayName}
+          </span>
+          {thread.message_count > 1 && (
+            <span className="text-xs text-muted-foreground ml-1 shrink-0">
+              ({thread.message_count})
+            </span>
+          )}
+        </div>
+        <div className="text-xs truncate">
+          <span className={isUnread ? "font-medium text-foreground" : "text-muted-foreground"}>{thread.subject}</span>
+          {thread.snippet && (
+            <span className="text-muted-foreground/60">
+              {" — "}{cleanSnippet(thread.snippet)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Desktop: Sender / Recipient */}
       <span
         className={cn(
-          "text-sm truncate",
+          "hidden md:inline text-sm truncate",
           isUnread ? "font-semibold" : "font-normal"
         )}
       >
@@ -168,25 +191,25 @@ function ThreadRow({
         )}
       </span>
 
-      {/* Subject — snippet */}
-      <div className="min-w-0 text-sm truncate">
-        <span className={isUnread ? "font-medium" : ""}>{thread.subject}</span>
+      {/* Desktop: Subject — snippet */}
+      <div className="hidden md:block min-w-0 text-sm truncate">
+        <span className={isUnread ? "font-semibold text-foreground" : ""}>{thread.subject}</span>
         {thread.snippet && (
-          <span className="text-muted-foreground hidden md:inline">
+          <span className="text-muted-foreground/70">
             {" — "}{cleanSnippet(thread.snippet)}
           </span>
         )}
       </div>
 
-      {/* Time (default) / Hover actions */}
+      {/* Time / Hover actions */}
       <div className="flex items-center justify-end">
-        {/* Time - visible by default, hidden on hover */}
-        <span className="text-xs text-muted-foreground group-hover:hidden whitespace-nowrap">
+        {/* Time — always visible on mobile, hidden on desktop hover */}
+        <span className="text-xs text-muted-foreground md:group-hover:hidden whitespace-nowrap">
           {formatThreadTime(thread.last_message_at)}
         </span>
 
-        {/* Actions - hidden by default, visible on hover */}
-        <div className="hidden group-hover:flex items-center gap-1">
+        {/* Actions — desktop hover only */}
+        <div className="hidden md:group-hover:flex items-center gap-1">
           {folder !== "archive" && (
             <button
               title="Archive"

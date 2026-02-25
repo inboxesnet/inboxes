@@ -22,6 +22,7 @@ import { NotificationListener } from "@/components/notification-listener";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { DragPreview } from "@/components/drag-preview";
 import { Spinner } from "@/components/ui/spinner";
+import { Menu } from "lucide-react";
 import type { Thread } from "@/lib/types";
 
 function DomainLayoutInner({ children }: { children: React.ReactNode }) {
@@ -30,6 +31,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
   const { setActiveDomainId, loading } = useDomains();
   const { openCompose } = useEmailWindow();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [draggedThread, setDraggedThread] = useState<Thread | null>(null);
 
   const mouseSensor = useSensor(MouseSensor, {
@@ -76,7 +78,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center h-dvh">
         <Spinner className="h-8 w-8" />
       </div>
     );
@@ -89,9 +91,39 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
       onDragEnd={handleDragEnd}
       accessibility={{ screenReaderInstructions: { draggable: "" } }}
     >
-      <div className="flex h-screen">
-        <DomainSidebar onCompose={handleCompose} onOpenSettings={() => setSettingsOpen(true)} />
-        <main className="flex-1 overflow-hidden">{children}</main>
+      <div className="flex h-dvh">
+        {/* Mobile sidebar overlay */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-40 md:hidden">
+            <div
+              className="absolute inset-0 bg-black/50"
+              onClick={() => setSidebarOpen(false)}
+            />
+            <div className="relative z-10 h-full shadow-xl">
+              <DomainSidebar
+                onCompose={handleCompose}
+                onOpenSettings={() => setSettingsOpen(true)}
+                onCloseSidebar={() => setSidebarOpen(false)}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Desktop sidebar */}
+        <div className="hidden md:flex">
+          <DomainSidebar onCompose={handleCompose} onOpenSettings={() => setSettingsOpen(true)} />
+        </div>
+
+        <main className="flex-1 overflow-hidden relative">
+          {/* Mobile hamburger */}
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="absolute top-3.5 left-3 z-30 p-1.5 rounded-md hover:bg-muted md:hidden"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          {children}
+        </main>
         <FloatingComposeWindow />
         <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
         <NotificationListener />

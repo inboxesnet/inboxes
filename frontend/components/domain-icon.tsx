@@ -31,17 +31,12 @@ export function DomainIcon({
           "flex items-center justify-center font-semibold text-white transition-all duration-200",
           getDomainColor(domain),
           sizeClasses[size],
-          active ? "rounded-2xl" : "rounded-[24px] hover:rounded-2xl"
+          active ? "rounded-2xl ring-2 ring-foreground ring-offset-2 ring-offset-background" : "rounded-[24px] hover:rounded-2xl"
         )}
         title={domain}
       >
         {getInitials(domain)}
       </button>
-
-      {/* Active indicator pill */}
-      {active && (
-        <div className="absolute left-0 top-1/2 -translate-x-[calc(100%+4px)] -translate-y-1/2 w-1 h-8 bg-foreground rounded-r-full" />
-      )}
 
       {/* Unread dot */}
       {hasUnread && !active && (

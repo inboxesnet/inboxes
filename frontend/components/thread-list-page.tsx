@@ -149,7 +149,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
   const listPane = (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="h-14 flex items-center px-4 border-b shrink-0 gap-2">
+      <div className="h-14 flex items-center pl-14 md:pl-4 pr-4 border-b shrink-0 gap-2">
         <form
           className="flex-1 flex items-center gap-2 max-w-md"
           onSubmit={(e) => {
@@ -214,6 +214,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
           {/* Toolbar */}
           <ThreadToolbar
             folder={folder}
+            title={title}
             threads={threads}
             selectedIds={selection.selectedIds}
             allSelected={selection.allSelected}
@@ -274,12 +275,12 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
       }}
     >
       <div className="h-full flex">
-        {/* List pane */}
-        <div className={`${selectedThreadId ? "w-[400px] shrink-0 border-r" : "flex-1"} h-full`}>
+        {/* List pane — hidden on mobile when a thread is selected */}
+        <div className={`${selectedThreadId ? "hidden md:block w-full md:w-[350px] md:shrink-0 md:border-r" : "flex-1"} h-full`}>
           {listPane}
         </div>
 
-        {/* Detail pane */}
+        {/* Detail pane — full-width on mobile */}
         {selectedThreadId && (
           <div className="flex-1 h-full overflow-hidden">
             <ThreadView

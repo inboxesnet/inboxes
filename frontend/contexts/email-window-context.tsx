@@ -14,6 +14,12 @@ interface ComposeData {
   bccAddresses?: string[];
   bodyHtml?: string;
   bodyPlain?: string;
+  /** Quoted text shown as read-only preview below the editor (replies/forwards) */
+  quotedHtml?: string;
+  // Reply threading
+  replyToThreadId?: string;
+  inReplyTo?: string;
+  references?: string[];
 }
 
 interface EmailWindowContextValue {

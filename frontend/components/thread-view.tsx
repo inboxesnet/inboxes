@@ -5,13 +5,11 @@ import DOMPurify from "dompurify";
 import { api } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/utils";
 import { useDomains } from "@/contexts/domain-context";
+import { useEmailWindow } from "@/contexts/email-window-context";
 import { useThread, useStarThread, useThreadAction } from "@/hooks/use-threads";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
-import { TipTapEditor } from "@/components/tiptap-editor";
-import { RecipientInput } from "@/components/recipient-input";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import {
   AlertTriangle,
@@ -24,10 +22,7 @@ import {
   ReplyAll,
   Forward,
   ArrowLeft,
-  ChevronDown,
-  Send,
   Inbox,
-  X,
 } from "lucide-react";
 import { ContactCard } from "@/components/contact-card";
 import type { Thread, Email } from "@/lib/types";
@@ -39,7 +34,12 @@ interface ThreadViewProps {
   onBack?: () => void;
 }
 
-type ReplyMode = "reply" | "replyAll" | "forward" | null;
+function formatSenderName(email: string): string {
+  const local = email.split("@")[0] || email;
+  return local
+    .replace(/[._-]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export function ThreadView({
   threadId,
@@ -49,12 +49,10 @@ export function ThreadView({
 }: ThreadViewProps) {
   const { data: thread, isLoading } = useThread(threadId);
   const { activeDomain } = useDomains();
+  const { openCompose } = useEmailWindow();
   const qc = useQueryClient();
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const lastMessageRef = useRef<HTMLDivElement>(null);
   const markedReadRef = useRef<string | null>(null);
-  const [showCollapsed, setShowCollapsed] = useState(false);
-  const [replyMode, setReplyMode] = useState<ReplyMode>(null);
-  const [replyToEmail, setReplyToEmail] = useState<Email | null>(null);
 
   const starMutation = useStarThread();
   const actionMutation = useThreadAction();
@@ -76,6 +74,11 @@ export function ThreadView({
           };
         }
       );
+      // Optimistic: update thread detail cache too
+      qc.setQueryData<Thread>(
+        queryKeys.threads.detail(threadId),
+        (old) => (old ? { ...old, unread_count: 0 } : old)
+      );
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
       api.patch(`/api/threads/${threadId}/read`);
     }
@@ -84,15 +87,17 @@ export function ThreadView({
   // Reset state when threadId changes
   useEffect(() => {
     markedReadRef.current = null;
-    setShowCollapsed(false);
-    setReplyMode(null);
-    setReplyToEmail(null);
   }, [threadId]);
 
-  // Scroll to bottom when reply opens or thread loads
+  // Scroll to the last message when thread loads
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [thread?.emails?.length, replyMode]);
+    if (thread?.emails?.length) {
+      // Small delay to let DOM render
+      requestAnimationFrame(() => {
+        lastMessageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }, [threadId, thread?.emails?.length]);
 
   if (isLoading) {
     return (
@@ -111,9 +116,29 @@ export function ThreadView({
   }
 
   const emails = thread.emails || [];
-  const collapsedCount = emails.length > 1 ? emails.length - 1 : 0;
   const lastEmail = emails[emails.length - 1];
-  const olderEmails = emails.slice(0, -1);
+
+  function handleReply(email: Email, mode: "reply" | "replyAll" | "forward") {
+    if (!thread) return;
+    const domainName = activeDomain?.domain || "";
+    const fromAddress = getReplyFromAddress(emails, domainName);
+    const { defaultTo, defaultCc } = getReplyRecipients(email, mode, fromAddress);
+    const subject = getReplySubject(thread.subject, mode);
+    const quotedHtml = getQuotedHtml(email, mode);
+
+    openCompose({
+      fromAddress,
+      toAddresses: defaultTo,
+      ccAddresses: defaultCc,
+      subject,
+      quotedHtml,
+      replyToThreadId: thread.id,
+      inReplyTo: email.message_id || undefined,
+      references: email.message_id
+        ? [...(email.references || []), email.message_id]
+        : undefined,
+    });
+  }
 
   function handleStar() {
     starMutation.mutate(threadId);
@@ -130,7 +155,7 @@ export function ThreadView({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-3 border-b shrink-0">
+      <div className="flex items-center gap-2 md:gap-3 pl-14 pr-4 md:px-6 py-3 border-b shrink-0">
         {onBack && (
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-5 w-5" />
@@ -219,316 +244,52 @@ export function ThreadView({
         </div>
       </div>
 
-      {/* Emails */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {/* Collapsed older emails */}
-        {collapsedCount > 0 && !showCollapsed && (
-          <button
-            onClick={() => setShowCollapsed(true)}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground w-full justify-center py-2 rounded-lg border border-dashed hover:border-solid transition-colors"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-            {collapsedCount} earlier message{collapsedCount > 1 ? "s" : ""}
-          </button>
-        )}
-
-        {/* Show older emails if expanded */}
-        {showCollapsed &&
-          olderEmails.map((email) => (
-            <EmailMessage
-              key={email.id}
-              email={email}
-              defaultExpanded={false}
-              onReply={(em, mode) => {
-                setReplyToEmail(em);
-                setReplyMode(mode);
-              }}
-            />
-          ))}
-
-        {/* Most recent email — always expanded */}
-        {lastEmail && (
-          <EmailMessage
-            key={lastEmail.id}
-            email={lastEmail}
-            defaultExpanded
-            onReply={(em, mode) => {
-              setReplyToEmail(em);
-              setReplyMode(mode);
-            }}
-          />
-        )}
-
-        {/* Inline reply editor */}
-        {replyMode && lastEmail && (
-          <InlineReplyEditor
-            thread={thread}
-            lastEmail={replyToEmail || lastEmail}
-            mode={replyMode}
-            domainId={domainId}
-            domainName={activeDomain?.domain || ""}
-            onClose={() => { setReplyMode(null); setReplyToEmail(null); }}
-            onSent={() => {
-              setReplyMode(null);
-              setReplyToEmail(null);
-              qc.invalidateQueries({ queryKey: queryKeys.threads.detail(threadId) });
-              qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
-            }}
-          />
-        )}
-
-        <div ref={bottomRef} />
-      </div>
-
-      {/* Reply bar (only if reply editor not open) */}
-      {!replyMode && (
-        <div className="border-t px-6 py-3 shrink-0 flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { setReplyToEmail(lastEmail); setReplyMode("reply"); }}
-          >
-            <Reply className="h-3.5 w-3.5 mr-1.5" />
-            Reply
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { setReplyToEmail(lastEmail); setReplyMode("replyAll"); }}
-          >
-            <ReplyAll className="h-3.5 w-3.5 mr-1.5" />
-            Reply All
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { setReplyToEmail(lastEmail); setReplyMode("forward"); }}
-          >
-            <Forward className="h-3.5 w-3.5 mr-1.5" />
-            Forward
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Inline Reply Editor ──────────────────────────────────────────────
-
-interface ReplyAlias {
-  id: string;
-  address: string;
-  name: string;
-  domain_id: string;
-  can_send_as: boolean;
-  is_default: boolean;
-}
-
-function InlineReplyEditor({
-  thread,
-  lastEmail,
-  mode,
-  domainId,
-  domainName,
-  onClose,
-  onSent,
-}: {
-  thread: Thread;
-  lastEmail: Email;
-  mode: "reply" | "replyAll" | "forward";
-  domainId: string;
-  domainName: string;
-  onClose: () => void;
-  onSent: () => void;
-}) {
-  // Determine defaults
-  const defaultFrom = getReplyFromAddress(thread.emails || [], domainName);
-  const { defaultTo, defaultCc } = getReplyRecipients(lastEmail, mode, defaultFrom);
-  const defaultSubject = getReplySubject(thread.subject, mode);
-  const quotedHtml = getQuotedHtml(lastEmail, mode);
-
-  const [aliases, setAliases] = useState<ReplyAlias[]>([]);
-  const [fromAddress, setFromAddress] = useState(defaultFrom);
-  const [to, setTo] = useState<string[]>(defaultTo);
-  const [cc, setCc] = useState<string[]>(defaultCc);
-  const [subject, setSubject] = useState(defaultSubject);
-  const [bodyHtml, setBodyHtml] = useState("");
-  const [bodyPlain, setBodyPlain] = useState("");
-  const [showCc, setShowCc] = useState(defaultCc.length > 0);
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
-
-  // Fetch aliases for this domain
-  useEffect(() => {
-    api.get<ReplyAlias[]>("/api/users/me/aliases").then((data) => {
-      const domainAliases = data.filter(
-        (a) => a.domain_id === domainId && a.can_send_as
-      );
-      setAliases(domainAliases);
-      // If default from isn't in alias list and we have aliases, keep it (it came from thread context)
-    }).catch(() => {});
-  }, [domainId]);
-
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-
-    if (to.length === 0) {
-      setError("To is required");
-      return;
-    }
-
-    setSending(true);
-    try {
-      // Combine user's reply with quoted text
-      const fullHtml = bodyHtml + quotedHtml;
-      const fullPlain = bodyPlain;
-
-      // Build threading headers from the email being replied to
-      const replyPayload: Record<string, unknown> = {
-        from: fromAddress,
-        to,
-        cc,
-        subject,
-        html: fullHtml,
-        text: fullPlain,
-        domain_id: domainId,
-        reply_to_thread_id: thread.id,
-      };
-      if (lastEmail.message_id) {
-        replyPayload.in_reply_to = lastEmail.message_id;
-        // Build references chain: existing references + the message we're replying to
-        const existingRefs = lastEmail.references || [];
-        replyPayload.references = [...existingRefs, lastEmail.message_id];
-      }
-      await api.post("/api/emails/send", replyPayload);
-      onSent();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send");
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <div className="rounded-lg border shadow-sm">
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
-        <span className="text-sm font-medium">
-          {mode === "forward" ? "Forward" : mode === "replyAll" ? "Reply All" : "Reply"}
-        </span>
-        <button onClick={onClose} className="p-0.5 hover:bg-muted rounded">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      <form onSubmit={handleSend} className="p-4 space-y-3">
-        {error && (
-          <div className="text-xs text-destructive bg-destructive/10 p-2 rounded">
-            {error}
-          </div>
-        )}
-
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-muted-foreground w-10 text-right shrink-0">From</label>
-            {aliases.length > 0 ? (
-              <select
-                value={fromAddress}
-                onChange={(e) => setFromAddress(e.target.value)}
-                className="flex-1 h-7 text-sm border-0 bg-transparent shadow-none focus-visible:outline-none focus-visible:ring-0 px-1 cursor-pointer"
-              >
-                {/* Include defaultFrom if it's not in aliases (e.g. from thread context) */}
-                {!aliases.some((a) => a.address === defaultFrom) && (
-                  <option value={defaultFrom}>{defaultFrom}</option>
-                )}
-                {aliases.map((a) => (
-                  <option key={a.id} value={a.address}>
-                    {a.name ? `${a.name} <${a.address}>` : a.address}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <Input
-                value={fromAddress}
-                onChange={(e) => setFromAddress(e.target.value)}
-                className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1 bg-transparent"
-              />
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-muted-foreground w-10 text-right shrink-0">To</label>
-            <RecipientInput
-              value={to}
-              onChange={setTo}
-              placeholder="recipient@example.com"
-            />
-            {!showCc && (
-              <button
-                type="button"
-                onClick={() => setShowCc(true)}
-                className="text-xs text-muted-foreground hover:text-foreground shrink-0"
-              >
-                Cc
-              </button>
-            )}
-          </div>
-          {showCc && (
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-muted-foreground w-10 text-right shrink-0">Cc</label>
-              <RecipientInput
-                value={cc}
-                onChange={setCc}
-                placeholder="cc@example.com"
+      {/* Emails — Gmail style: all visible, older collapsed, newest expanded */}
+      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-2">
+        {emails.map((email, i) => {
+          const isLast = i === emails.length - 1;
+          return (
+            <div key={email.id} ref={isLast ? lastMessageRef : undefined}>
+              <EmailMessage
+                email={email}
+                defaultExpanded={isLast}
+                onReply={(em, mode) => handleReply(em, mode)}
               />
             </div>
-          )}
-          {mode !== "forward" && (
-            <input type="hidden" value={subject} />
-          )}
-          {mode === "forward" && (
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-muted-foreground w-10 text-right shrink-0">Subj</label>
-              <Input
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1 bg-transparent"
-              />
-            </div>
-          )}
-        </div>
+          );
+        })}
+      </div>
 
-        <TipTapEditor
-          onChange={(html, plain) => {
-            setBodyHtml(html);
-            setBodyPlain(plain);
-          }}
-          autofocus
-          placeholder={mode === "forward" ? "Add a message..." : "Write your reply..."}
-        />
-
-        {/* Quoted text preview */}
-        {quotedHtml && (
-          <div
-            className="text-xs text-muted-foreground border-l-2 border-muted pl-3 max-h-[150px] overflow-y-auto prose prose-xs max-w-none"
-            dangerouslySetInnerHTML={{
-              __html: DOMPurify.sanitize(quotedHtml, {
-                ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
-                ALLOWED_ATTR: ["href"],
-              }),
-            }}
-          />
-        )}
-
-        <div className="flex items-center gap-2">
-          <Button type="submit" size="sm" disabled={sending}>
-            {sending ? <Spinner className="mr-1 h-3 w-3" /> : <Send className="mr-1 h-3 w-3" />}
-            Send
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-        </div>
-      </form>
+      {/* Reply bar */}
+      <div className="border-t px-4 md:px-6 py-3 shrink-0 flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="rounded-full h-8 px-4 text-xs"
+          onClick={() => lastEmail && handleReply(lastEmail, "reply")}
+        >
+          <Reply className="h-3 w-3 mr-1.5" />
+          Reply
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="rounded-full h-8 px-4 text-xs"
+          onClick={() => lastEmail && handleReply(lastEmail, "replyAll")}
+        >
+          <ReplyAll className="h-3 w-3 mr-1.5" />
+          Reply All
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="rounded-full h-8 px-4 text-xs"
+          onClick={() => lastEmail && handleReply(lastEmail, "forward")}
+        >
+          <Forward className="h-3 w-3 mr-1.5" />
+          Forward
+        </Button>
+      </div>
     </div>
   );
 }
@@ -560,93 +321,113 @@ function EmailMessage({
       })
     : null;
 
+  if (!expanded) {
+    // Collapsed: thin Gmail-style row — just sender, snippet, time
+    return (
+      <button
+        onClick={() => setExpanded(true)}
+        className="flex items-center gap-3 w-full px-4 py-2 text-left rounded-lg hover:bg-muted/50 transition-colors"
+      >
+        <div className="h-7 w-7 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0">
+          {email.from_address.charAt(0).toUpperCase()}
+        </div>
+        <span className="text-[13px] font-semibold shrink-0">
+          {formatSenderName(email.from_address)}
+        </span>
+        <span className="text-[13px] text-muted-foreground/70 truncate flex-1 min-w-0">
+          {email.body_plain?.slice(0, 100)}
+        </span>
+        <span className="text-xs text-muted-foreground shrink-0">
+          {formatRelativeTime(email.created_at)}
+        </span>
+      </button>
+    );
+  }
+
+  // Expanded: full email card
   return (
     <div className="rounded-lg border">
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-3 w-full px-4 py-3 text-left"
+        onClick={() => setExpanded(false)}
+        className="flex items-baseline gap-3 w-full px-4 py-2.5 text-left"
       >
-        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium shrink-0">
+        <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0 self-center">
           {email.from_address.charAt(0).toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-baseline gap-2">
             <ContactCard email={email.from_address}>
-              <span className="text-sm font-medium truncate">
-                {email.from_address}
+              <span className="text-[13px] font-semibold truncate">
+                {formatSenderName(email.from_address)}
               </span>
             </ContactCard>
-            <span className="text-xs text-muted-foreground shrink-0">
+            <span className="hidden md:inline text-xs text-muted-foreground truncate">
+              {email.from_address}
+            </span>
+            <span className="text-xs text-muted-foreground shrink-0 ml-auto">
               {formatRelativeTime(email.created_at)}
             </span>
           </div>
-          {!expanded && (
-            <p className="text-xs text-muted-foreground truncate">
-              {email.body_plain?.slice(0, 100)}
-            </p>
-          )}
         </div>
       </button>
 
-      {expanded && (
-        <div className="px-4 pb-4">
-          <div className="text-xs text-muted-foreground mb-3 space-y-0.5">
-            <p>To: {parseAddresses(email.to_addresses).join(", ")}</p>
-            {parseAddresses(email.cc_addresses).length > 0 && (
-              <p>Cc: {parseAddresses(email.cc_addresses).join(", ")}</p>
-            )}
-          </div>
-          {sanitizedHtml ? (
-            <div
-              className="prose prose-sm max-w-none"
-              dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
-            />
-          ) : (
-            <pre className="text-sm whitespace-pre-wrap font-sans">
-              {email.body_plain}
-            </pre>
-          )}
-          {email.attachments && email.attachments.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {email.attachments.map((att, i) => (
-                <a
-                  key={i}
-                  href={att.url}
-                  className="flex items-center gap-1.5 text-xs border rounded-md px-2 py-1 hover:bg-muted"
-                  download
-                >
-                  {att.filename}
-                  <span className="text-muted-foreground">
-                    ({Math.round(att.size / 1024)}KB)
-                  </span>
-                </a>
-              ))}
-            </div>
-          )}
-          {onReply && (
-            <div className="mt-3 flex items-center gap-2 pt-2 border-t">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onReply(email, "reply")}
-                className="h-7 text-xs"
-              >
-                <Reply className="h-3 w-3 mr-1" />
-                Reply
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onReply(email, "replyAll")}
-                className="h-7 text-xs"
-              >
-                <ReplyAll className="h-3 w-3 mr-1" />
-                Reply All
-              </Button>
-            </div>
+      <div className="px-4 pb-4">
+        <div className="text-xs text-muted-foreground mb-3 space-y-0.5">
+          <p>To: {parseAddresses(email.to_addresses).join(", ")}</p>
+          {parseAddresses(email.cc_addresses).length > 0 && (
+            <p>Cc: {parseAddresses(email.cc_addresses).join(", ")}</p>
           )}
         </div>
-      )}
+        {sanitizedHtml ? (
+          <div
+            className="max-w-2xl text-[13px] leading-relaxed [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-muted [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_pre]:text-xs [&_pre]:overflow-x-auto"
+            dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+          />
+        ) : (
+          <pre className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed max-w-2xl">
+            {email.body_plain}
+          </pre>
+        )}
+        {email.attachments && email.attachments.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {email.attachments.map((att, i) => (
+              <a
+                key={i}
+                href={att.url}
+                className="flex items-center gap-1.5 text-xs border rounded-md px-2 py-1 hover:bg-muted"
+                download
+              >
+                {att.filename}
+                <span className="text-muted-foreground">
+                  ({Math.round(att.size / 1024)}KB)
+                </span>
+              </a>
+            ))}
+          </div>
+        )}
+        {onReply && (
+          <div className="mt-3 flex items-center gap-2 pt-2 border-t">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onReply(email, "reply")}
+              className="h-7 text-xs"
+            >
+              <Reply className="h-3 w-3 mr-1" />
+              Reply
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onReply(email, "replyAll")}
+              className="h-7 text-xs"
+            >
+              <ReplyAll className="h-3 w-3 mr-1" />
+              Reply All
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

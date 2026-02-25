@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { cn } from "@/lib/utils";
+import { cn, getInitials, getDomainColor } from "@/lib/utils";
+import { useDomains } from "@/contexts/domain-context";
 import {
   Archive,
   Trash2,
@@ -19,6 +20,7 @@ import type { Folder, Thread } from "@/lib/types";
 
 interface ThreadToolbarProps {
   folder: Folder;
+  title?: string;
   threads: Thread[];
   selectedIds: Set<string>;
   allSelected: boolean;
@@ -37,6 +39,7 @@ interface ThreadToolbarProps {
 
 export function ThreadToolbar({
   folder,
+  title,
   threads,
   selectedIds,
   allSelected,
@@ -52,6 +55,7 @@ export function ThreadToolbar({
   onPageChange,
   loading,
 }: ThreadToolbarProps) {
+  const { activeDomain } = useDomains();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -207,6 +211,21 @@ export function ThreadToolbar({
           </div>
         );
       })()}
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Folder title — mobile only, centered */}
+      {title && !hasSelection && (
+        <span className="flex items-center gap-1.5 text-sm font-semibold md:hidden">
+          {activeDomain && (
+            <span className={cn("inline-flex items-center justify-center h-5 w-5 rounded text-[10px] font-semibold text-white", getDomainColor(activeDomain.domain))}>
+              {getInitials(activeDomain.domain)}
+            </span>
+          )}
+          {title}
+        </span>
+      )}
 
       {/* Spacer */}
       <div className="flex-1" />

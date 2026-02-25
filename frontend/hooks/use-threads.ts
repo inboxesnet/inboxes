@@ -32,10 +32,9 @@ export function useStarThread() {
     mutationFn: (threadId: string) =>
       api.patch(`/api/threads/${threadId}/star`),
     onMutate: async (threadId) => {
-      // Cancel outgoing refetches
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
-      // Optimistic update across all thread lists
+      // Optimistic: update all thread lists
       qc.setQueriesData<ThreadListResponse>(
         { queryKey: queryKeys.threads.lists() },
         (old) => {
@@ -49,7 +48,7 @@ export function useStarThread() {
         }
       );
 
-      // Optimistic update for thread detail
+      // Optimistic: update thread detail
       qc.setQueryData<Thread>(
         queryKeys.threads.detail(threadId),
         (old) => (old ? { ...old, starred: !old.starred } : old)
@@ -87,6 +86,7 @@ export function useThreadAction() {
       const movingActions = ["archive", "trash", "spam", "delete", "move:deleted_forever"];
       const isMoving = movingActions.includes(action) || action.startsWith("move:");
 
+      // Optimistic: update all thread lists
       qc.setQueriesData<ThreadListResponse>(
         { queryKey: queryKeys.threads.lists() },
         (old) => {
@@ -117,9 +117,26 @@ export function useThreadAction() {
           return old;
         }
       );
+
+      // Optimistic: update thread detail cache
+      if (action === "read") {
+        qc.setQueryData<Thread>(
+          queryKeys.threads.detail(threadId),
+          (old) => (old ? { ...old, unread_count: 0 } : old)
+        );
+      } else if (action === "unread") {
+        qc.setQueryData<Thread>(
+          queryKeys.threads.detail(threadId),
+          (old) => (old ? { ...old, unread_count: 1 } : old)
+        );
+      } else if (isMoving) {
+        // Remove stale detail cache for moved/deleted threads
+        qc.removeQueries({ queryKey: queryKeys.threads.detail(threadId) });
+      }
     },
-    onSettled: () => {
+    onSettled: (_data, _err, { threadId }) => {
       qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+      qc.invalidateQueries({ queryKey: queryKeys.threads.detail(threadId) });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
     },
   });
@@ -148,6 +165,7 @@ export function useBulkAction() {
 
       const movingActions = ["archive", "trash", "spam", "move", "delete"];
 
+      // Optimistic: update all thread lists
       qc.setQueriesData<ThreadListResponse>(
         { queryKey: queryKeys.threads.lists() },
         (old) => {
@@ -181,9 +199,27 @@ export function useBulkAction() {
           return old;
         }
       );
+
+      // Optimistic: update each thread's detail cache
+      for (const id of threadIds) {
+        if (action === "read") {
+          qc.setQueryData<Thread>(
+            queryKeys.threads.detail(id),
+            (old) => (old ? { ...old, unread_count: 0 } : old)
+          );
+        } else if (action === "unread") {
+          qc.setQueryData<Thread>(
+            queryKeys.threads.detail(id),
+            (old) => (old ? { ...old, unread_count: 1 } : old)
+          );
+        } else if (movingActions.includes(action)) {
+          qc.removeQueries({ queryKey: queryKeys.threads.detail(id) });
+        }
+      }
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+      qc.invalidateQueries({ queryKey: queryKeys.threads.details() });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
     },
   });

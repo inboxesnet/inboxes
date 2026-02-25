@@ -7,6 +7,7 @@ frontend/.next/
 frontend/test-results/
 backend/bin/
 backend/api
+*.tsbuildinfo
 
 # Environment
 .env

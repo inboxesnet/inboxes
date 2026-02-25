@@ -15,7 +15,9 @@ function getInitials(email: string): string {
 
 function getDisplayName(email: string): string {
   const local = email.split("@")[0] || email;
-  return local.charAt(0).toUpperCase() + local.slice(1);
+  return local
+    .replace(/[._-]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function ContactCard({ email, children }: ContactCardProps) {
