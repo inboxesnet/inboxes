@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const resendBaseURL = "https://api.resend.com"
+var resendBaseURL = "https://api.resend.com"
 
 // Global rate limiter: one Resend API call at a time, 600ms between calls.
 var resendMu sync.Mutex
