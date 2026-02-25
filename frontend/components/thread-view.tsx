@@ -315,6 +315,15 @@ export function ThreadView({
 
 // ─── Inline Reply Editor ──────────────────────────────────────────────
 
+interface ReplyAlias {
+  id: string;
+  address: string;
+  name: string;
+  domain_id: string;
+  can_send_as: boolean;
+  is_default: boolean;
+}
+
 function InlineReplyEditor({
   thread,
   lastEmail,
@@ -338,6 +347,7 @@ function InlineReplyEditor({
   const defaultSubject = getReplySubject(thread.subject, mode);
   const quotedHtml = getQuotedHtml(lastEmail, mode);
 
+  const [aliases, setAliases] = useState<ReplyAlias[]>([]);
   const [fromAddress, setFromAddress] = useState(defaultFrom);
   const [to, setTo] = useState<string[]>(defaultTo);
   const [cc, setCc] = useState<string[]>(defaultCc);
@@ -347,6 +357,17 @@ function InlineReplyEditor({
   const [showCc, setShowCc] = useState(defaultCc.length > 0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+
+  // Fetch aliases for this domain
+  useEffect(() => {
+    api.get<ReplyAlias[]>("/api/users/me/aliases").then((data) => {
+      const domainAliases = data.filter(
+        (a) => a.domain_id === domainId && a.can_send_as
+      );
+      setAliases(domainAliases);
+      // If default from isn't in alias list and we have aliases, keep it (it came from thread context)
+    }).catch(() => {});
+  }, [domainId]);
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -410,11 +431,29 @@ function InlineReplyEditor({
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">From</label>
-            <Input
-              value={fromAddress}
-              onChange={(e) => setFromAddress(e.target.value)}
-              className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1 bg-transparent"
-            />
+            {aliases.length > 0 ? (
+              <select
+                value={fromAddress}
+                onChange={(e) => setFromAddress(e.target.value)}
+                className="flex-1 h-7 text-sm border-0 bg-transparent shadow-none focus-visible:outline-none focus-visible:ring-0 px-1 cursor-pointer"
+              >
+                {/* Include defaultFrom if it's not in aliases (e.g. from thread context) */}
+                {!aliases.some((a) => a.address === defaultFrom) && (
+                  <option value={defaultFrom}>{defaultFrom}</option>
+                )}
+                {aliases.map((a) => (
+                  <option key={a.id} value={a.address}>
+                    {a.name ? `${a.name} <${a.address}>` : a.address}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                value={fromAddress}
+                onChange={(e) => setFromAddress(e.target.value)}
+                className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1 bg-transparent"
+              />
+            )}
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">To</label>
@@ -637,7 +676,7 @@ function getReplyFromAddress(emails: Email[], domainName: string): string {
       if (match) return match;
     }
   }
-  return `me@${domainName}`;
+  return `hello@${domainName}`;
 }
 
 function getReplyRecipients(

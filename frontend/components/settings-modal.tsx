@@ -20,13 +20,48 @@ import { useAppConfig } from "@/contexts/app-config-context";
 import { useDomains } from "@/contexts/domain-context";
 import { cn } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
-import { Check, Minus, RefreshCw, User as UserIcon, Globe, CreditCard } from "lucide-react";
+import { Check, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star } from "lucide-react";
 
-type Tab = "profile" | "domains" | "billing";
+type Tab = "profile" | "domains" | "team" | "aliases" | "billing";
 
 interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+interface OrgUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  status: string;
+  created_at: string;
+}
+
+interface AliasUser {
+  user_id: string;
+  can_send_as: boolean;
+  is_default: boolean;
+  name: string;
+  email: string;
+}
+
+interface AliasWithUsers {
+  id: string;
+  domain_id: string;
+  address: string;
+  name: string;
+  created_at: string;
+  users?: AliasUser[];
+}
+
+interface DiscoveredAddress {
+  id: string;
+  domain_id: string;
+  address: string;
+  local_part: string;
+  type: string;
+  email_count: number;
 }
 
 export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
@@ -59,6 +94,27 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
   // Billing state
   const [billingInfo, setBillingInfo] = useState<BillingInfo | null>(null);
   const [billingLoading, setBillingLoading] = useState(false);
+
+  // Team management state
+  const [orgUsers, setOrgUsers] = useState<OrgUser[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteRole, setInviteRole] = useState("member");
+  const [inviting, setInviting] = useState(false);
+
+  // Alias management state
+  const [aliases, setAliases] = useState<AliasWithUsers[]>([]);
+  const [aliasLoading, setAliasLoading] = useState(false);
+  const [newAliasLocal, setNewAliasLocal] = useState("");
+  const [newAliasDomain, setNewAliasDomain] = useState("");
+  const [newAliasName, setNewAliasName] = useState("");
+  const [creatingAlias, setCreatingAlias] = useState(false);
+  const [expandedAlias, setExpandedAlias] = useState<string | null>(null);
+  const [addUserAlias, setAddUserAlias] = useState("");
+
+  // Discovered addresses state
+  const [discoveredAddresses, setDiscoveredAddresses] = useState<DiscoveredAddress[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -187,13 +243,180 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
     }
   }
 
-  const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  // ─── Team Management ──────────────────────────────────────────────────
+
+  async function loadTeam() {
+    setTeamLoading(true);
+    try {
+      const data = await api.get<OrgUser[]>("/api/users");
+      setOrgUsers(data);
+    } catch {
+      // handled
+    } finally {
+      setTeamLoading(false);
+    }
+  }
+
+  async function handleInvite(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+    setInviting(true);
+    try {
+      await api.post("/api/users/invite", {
+        email: inviteEmail,
+        name: inviteName,
+        role: inviteRole,
+      });
+      setInviteEmail("");
+      setInviteName("");
+      setInviteRole("member");
+      setSuccess("Invitation sent");
+      loadTeam();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to invite user");
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function handleReinvite(userId: string) {
+    setError("");
+    setSuccess("");
+    try {
+      await api.get(`/api/users/${userId}/reinvite`);
+      setSuccess("Invite resent");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to resend invite");
+    }
+  }
+
+  async function handleDisableUser(userId: string) {
+    if (!confirm("Are you sure you want to disable this user?")) return;
+    setError("");
+    setSuccess("");
+    try {
+      await api.patch(`/api/users/${userId}/disable`);
+      setSuccess("User disabled");
+      loadTeam();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to disable user");
+    }
+  }
+
+  // ─── Alias Management ─────────────────────────────────────────────────
+
+  async function loadAliases() {
+    setAliasLoading(true);
+    try {
+      const [aliasData, discoveredData] = await Promise.all([
+        api.get<AliasWithUsers[]>("/api/aliases"),
+        api.get<DiscoveredAddress[]>("/api/aliases/discovered"),
+      ]);
+      setAliases(aliasData);
+      setDiscoveredAddresses(discoveredData);
+    } catch {
+      // handled
+    } finally {
+      setAliasLoading(false);
+    }
+  }
+
+  async function handleCreateAlias(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newAliasLocal || !newAliasDomain) return;
+    setError("");
+    setSuccess("");
+    setCreatingAlias(true);
+    try {
+      await api.post("/api/aliases", {
+        address: `${newAliasLocal}@${allDomains.find((d) => d.id === newAliasDomain)?.domain}`,
+        name: newAliasName,
+        domain_id: newAliasDomain,
+      });
+      setNewAliasLocal("");
+      setNewAliasName("");
+      setSuccess("Alias created");
+      loadAliases();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to create alias");
+    } finally {
+      setCreatingAlias(false);
+    }
+  }
+
+  async function handleDeleteAlias(aliasId: string) {
+    if (!confirm("Delete this alias? Emails will no longer be routed to it.")) return;
+    setError("");
+    setSuccess("");
+    try {
+      await api.delete(`/api/aliases/${aliasId}`);
+      setSuccess("Alias deleted");
+      loadAliases();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete alias");
+    }
+  }
+
+  async function handleAddUserToAlias(aliasId: string, userId: string) {
+    setError("");
+    try {
+      await api.post(`/api/aliases/${aliasId}/users`, { user_id: userId, can_send_as: true });
+      loadAliases();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to add user");
+    }
+  }
+
+  async function handleRemoveUserFromAlias(aliasId: string, userId: string) {
+    setError("");
+    try {
+      await api.delete(`/api/aliases/${aliasId}/users/${userId}`);
+      loadAliases();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to remove user");
+    }
+  }
+
+  async function handleSetDefault(aliasId: string) {
+    setError("");
+    try {
+      await api.patch(`/api/aliases/${aliasId}/default`);
+      setSuccess("Default alias updated");
+      loadAliases();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to set default");
+    }
+  }
+
+  async function handleCreateFromDiscovered(addr: DiscoveredAddress) {
+    setError("");
+    try {
+      await api.post("/api/aliases", {
+        address: addr.address,
+        name: addr.local_part,
+        domain_id: addr.domain_id,
+      });
+      setSuccess(`Alias ${addr.address} created`);
+      loadAliases();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to create alias");
+    }
+  }
+
+  const isAdmin = user?.role === "admin";
+
+  const TABS: { key: Tab; label: string; icon: React.ReactNode; adminOnly?: boolean }[] = [
     { key: "profile", label: "Profile", icon: <UserIcon className="h-4 w-4" /> },
     { key: "domains", label: "Domains", icon: <Globe className="h-4 w-4" /> },
+    { key: "team", label: "Team", icon: <Users className="h-4 w-4" />, adminOnly: true },
+    { key: "aliases", label: "Aliases", icon: <AtSign className="h-4 w-4" />, adminOnly: true },
     ...(commercial
       ? [{ key: "billing" as Tab, label: "Billing", icon: <CreditCard className="h-4 w-4" /> }]
       : []),
   ];
+
+  const visibleTabs = TABS.filter((t) => !t.adminOnly || isAdmin);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -205,7 +428,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
           {/* Sidebar */}
           <div className="w-[180px] border-r bg-muted/30 p-3 space-y-1 shrink-0">
             <h3 className="font-semibold text-sm px-2 py-2">Settings</h3>
-            {TABS.map((tab) => (
+            {visibleTabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => {
@@ -214,6 +437,12 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   setSuccess("");
                   if (tab.key === "billing" && !billingInfo && !billingLoading) {
                     loadBilling();
+                  }
+                  if (tab.key === "team" && orgUsers.length === 0 && !teamLoading) {
+                    loadTeam();
+                  }
+                  if (tab.key === "aliases" && aliases.length === 0 && !aliasLoading) {
+                    loadAliases();
                   }
                 }}
                 className={cn(
@@ -561,6 +790,349 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                           Save
                         </Button>
                       </CardFooter>
+                    </Card>
+                  </div>
+                )}
+
+                {activeTab === "team" && isAdmin && (
+                  <div className="space-y-6">
+                    {/* Invite form */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Invite Team Member</CardTitle>
+                        <CardDescription>Send an email invitation to join your workspace</CardDescription>
+                      </CardHeader>
+                      <form onSubmit={handleInvite}>
+                        <CardContent className="space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Email *</label>
+                              <Input
+                                type="email"
+                                value={inviteEmail}
+                                onChange={(e) => setInviteEmail(e.target.value)}
+                                placeholder="colleague@company.com"
+                                required
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium">Name</label>
+                              <Input
+                                value={inviteName}
+                                onChange={(e) => setInviteName(e.target.value)}
+                                placeholder="Optional"
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Role</label>
+                            <select
+                              value={inviteRole}
+                              onChange={(e) => setInviteRole(e.target.value)}
+                              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                            >
+                              <option value="member">Member</option>
+                              <option value="admin">Admin</option>
+                            </select>
+                          </div>
+                        </CardContent>
+                        <CardFooter>
+                          <Button disabled={inviting}>
+                            {inviting ? <Spinner className="mr-2" /> : <UserPlus className="mr-2 h-4 w-4" />}
+                            Send Invite
+                          </Button>
+                        </CardFooter>
+                      </form>
+                    </Card>
+
+                    {/* User list */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Team Members</CardTitle>
+                        <CardDescription>{orgUsers.length} member{orgUsers.length !== 1 ? "s" : ""}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        {teamLoading ? (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Spinner /> Loading team...
+                          </div>
+                        ) : (
+                          <div className="divide-y">
+                            {orgUsers.map((u) => (
+                              <div
+                                key={u.id}
+                                className={cn(
+                                  "flex items-center justify-between py-3",
+                                  u.status === "disabled" && "opacity-50"
+                                )}
+                              >
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-medium">
+                                      {u.name || u.email}
+                                    </span>
+                                    <Badge variant={u.role === "admin" ? "default" : "secondary"} className="text-xs">
+                                      {u.role}
+                                    </Badge>
+                                    <Badge
+                                      variant={
+                                        u.status === "active"
+                                          ? "default"
+                                          : u.status === "disabled"
+                                            ? "destructive"
+                                            : "outline"
+                                      }
+                                      className="text-xs"
+                                    >
+                                      {u.status}
+                                    </Badge>
+                                  </div>
+                                  {u.name && (
+                                    <p className="text-xs text-muted-foreground">{u.email}</p>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {(u.status === "invited" || u.status === "placeholder") && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleReinvite(u.id)}
+                                    >
+                                      <RotateCw className="h-3 w-3 mr-1" />
+                                      Resend
+                                    </Button>
+                                  )}
+                                  {u.status === "active" && u.id !== user?.id && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleDisableUser(u.id)}
+                                      className="text-destructive hover:text-destructive"
+                                    >
+                                      <UserX className="h-3 w-3 mr-1" />
+                                      Disable
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                )}
+
+                {activeTab === "aliases" && isAdmin && (
+                  <div className="space-y-6">
+                    {/* Discovered addresses — quick create */}
+                    {discoveredAddresses.length > 0 && (
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Discovered Addresses</CardTitle>
+                          <CardDescription>
+                            These addresses were found in your email traffic. Create aliases from them with one click.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-2">
+                            {discoveredAddresses.map((addr) => (
+                              <div key={addr.id} className="flex items-center justify-between rounded-lg border p-3">
+                                <div className="space-y-0.5">
+                                  <span className="text-sm font-medium">{addr.address}</span>
+                                  <p className="text-xs text-muted-foreground">
+                                    {addr.email_count} email{addr.email_count !== 1 ? "s" : ""}
+                                  </p>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleCreateFromDiscovered(addr)}
+                                >
+                                  Create Alias
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Create alias */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Create Alias</CardTitle>
+                        <CardDescription>Add an email alias for your team to send and receive from</CardDescription>
+                      </CardHeader>
+                      <form onSubmit={handleCreateAlias}>
+                        <CardContent className="space-y-4">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 space-y-2">
+                              <label className="text-sm font-medium">Address</label>
+                              <div className="flex items-center gap-1">
+                                <Input
+                                  value={newAliasLocal}
+                                  onChange={(e) => setNewAliasLocal(e.target.value)}
+                                  placeholder="hello"
+                                  required
+                                />
+                                <span className="text-muted-foreground shrink-0">@</span>
+                                <select
+                                  value={newAliasDomain}
+                                  onChange={(e) => setNewAliasDomain(e.target.value)}
+                                  required
+                                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                >
+                                  <option value="">Domain...</option>
+                                  {allDomains.map((d) => (
+                                    <option key={d.id} value={d.id}>{d.domain}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Display Name</label>
+                            <Input
+                              value={newAliasName}
+                              onChange={(e) => setNewAliasName(e.target.value)}
+                              placeholder="e.g. Support, Sales (optional)"
+                            />
+                          </div>
+                        </CardContent>
+                        <CardFooter>
+                          <Button disabled={creatingAlias}>
+                            {creatingAlias ? <Spinner className="mr-2" /> : null}
+                            Create Alias
+                          </Button>
+                        </CardFooter>
+                      </form>
+                    </Card>
+
+                    {/* Alias list */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Aliases</CardTitle>
+                        <CardDescription>{aliases.length} alias{aliases.length !== 1 ? "es" : ""}</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        {aliasLoading ? (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Spinner /> Loading aliases...
+                          </div>
+                        ) : aliases.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No aliases yet. Create one above.</p>
+                        ) : (
+                          <div className="divide-y">
+                            {/* Group by domain */}
+                            {allDomains
+                              .filter((d) => aliases.some((a) => a.domain_id === d.id))
+                              .map((domain) => (
+                                <div key={domain.id} className="py-3">
+                                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                                    {domain.domain}
+                                  </p>
+                                  <div className="space-y-2">
+                                    {aliases
+                                      .filter((a) => a.domain_id === domain.id)
+                                      .map((alias) => {
+                                        const isMyDefault = alias.users?.some((au) => au.user_id === user?.id && au.is_default);
+                                        return (
+                                        <div key={alias.id} className="rounded-lg border p-3 space-y-2">
+                                          <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                              <button
+                                                onClick={() => handleSetDefault(alias.id)}
+                                                title={isMyDefault ? "Default send-from" : "Set as default send-from"}
+                                                className="shrink-0"
+                                              >
+                                                <Star className={cn(
+                                                  "h-4 w-4",
+                                                  isMyDefault
+                                                    ? "text-yellow-500 fill-yellow-500"
+                                                    : "text-muted-foreground/40 hover:text-yellow-500"
+                                                )} />
+                                              </button>
+                                              <span className="text-sm font-medium">{alias.address}</span>
+                                              {alias.name && (
+                                                <span className="text-xs text-muted-foreground">({alias.name})</span>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                              <button
+                                                onClick={() => setExpandedAlias(expandedAlias === alias.id ? null : alias.id)}
+                                                className="text-xs text-muted-foreground hover:text-foreground"
+                                              >
+                                                {(alias.users?.length || 0)} user{(alias.users?.length || 0) !== 1 ? "s" : ""}
+                                              </button>
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-7 w-7 text-destructive hover:text-destructive"
+                                                onClick={() => handleDeleteAlias(alias.id)}
+                                              >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                              </Button>
+                                            </div>
+                                          </div>
+                                          {/* Expanded user list */}
+                                          {expandedAlias === alias.id && (
+                                            <div className="border-t pt-2 space-y-2">
+                                              {alias.users && alias.users.length > 0 ? (
+                                                alias.users.map((au) => (
+                                                  <div key={au.user_id} className="flex items-center justify-between text-sm">
+                                                    <span>{au.name || au.email}</span>
+                                                    <button
+                                                      onClick={() => handleRemoveUserFromAlias(alias.id, au.user_id)}
+                                                      className="text-xs text-destructive hover:underline"
+                                                    >
+                                                      <X className="h-3 w-3" />
+                                                    </button>
+                                                  </div>
+                                                ))
+                                              ) : (
+                                                <p className="text-xs text-muted-foreground">No users assigned</p>
+                                              )}
+                                              {/* Add user dropdown */}
+                                              <div className="flex items-center gap-2">
+                                                <select
+                                                  value={addUserAlias}
+                                                  onChange={(e) => setAddUserAlias(e.target.value)}
+                                                  className="flex h-7 flex-1 rounded-md border border-input bg-transparent px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                >
+                                                  <option value="">Add user...</option>
+                                                  {orgUsers
+                                                    .filter((u) => u.status === "active" && !alias.users?.some((au) => au.user_id === u.id))
+                                                    .map((u) => (
+                                                      <option key={u.id} value={u.id}>{u.name || u.email}</option>
+                                                    ))}
+                                                </select>
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  className="h-7 text-xs"
+                                                  disabled={!addUserAlias}
+                                                  onClick={() => {
+                                                    if (addUserAlias) {
+                                                      handleAddUserToAlias(alias.id, addUserAlias);
+                                                      setAddUserAlias("");
+                                                    }
+                                                  }}
+                                                >
+                                                  Add
+                                                </Button>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                        );
+                                      })}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </CardContent>
                     </Card>
                   </div>
                 )}

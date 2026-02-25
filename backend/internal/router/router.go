@@ -41,7 +41,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	emails := &handler.EmailHandler{DB: db, ResendSvc: resendSvc, Bus: bus}
 	webhooks := &handler.WebhookHandler{DB: db, Bus: bus, ResendSvc: resendSvc}
 	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus, PublicURL: cfg.PublicURL}
-	users := &handler.UserHandler{DB: db, ResendSvc: resendSvc}
+	users := &handler.UserHandler{DB: db, ResendSvc: resendSvc, AppURL: appURL}
 	aliases := &handler.AliasHandler{DB: db}
 	domains := &handler.DomainHandler{DB: db, ResendSvc: resendSvc}
 	contacts := &handler.ContactHandler{DB: db}
@@ -197,6 +197,8 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Delete("/api/aliases/{id}", aliases.Delete)
 			r.Post("/api/aliases/{id}/users", aliases.AddUser)
 			r.Delete("/api/aliases/{id}/users/{userId}", aliases.RemoveUser)
+			r.Patch("/api/aliases/{id}/default", aliases.SetDefault)
+			r.Get("/api/aliases/discovered", aliases.DiscoveredAddresses)
 
 			// Drafts
 			r.Get("/api/drafts", drafts.List)

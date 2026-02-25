@@ -28,6 +28,4 @@ backend/tmp/
 
 # Misc
 *.log
-CODEBASE_BRIEFING_AGENT.md
-SUMMARY.md
-onboarding_flow_notes.md
+docs/internal/

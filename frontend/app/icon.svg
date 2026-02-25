@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <rect width="32" height="32" rx="8" fill="#18181B"/>
+  <!-- Envelope body: dark bottom-left, lighter bottom-right -->
+  <path d="M3 9V25C3 25.5523 3.44772 26 4 26H15.5V9L3 9Z" fill="#71717A"/>
+  <path d="M16.5 9V26H28C28.5523 26 29 25.5523 29 25V9H16.5Z" fill="#A1A1AA"/>
+  <!-- Flap: lighter top-left, lightest top-right -->
+  <path d="M3 7C3 6.44772 3.44772 6 4 6H15.5V9L3 9V7Z" fill="#D4D4D8"/>
+  <path d="M16.5 6H28C28.5523 6 29 6.44772 29 7V9H16.5V6Z" fill="#E4E4E7"/>
+  <!-- Envelope flap V overlay -->
+  <path d="M3 9L16 17L29 9" stroke="#18181B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

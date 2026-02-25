@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { Mail, Key, Globe, Zap, Shield, Users, ArrowRight } from "lucide-react";
 
 export default function Home() {
@@ -7,9 +8,7 @@ export default function Home() {
       {/* Nav */}
       <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
-            <Mail className="h-4 w-4 text-primary-foreground" />
-          </div>
+          <Image src="/icon.svg" alt="Inboxes" width={32} height={32} className="rounded-lg" />
           <span className="text-xl font-bold">Inboxes</span>
         </div>
         <div className="flex items-center gap-3">
@@ -116,9 +115,7 @@ export default function Home() {
       <footer className="px-6 py-8 max-w-6xl mx-auto border-t">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <div className="h-6 w-6 rounded bg-primary flex items-center justify-center">
-              <Mail className="h-3 w-3 text-primary-foreground" />
-            </div>
+            <Image src="/icon.svg" alt="Inboxes" width={24} height={24} className="rounded" />
             Inboxes
           </div>
           <div className="flex items-center gap-6 text-sm text-muted-foreground">

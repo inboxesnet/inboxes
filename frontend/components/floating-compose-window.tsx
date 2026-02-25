@@ -17,6 +17,15 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+interface MyAlias {
+  id: string;
+  address: string;
+  name: string;
+  domain_id: string;
+  can_send_as: boolean;
+  is_default: boolean;
+}
+
 export function FloatingComposeWindow() {
   const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose } =
     useEmailWindow();
@@ -37,10 +46,36 @@ export function FloatingComposeWindow() {
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dirtyRef = useRef(false);
 
+  // Alias state
+  const [aliases, setAliases] = useState<MyAlias[]>([]);
+
+  // Fetch aliases when compose opens
+  useEffect(() => {
+    if (composeState !== "open" || !activeDomain) return;
+    api.get<MyAlias[]>("/api/users/me/aliases").then((data) => {
+      const domainAliases = data.filter(
+        (a) => a.domain_id === activeDomain.id && a.can_send_as
+      );
+      setAliases(domainAliases);
+    }).catch(() => {});
+  }, [composeState, activeDomain]);
+
+  // Pick best default from address
+  function pickDefaultFrom(presetFrom?: string): string {
+    if (presetFrom) return presetFrom;
+    const domain = activeDomain?.domain || "example.com";
+    if (aliases.length > 0) {
+      const defaultAlias = aliases.find((a) => a.is_default);
+      if (defaultAlias) return defaultAlias.address;
+      const hello = aliases.find((a) => a.address.startsWith("hello@"));
+      return hello ? hello.address : aliases[0].address;
+    }
+    return `hello@${domain}`;
+  }
+
   // Initialize form from composeData when window opens
   useEffect(() => {
     if (composeState === "open" && composeData) {
-      setFromAddress(composeData.fromAddress || "");
       setTo(composeData.toAddresses || []);
       setCc(composeData.ccAddresses || []);
       setBcc(composeData.bccAddresses || []);
@@ -58,6 +93,13 @@ export function FloatingComposeWindow() {
     }
   }, [composeState, composeData]);
 
+  // Set from address once aliases are loaded
+  useEffect(() => {
+    if (composeState === "open") {
+      setFromAddress(pickDefaultFrom(composeData?.fromAddress));
+    }
+  }, [composeState, aliases, composeData?.fromAddress, activeDomain]);
+
   // Reset form on close
   useEffect(() => {
     if (composeState === "closed") {
@@ -72,10 +114,13 @@ export function FloatingComposeWindow() {
       setShowCcBcc(false);
       setError("");
       setSaveStatus("");
+      setAliases([]);
       dirtyRef.current = false;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     }
   }, [composeState]);
+
+  const effectiveFrom = fromAddress || `hello@${activeDomain?.domain || "example.com"}`;
 
   const saveDraft = useCallback(async () => {
     if (!activeDomain) return;
@@ -88,7 +133,7 @@ export function FloatingComposeWindow() {
       if (draftId) {
         await api.patch(`/api/drafts/${draftId}`, {
           subject,
-          from_address: fromAddress || `me@${activeDomain.domain}`,
+          from_address: effectiveFrom,
           to_addresses: to,
           cc_addresses: cc,
           bcc_addresses: bcc,
@@ -100,7 +145,7 @@ export function FloatingComposeWindow() {
           domain_id: activeDomain.id,
           kind: "compose",
           subject,
-          from_address: fromAddress || `me@${activeDomain.domain}`,
+          from_address: effectiveFrom,
           to_addresses: to,
           cc_addresses: cc,
           bcc_addresses: bcc,
@@ -114,7 +159,7 @@ export function FloatingComposeWindow() {
     } catch {
       setSaveStatus("");
     }
-  }, [activeDomain, draftId, to, cc, bcc, subject, fromAddress, bodyHtml, bodyPlain]);
+  }, [activeDomain, draftId, to, cc, bcc, subject, effectiveFrom, bodyHtml, bodyPlain]);
 
   // Debounced auto-save
   const scheduleSave = useCallback(() => {
@@ -152,7 +197,7 @@ export function FloatingComposeWindow() {
         // Update draft then send it
         await api.patch(`/api/drafts/${draftId}`, {
           subject,
-          from_address: fromAddress || `me@${activeDomain?.domain}`,
+          from_address: effectiveFrom,
           to_addresses: to,
           cc_addresses: cc,
           bcc_addresses: bcc,
@@ -162,7 +207,7 @@ export function FloatingComposeWindow() {
         await api.post(`/api/drafts/${draftId}/send`);
       } else {
         await api.post("/api/emails/send", {
-          from: fromAddress || `me@${activeDomain?.domain}`,
+          from: effectiveFrom,
           to,
           cc,
           bcc,
@@ -258,12 +303,26 @@ export function FloatingComposeWindow() {
           )}
           <div className="flex items-center gap-2">
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">From</label>
-            <Input
-              value={fromAddress}
-              onChange={(e) => { setFromAddress(e.target.value); scheduleSave(); }}
-              placeholder={`me@${activeDomain?.domain || "example.com"}`}
-              className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
-            />
+            {aliases.length > 0 ? (
+              <select
+                value={fromAddress}
+                onChange={(e) => { setFromAddress(e.target.value); scheduleSave(); }}
+                className="flex-1 h-7 text-sm border-0 bg-transparent shadow-none focus-visible:outline-none focus-visible:ring-0 px-1 cursor-pointer"
+              >
+                {aliases.map((a) => (
+                  <option key={a.id} value={a.address}>
+                    {a.name ? `${a.name} <${a.address}>` : a.address}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input
+                value={fromAddress}
+                onChange={(e) => { setFromAddress(e.target.value); scheduleSave(); }}
+                placeholder={`hello@${activeDomain?.domain || "example.com"}`}
+                className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
+              />
+            )}
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">To</label>

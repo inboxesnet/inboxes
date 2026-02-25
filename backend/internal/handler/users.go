@@ -17,6 +17,7 @@ import (
 type UserHandler struct {
 	DB        *pgxpool.Pool
 	ResendSvc *service.ResendService
+	AppURL    string
 }
 
 func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +93,7 @@ func (h *UserHandler) Invite(w http.ResponseWriter, r *http.Request) {
 	// Send invite email via system Resend key
 	h.ResendSvc.SystemFetch(r.Context(), "POST", "/emails", []byte(fmt.Sprintf(
 		`{"from":"noreply@inboxes.app","to":"%s","subject":"You're invited to Inboxes","html":"<p>You've been invited to join an Inboxes workspace.</p><p><a href='%s/claim?token=%s'>Accept Invitation</a></p>"}`,
-		req.Email, "https://inboxes.app", token)))
+		req.Email, h.AppURL, token)))
 
 	writeJSON(w, http.StatusCreated, map[string]string{"id": userID, "status": "invited"})
 }
@@ -122,7 +123,7 @@ func (h *UserHandler) Reinvite(w http.ResponseWriter, r *http.Request) {
 
 	h.ResendSvc.SystemFetch(r.Context(), "POST", "/emails", []byte(fmt.Sprintf(
 		`{"from":"noreply@inboxes.app","to":"%s","subject":"Reminder: You're invited to Inboxes","html":"<p>You've been invited to join an Inboxes workspace.</p><p><a href='%s/claim?token=%s'>Accept Invitation</a></p>"}`,
-		email, "https://inboxes.app", token)))
+		email, h.AppURL, token)))
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reinvited"})
 }
@@ -267,11 +268,11 @@ func (h *UserHandler) MyAliases(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	rows, err := h.DB.Query(r.Context(),
-		`SELECT a.id, a.address, a.name, a.domain_id, au.can_send_as
+		`SELECT a.id, a.address, a.name, a.domain_id, au.can_send_as, au.is_default
 		 FROM aliases a
 		 JOIN alias_users au ON au.alias_id = a.id
 		 WHERE au.user_id = $1 AND a.org_id = $2
-		 ORDER BY a.address`,
+		 ORDER BY au.is_default DESC, a.address`,
 		claims.UserID, claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list aliases")
@@ -282,11 +283,12 @@ func (h *UserHandler) MyAliases(w http.ResponseWriter, r *http.Request) {
 	var aliases []map[string]interface{}
 	for rows.Next() {
 		var id, address, name, domainID string
-		var canSendAs bool
-		if rows.Scan(&id, &address, &name, &domainID, &canSendAs) == nil {
+		var canSendAs, isDefault bool
+		if rows.Scan(&id, &address, &name, &domainID, &canSendAs, &isDefault) == nil {
 			aliases = append(aliases, map[string]interface{}{
 				"id": id, "address": address, "name": name,
 				"domain_id": domainID, "can_send_as": canSendAs,
+				"is_default": isDefault,
 			})
 		}
 	}

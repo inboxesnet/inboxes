@@ -48,6 +48,44 @@ func (h *AliasHandler) List(w http.ResponseWriter, r *http.Request) {
 	if aliases == nil {
 		aliases = []map[string]interface{}{}
 	}
+
+	// Fetch alias_users with user info
+	if len(aliases) > 0 {
+		aliasIDs := make([]string, len(aliases))
+		for i, a := range aliases {
+			aliasIDs[i] = a["id"].(string)
+		}
+
+		userRows, err := h.DB.Query(r.Context(),
+			`SELECT au.alias_id, au.user_id, au.can_send_as, au.is_default, u.name, u.email
+			 FROM alias_users au
+			 JOIN users u ON u.id = au.user_id
+			 WHERE au.alias_id = ANY($1)
+			 ORDER BY u.name`, aliasIDs)
+		if err == nil {
+			defer userRows.Close()
+			aliasUsers := map[string][]map[string]interface{}{}
+			for userRows.Next() {
+				var aliasID, userID, userName, userEmail string
+				var canSendAs, isDefault bool
+				if userRows.Scan(&aliasID, &userID, &canSendAs, &isDefault, &userName, &userEmail) == nil {
+					aliasUsers[aliasID] = append(aliasUsers[aliasID], map[string]interface{}{
+						"user_id": userID, "can_send_as": canSendAs,
+						"is_default": isDefault, "name": userName, "email": userEmail,
+					})
+				}
+			}
+			for _, a := range aliases {
+				id := a["id"].(string)
+				if users, ok := aliasUsers[id]; ok {
+					a["users"] = users
+				} else {
+					a["users"] = []map[string]interface{}{}
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, aliases)
 }
 
@@ -167,4 +205,70 @@ func (h *AliasHandler) RemoveUser(w http.ResponseWriter, r *http.Request) {
 		aliasID, userID)
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AliasHandler) SetDefault(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	aliasID := chi.URLParam(r, "id")
+
+	// Get the domain_id for this alias and verify org ownership
+	var domainID string
+	err := h.DB.QueryRow(r.Context(),
+		`SELECT a.domain_id FROM aliases a WHERE a.id = $1 AND a.org_id = $2`,
+		aliasID, claims.OrgID).Scan(&domainID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "alias not found")
+		return
+	}
+
+	// Clear is_default for all of this user's aliases on this domain
+	h.DB.Exec(r.Context(),
+		`UPDATE alias_users SET is_default = false
+		 WHERE user_id = $1 AND alias_id IN (
+		   SELECT id FROM aliases WHERE domain_id = $2 AND org_id = $3
+		 )`,
+		claims.UserID, domainID, claims.OrgID)
+
+	// Set this alias as default (upsert: create alias_users row if needed)
+	h.DB.Exec(r.Context(),
+		`INSERT INTO alias_users (alias_id, user_id, can_send_as, is_default)
+		 VALUES ($1, $2, true, true)
+		 ON CONFLICT (alias_id, user_id) DO UPDATE SET is_default = true`,
+		aliasID, claims.UserID)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AliasHandler) DiscoveredAddresses(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+
+	rows, err := h.DB.Query(r.Context(),
+		`SELECT da.id, da.domain_id, da.address, da.local_part, da.type, da.email_count
+		 FROM discovered_addresses da
+		 JOIN domains d ON d.id = da.domain_id
+		 WHERE d.org_id = $1 AND da.type = 'unclaimed'
+		 ORDER BY da.email_count DESC`,
+		claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch addresses")
+		return
+	}
+	defer rows.Close()
+
+	var addresses []map[string]interface{}
+	for rows.Next() {
+		var id, domainID, address, localPart, addrType string
+		var emailCount int
+		if rows.Scan(&id, &domainID, &address, &localPart, &addrType, &emailCount) == nil {
+			addresses = append(addresses, map[string]interface{}{
+				"id": id, "domain_id": domainID, "address": address,
+				"local_part": localPart, "type": addrType, "email_count": emailCount,
+			})
+		}
+	}
+
+	if addresses == nil {
+		addresses = []map[string]interface{}{}
+	}
+	writeJSON(w, http.StatusOK, addresses)
 }

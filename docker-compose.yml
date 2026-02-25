@@ -39,6 +39,7 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
       APP_URL: https://${DOMAIN}
+      PUBLIC_URL: https://${DOMAIN}
       API_PORT: "8080"
       RESEND_SYSTEM_API_KEY: ${RESEND_SYSTEM_API_KEY:-}
 
