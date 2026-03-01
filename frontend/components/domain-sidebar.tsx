@@ -1,8 +1,12 @@
 "use client";
 
+import { useState, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
 import { useDroppable } from "@dnd-kit/core";
+import { useTheme } from "next-themes";
 import { useDomains } from "@/contexts/domain-context";
+import { useNotifications } from "@/contexts/notification-context";
 import { DomainIcon } from "@/components/domain-icon";
 import { cn } from "@/lib/utils";
 import {
@@ -10,46 +14,60 @@ import {
   Send,
   FileText,
   Archive,
+  Star,
   Trash2,
   AlertTriangle,
   PenSquare,
   Settings,
   Plus,
   X,
+  Sun,
+  Moon,
+  LogOut,
+  Tag,
+  WifiOff,
+  Keyboard,
 } from "lucide-react";
-import type { Folder } from "@/lib/types";
+import { api } from "@/lib/api";
 
-const FOLDERS: { key: Folder; label: string; icon: React.ReactNode }[] = [
+interface CustomLabel {
+  id: string;
+  name: string;
+}
+import type { Label } from "@/lib/types";
+
+const LABELS: { key: Label; label: string; icon: React.ReactNode }[] = [
   { key: "inbox", label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
   { key: "sent", label: "Sent", icon: <Send className="h-4 w-4" /> },
   { key: "drafts", label: "Drafts", icon: <FileText className="h-4 w-4" /> },
   { key: "archive", label: "Archive", icon: <Archive className="h-4 w-4" /> },
+  { key: "starred", label: "Starred", icon: <Star className="h-4 w-4" /> },
   { key: "spam", label: "Spam", icon: <AlertTriangle className="h-4 w-4" /> },
   { key: "trash", label: "Trash", icon: <Trash2 className="h-4 w-4" /> },
 ];
 
 interface DomainSidebarProps {
   onCompose: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: string) => void;
   onCloseSidebar?: () => void;
 }
 
-function DroppableFolderButton({
-  folderKey,
+function DroppableLabelButton({
+  labelKey,
   label,
   icon,
   isActive,
   count,
   onClick,
 }: {
-  folderKey: string;
+  labelKey: string;
   label: string;
   icon: React.ReactNode;
   isActive: boolean;
   count: number;
   onClick: () => void;
 }) {
-  const { isOver, setNodeRef } = useDroppable({ id: folderKey });
+  const { isOver, setNodeRef } = useDroppable({ id: labelKey });
 
   return (
     <button
@@ -77,13 +95,34 @@ function DroppableFolderButton({
 export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: DomainSidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const { theme, setTheme } = useTheme();
   const { domains, activeDomain, setActiveDomainId, unreadCounts } =
     useDomains();
+  const { connected } = useNotifications();
 
-  // Extract folder from path: /d/{domainId}/{folder}/... → folder is segments[3]
+  // Show disconnected banner only after 3s of disconnection
+  const [showDisconnected, setShowDisconnected] = useState(false);
+  const disconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    if (!connected) {
+      disconnectTimerRef.current = setTimeout(() => setShowDisconnected(true), 3000);
+    } else {
+      if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current);
+      setShowDisconnected(false);
+    }
+    return () => { if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current); };
+  }, [connected]);
+
+  const [customLabels, setCustomLabels] = useState<CustomLabel[]>([]);
+
+  useEffect(() => {
+    api.get<CustomLabel[]>("/api/labels").then(setCustomLabels).catch(() => { toast.error("Failed to load labels"); });
+  }, []);
+
+  // Extract label from path: /d/{domainId}/{label}/... → label is segments[3]
   const segments = pathname.split("/");
-  const folderSegment = segments[3] || "inbox";
-  const currentFolder = FOLDERS.some((f) => f.key === folderSegment) ? folderSegment : "inbox";
+  const labelSegment = segments[3] || "inbox";
+  const currentLabel = LABELS.some((f) => f.key === labelSegment) ? labelSegment : labelSegment;
 
   function navigateToDomain(domainId: string) {
     setActiveDomainId(domainId);
@@ -91,28 +130,37 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
     onCloseSidebar?.();
   }
 
-  function navigateToFolder(folder: string) {
+  function navigateToLabel(label: string) {
     if (!activeDomain) return;
-    router.push(`/d/${activeDomain.id}/${folder}`);
+    router.push(`/d/${activeDomain.id}/${label}`);
     onCloseSidebar?.();
   }
 
-  const folderList = FOLDERS.map((f) => {
-    const isActive = currentFolder === f.key;
+  async function handleLogout() {
+    try {
+      await api.post("/api/auth/logout");
+    } catch {
+      // Ignore errors — redirect regardless
+    }
+    window.location.href = "/login";
+  }
+
+  const labelList = LABELS.map((f) => {
+    const isActive = currentLabel === f.key;
     const count =
       f.key === "inbox" && activeDomain
         ? unreadCounts[activeDomain.id] || 0
         : 0;
 
     return (
-      <DroppableFolderButton
+      <DroppableLabelButton
         key={f.key}
-        folderKey={f.key}
+        labelKey={f.key}
         label={f.label}
         icon={f.icon}
         isActive={isActive}
         count={count}
-        onClick={() => navigateToFolder(f.key)}
+        onClick={() => navigateToLabel(f.key)}
       />
     );
   });
@@ -146,7 +194,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
             />
           ))}
           <button
-            onClick={onOpenSettings}
+            onClick={() => onOpenSettings("domains")}
             className="flex items-center justify-center h-10 w-10 rounded-full bg-muted text-muted-foreground hover:bg-green-500 hover:text-white transition-colors shrink-0"
             title="Add domain"
           >
@@ -167,17 +215,62 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
 
         {/* Folders */}
         <nav className="flex-1 px-2 space-y-px overflow-y-auto">
-          {folderList}
+          {labelList}
+          {customLabels.length > 0 && (
+            <>
+              <div className="h-px bg-border my-2" />
+              {customLabels.map((l) => (
+                <DroppableLabelButton
+                  key={`label-${l.name}`}
+                  labelKey={l.name}
+                  label={l.name}
+                  icon={<Tag className="h-4 w-4" />}
+                  isActive={currentLabel === l.name}
+                  count={0}
+                  onClick={() => navigateToLabel(l.name)}
+                />
+              ))}
+            </>
+          )}
         </nav>
 
-        {/* Settings */}
-        <div className="border-t p-2 shrink-0">
+        {/* Disconnected banner */}
+        {showDisconnected && (
+          <div className="mx-2 mb-1 flex items-center gap-2 rounded-md bg-yellow-100 dark:bg-yellow-900/30 px-3 py-1.5 text-xs text-yellow-800 dark:text-yellow-300 shrink-0">
+            <WifiOff className="h-3.5 w-3.5" />
+            Reconnecting...
+          </div>
+        )}
+
+        {/* Theme toggle + Settings + Logout */}
+        <div className="border-t p-2 shrink-0 space-y-px">
           <button
-            onClick={onOpenSettings}
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </button>
+          <button
+            onClick={() => { window.dispatchEvent(new CustomEvent("open-shortcuts-dialog")); onCloseSidebar?.(); }}
+            className="flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+          >
+            <Keyboard className="h-4 w-4" />
+            Keyboard shortcuts
+          </button>
+          <button
+            onClick={() => onOpenSettings()}
             className="flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
           >
             <Settings className="h-4 w-4" />
             Settings
+          </button>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent/50 hover:text-destructive transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+            Log out
           </button>
         </div>
       </div>
@@ -201,7 +294,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
 
           {/* Add domain */}
           <button
-            onClick={onOpenSettings}
+            onClick={() => onOpenSettings("domains")}
             className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-green-500 hover:text-white transition-all duration-200"
             title="Add domain"
           >
@@ -211,17 +304,44 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
           {/* Spacer */}
           <div className="flex-1" />
 
+          {/* Theme toggle */}
+          <button
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-accent transition-all duration-200"
+            title={theme === "dark" ? "Light mode" : "Dark mode"}
+          >
+            {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+          </button>
+
+          {/* Keyboard shortcuts */}
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent("open-shortcuts-dialog"))}
+            className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-accent transition-all duration-200"
+            title="Keyboard shortcuts (?)"
+          >
+            <Keyboard className="h-5 w-5" />
+          </button>
+
           {/* Settings */}
           <button
-            onClick={onOpenSettings}
+            onClick={() => onOpenSettings()}
             className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-accent transition-all duration-200"
             title="Settings"
           >
             <Settings className="h-5 w-5" />
           </button>
+
+          {/* Logout */}
+          <button
+            onClick={handleLogout}
+            className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground transition-all duration-200"
+            title="Log out"
+          >
+            <LogOut className="h-5 w-5" />
+          </button>
         </div>
 
-        {/* Right panel: folder navigation */}
+        {/* Right panel: label navigation */}
         <div className="flex flex-col w-[240px] bg-background border-r">
           {/* Domain name header */}
           <div className="h-14 flex items-center px-4 border-b">
@@ -241,10 +361,32 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
             </button>
           </div>
 
-          {/* Folder list */}
-          <nav className="flex-1 px-2 space-y-px">
-            {folderList}
+          {/* Label list */}
+          <nav className="flex-1 px-2 space-y-px overflow-y-auto">
+            {labelList}
+            {customLabels.length > 0 && (
+              <>
+                <div className="h-px bg-border my-2" />
+                {customLabels.map((l) => (
+                  <DroppableLabelButton
+                    key={`label-${l.name}`}
+                    labelKey={l.name}
+                    label={l.name}
+                    icon={<Tag className="h-4 w-4" />}
+                    isActive={currentLabel === l.name}
+                    count={0}
+                    onClick={() => navigateToLabel(l.name)}
+                  />
+                ))}
+              </>
+            )}
           </nav>
+          {showDisconnected && (
+            <div className="mx-2 mb-2 flex items-center gap-2 rounded-md bg-yellow-100 dark:bg-yellow-900/30 px-3 py-1.5 text-xs text-yellow-800 dark:text-yellow-300 shrink-0">
+              <WifiOff className="h-3.5 w-3.5 shrink-0" />
+              Reconnecting...
+            </div>
+          )}
         </div>
       </div>
     </>

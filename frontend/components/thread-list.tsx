@@ -2,14 +2,16 @@
 
 import { useRouter } from "next/navigation";
 import { cn, formatThreadTime } from "@/lib/utils";
-import { Star, Archive, Trash2, Mail, MailOpen } from "lucide-react";
+import { Star, Archive, Trash2, Mail, MailOpen, BellOff } from "lucide-react";
 import { useDraggable } from "@dnd-kit/core";
-import type { Thread, Folder } from "@/lib/types";
+import { hasLabel } from "@/lib/types";
+import type { Thread, Label } from "@/lib/types";
+import { extractSender, cleanSnippet, parseParticipants } from "@/lib/thread-helpers";
 
 interface ThreadListProps {
   threads: Thread[];
   domainId: string;
-  folder: Folder;
+  label: Label;
   selectedId?: string;
   selectedIds: Set<string>;
   focusedIndex: number;
@@ -18,49 +20,14 @@ interface ThreadListProps {
   onStar: (id: string) => void;
   onAction: (id: string, action: string) => void;
   onThreadClick?: (threadId: string) => void;
-}
-
-function extractSender(emails: string[]): string {
-  if (!emails || emails.length === 0) return "Unknown";
-  const first = emails[0];
-  const atIndex = first.indexOf("@");
-  return atIndex > 0 ? first.substring(0, atIndex) : first;
-}
-
-function decodeHtmlEntities(text: string): string {
-  return text
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
-}
-
-function cleanSnippet(text: string): string {
-  return decodeHtmlEntities(text)
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function parseParticipants(raw: string[] | string): string[] {
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === "string") {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return [];
-    }
-  }
-  return [];
+  resolveLabel?: (thread: Thread) => Label;
 }
 
 function ThreadRow({
   thread,
   index,
   domainId,
-  folder,
+  label,
   selectedId,
   selectedIds,
   focusedIndex,
@@ -68,11 +35,12 @@ function ThreadRow({
   onStar,
   onAction,
   onThreadClick,
+  resolveLabel,
 }: {
   thread: Thread;
   index: number;
   domainId: string;
-  folder: Folder;
+  label: Label;
   selectedId?: string;
   selectedIds: Set<string>;
   focusedIndex: number;
@@ -80,11 +48,18 @@ function ThreadRow({
   onStar: (id: string) => void;
   onAction: (id: string, action: string) => void;
   onThreadClick?: (threadId: string) => void;
+  resolveLabel?: (thread: Thread) => Label;
 }) {
   const router = useRouter();
+  const effectiveLabel = resolveLabel ? resolveLabel(thread) : label;
+  // Include all selected thread IDs in drag data for multi-thread drag
+  const dragThreadIds = selectedIds.has(thread.id) && selectedIds.size > 1
+    ? Array.from(selectedIds)
+    : [thread.id];
+
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: thread.id,
-    data: { thread },
+    data: { thread, threadIds: dragThreadIds },
   });
 
   const isSelected = selectedIds.has(thread.id);
@@ -93,7 +68,7 @@ function ThreadRow({
   const isUnread = thread.unread_count > 0;
   const participants = parseParticipants(thread.participant_emails);
   const displayName =
-    folder === "sent" && thread.original_to
+    effectiveLabel === "sent" && thread.original_to
       ? extractSender([thread.original_to])
       : extractSender(participants);
 
@@ -102,12 +77,12 @@ function ThreadRow({
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      role="button"
+      role="listitem"
       tabIndex={0}
-      onClick={() => onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${folder}/${thread.id}`)}
+      onClick={() => onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${effectiveLabel}/${thread.id}`)}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
-          onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${folder}/${thread.id}`);
+          onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${label}/${thread.id}`);
         }
       }}
       className={cn(
@@ -115,9 +90,9 @@ function ThreadRow({
         isDragging && "opacity-50",
         isActive && "bg-accent",
         isSelected && !isActive && "bg-accent/60",
-        isUnread && !isSelected && !isActive && "bg-blue-50/50",
+        isUnread && !isSelected && !isActive && "bg-blue-50/50 dark:bg-accent/60",
         isFocused && !isSelected && !isActive && "ring-1 ring-inset ring-primary/30",
-        !isActive && !isSelected && !isUnread && "hover:bg-muted/50"
+        !isActive && !isSelected && !isUnread && "hover:bg-muted/50 text-muted-foreground dark:text-muted-foreground"
       )}
     >
       {/* Checkbox — hidden on mobile */}
@@ -141,11 +116,12 @@ function ThreadRow({
         }}
         onPointerDown={(e) => e.stopPropagation()}
         className="p-0.5 -m-0.5"
+        aria-label={hasLabel(thread, "starred") ? "Unstar" : "Star"}
       >
         <Star
           className={cn(
             "h-3.5 w-3.5",
-            thread.starred
+            hasLabel(thread, "starred")
               ? "text-yellow-500 fill-yellow-500"
               : "text-muted-foreground/30 hover:text-yellow-500"
           )}
@@ -155,8 +131,8 @@ function ThreadRow({
       {/* Mobile: two-line layout */}
       <div className="min-w-0 md:hidden flex flex-col justify-center gap-0.5">
         <div className="flex items-baseline min-w-0">
-          <span className={cn("text-sm truncate", isUnread ? "font-semibold" : "font-normal")}>
-            {folder === "sent" && <span className="text-muted-foreground font-normal">To </span>}
+          <span className={cn("text-sm truncate", isUnread ? "font-semibold text-foreground" : "font-normal text-foreground dark:text-muted-foreground")}>
+            {label === "sent" && <span className="text-muted-foreground font-normal">To </span>}
             {displayName}
           </span>
           {thread.message_count > 1 && (
@@ -166,9 +142,10 @@ function ThreadRow({
           )}
         </div>
         <div className="text-xs truncate">
-          <span className={isUnread ? "font-medium text-foreground" : "text-muted-foreground"}>{thread.subject}</span>
+          {hasLabel(thread, "muted") && <BellOff className="inline h-3 w-3 text-muted-foreground/50 mr-1" />}
+          <span className={isUnread ? "font-medium text-foreground" : "text-muted-foreground dark:text-muted-foreground/80"}>{thread.subject}</span>
           {thread.snippet && (
-            <span className="text-muted-foreground/60">
+            <span className="text-muted-foreground/80">
               {" — "}{cleanSnippet(thread.snippet)}
             </span>
           )}
@@ -179,10 +156,10 @@ function ThreadRow({
       <span
         className={cn(
           "hidden md:inline text-sm truncate",
-          isUnread ? "font-semibold" : "font-normal"
+          isUnread ? "font-semibold text-foreground" : "font-normal dark:text-muted-foreground"
         )}
       >
-        {folder === "sent" && <span className="text-muted-foreground font-normal">To </span>}
+        {label === "sent" && <span className="text-muted-foreground font-normal">To </span>}
         {displayName}
         {thread.message_count > 1 && (
           <span className="text-xs text-muted-foreground ml-1">
@@ -193,7 +170,8 @@ function ThreadRow({
 
       {/* Desktop: Subject — snippet */}
       <div className="hidden md:block min-w-0 text-sm truncate">
-        <span className={isUnread ? "font-semibold text-foreground" : ""}>{thread.subject}</span>
+        {hasLabel(thread, "muted") && <BellOff className="inline h-3 w-3 text-muted-foreground/50 mr-1" />}
+        <span className={isUnread ? "font-semibold text-foreground" : "dark:text-muted-foreground"}>{thread.subject}</span>
         {thread.snippet && (
           <span className="text-muted-foreground/70">
             {" — "}{cleanSnippet(thread.snippet)}
@@ -205,14 +183,20 @@ function ThreadRow({
       <div className="flex items-center justify-end">
         {/* Time — always visible on mobile, hidden on desktop hover */}
         <span className="text-xs text-muted-foreground md:group-hover:hidden whitespace-nowrap">
+          {resolveLabel && (
+            <span className="text-[10px] text-muted-foreground/80 mr-1.5 capitalize">
+              {effectiveLabel}
+            </span>
+          )}
           {formatThreadTime(thread.last_message_at)}
         </span>
 
         {/* Actions — desktop hover only */}
         <div className="hidden md:group-hover:flex items-center gap-1">
-          {folder !== "archive" && (
+          {effectiveLabel !== "archive" && (
             <button
               title="Archive"
+              aria-label="Archive"
               onClick={(e) => {
                 e.stopPropagation();
                 onAction(thread.id, "archive");
@@ -223,9 +207,10 @@ function ThreadRow({
               <Archive className="h-3.5 w-3.5" />
             </button>
           )}
-          {folder !== "trash" && (
+          {effectiveLabel !== "trash" && (
             <button
               title="Trash"
+              aria-label="Trash"
               onClick={(e) => {
                 e.stopPropagation();
                 onAction(thread.id, "trash");
@@ -238,6 +223,7 @@ function ThreadRow({
           )}
           <button
             title={isUnread ? "Mark read" : "Mark unread"}
+            aria-label={isUnread ? "Mark as read" : "Mark as unread"}
             onClick={(e) => {
               e.stopPropagation();
               onAction(thread.id, isUnread ? "read" : "unread");
@@ -260,7 +246,7 @@ function ThreadRow({
 export function ThreadList({
   threads,
   domainId,
-  folder,
+  label,
   selectedId,
   selectedIds,
   focusedIndex,
@@ -269,20 +255,21 @@ export function ThreadList({
   onStar,
   onAction,
   onThreadClick,
+  resolveLabel,
 }: ThreadListProps) {
   if (threads.length === 0) {
     return null;
   }
 
   return (
-    <div className="divide-y">
+    <div className="divide-y" role="list" aria-label="Email threads">
       {threads.map((thread, index) => (
         <ThreadRow
           key={thread.id}
           thread={thread}
           index={index}
           domainId={domainId}
-          folder={folder}
+          label={label}
           selectedId={selectedId}
           selectedIds={selectedIds}
           focusedIndex={focusedIndex}
@@ -290,6 +277,7 @@ export function ThreadList({
           onStar={onStar}
           onAction={onAction}
           onThreadClick={onThreadClick}
+          resolveLabel={resolveLabel}
         />
       ))}
     </div>

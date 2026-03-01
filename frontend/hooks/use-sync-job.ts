@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { api } from "@/lib/api";
 import type { SyncJob } from "@/lib/types";
 
@@ -74,31 +74,40 @@ export function useSyncJob() {
     return () => stopPolling();
   }, [stopPolling]);
 
-  return {
-    job,
-    error,
-    isRunning:
-      job?.status === "pending" || job?.status === "running",
-    isComplete: job?.status === "completed",
-    isFailed: job?.status === "failed",
-    progress: job
-      ? {
-          phase: job.phase,
-          imported: job.imported,
-          total: job.total,
-          message:
-            job.phase === "scanning"
-              ? "Scanning emails..."
-              : job.phase === "importing" && job.total > 0
-                ? `Importing ${job.imported} of ${job.total} emails`
-                : job.phase === "addresses"
-                  ? "Discovering addresses..."
-                  : job.phase === "done"
-                    ? `Imported ${job.sent_count} sent + ${job.received_count} received into ${job.thread_count} threads`
-                    : "Preparing...",
-        }
-      : null,
-    result:
+  const aliasesReady = !!(
+    job &&
+    (job.phase === "aliases_ready" ||
+      job.phase === "importing" ||
+      job.phase === "addresses" ||
+      job.phase === "done")
+  );
+
+  const progress = useMemo(
+    () =>
+      job
+        ? {
+            phase: job.phase,
+            imported: job.imported,
+            total: job.total,
+            message:
+              job.phase === "scanning" || job.phase === "aliases"
+                ? "Scanning emails..."
+                : job.phase === "aliases_ready"
+                  ? "Addresses discovered — starting import..."
+                  : job.phase === "importing" && job.total > 0
+                    ? `Importing ${job.imported} of ${job.total} emails`
+                    : job.phase === "addresses"
+                      ? "Discovering addresses..."
+                      : job.phase === "done"
+                        ? `Imported ${job.sent_count} sent + ${job.received_count} received into ${job.thread_count} threads`
+                        : "Preparing...",
+          }
+        : null,
+    [job?.phase, job?.imported, job?.total, job?.sent_count, job?.received_count, job?.thread_count]
+  );
+
+  const result = useMemo(
+    () =>
       job && (job.status === "completed" || job.phase === "done")
         ? {
             sent_count: job.sent_count,
@@ -107,6 +116,19 @@ export function useSyncJob() {
             address_count: job.address_count,
           }
         : null,
+    [job?.status, job?.phase, job?.sent_count, job?.received_count, job?.thread_count, job?.address_count]
+  );
+
+  return {
+    job,
+    error,
+    isRunning:
+      job?.status === "pending" || job?.status === "running",
+    isComplete: job?.status === "completed",
+    isFailed: job?.status === "failed",
+    aliasesReady,
+    progress,
+    result,
     startSync,
     resumeJob,
   };

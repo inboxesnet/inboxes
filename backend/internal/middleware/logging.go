@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	chiMW "github.com/go-chi/chi/v5/middleware"
 )
 
 type responseWriter struct {
@@ -46,6 +48,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"path", r.URL.Path,
 			"status", rw.statusCode,
 			"duration", time.Since(start),
+			"request_id", chiMW.GetReqID(r.Context()),
 		)
 	})
 }

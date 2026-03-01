@@ -3,12 +3,14 @@ package router
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/handler"
 	"github.com/inboxes/backend/internal/middleware"
+	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,9 +24,10 @@ type Config struct {
 	StripeKey           string
 	StripePriceID       string
 	StripeWebhookSecret string
+	EventCatchupMaxAge  time.Duration
 }
 
-func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService, resendSvc *service.ResendService, bus *event.Bus, wsHub *ws.Hub, cfg Config) *chi.Mux {
+func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService, resendSvc *service.ResendService, bus *event.Bus, wsHub *ws.Hub, limiterMap *queue.OrgLimiterMap, cfg Config) *chi.Mux {
 	secret := cfg.Secret
 	appURL := cfg.AppURL
 	stripeKey := cfg.StripeKey
@@ -35,24 +38,30 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	r.Use(middleware.LoggingMiddleware)
 	r.Use(middleware.CORSMiddleware(appURL))
 	r.Use(chiMiddleware.Recoverer)
+	r.Use(middleware.SecurityHeaders)
+	r.Use(middleware.ValidateContentType)
+	r.Use(chiMiddleware.Compress(5))
 
-	auth := &handler.AuthHandler{DB: db, Secret: secret, AppURL: appURL, ResendSvc: resendSvc, StripeKey: stripeKey}
+	auth := &handler.AuthHandler{DB: db, RDB: rdb, Secret: secret, AppURL: appURL, ResendSvc: resendSvc, StripeKey: stripeKey}
+	setup := &handler.SetupHandler{DB: db, EncSvc: encSvc, ResendSvc: resendSvc, Secret: secret, AppURL: appURL, StripeKey: stripeKey}
 	threads := &handler.ThreadHandler{DB: db, Bus: bus}
-	emails := &handler.EmailHandler{DB: db, ResendSvc: resendSvc, Bus: bus}
-	webhooks := &handler.WebhookHandler{DB: db, Bus: bus, ResendSvc: resendSvc}
+	emails := &handler.EmailHandler{DB: db, ResendSvc: resendSvc, Bus: bus, RDB: rdb}
+	webhooks := &handler.WebhookHandler{DB: db, Bus: bus, ResendSvc: resendSvc, RDB: rdb, EncSvc: encSvc}
 	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus, PublicURL: cfg.PublicURL}
-	users := &handler.UserHandler{DB: db, ResendSvc: resendSvc, AppURL: appURL}
+	users := &handler.UserHandler{DB: db, RDB: rdb, Secret: secret, ResendSvc: resendSvc, AppURL: appURL}
 	aliases := &handler.AliasHandler{DB: db}
-	domains := &handler.DomainHandler{DB: db, ResendSvc: resendSvc}
+	domains := &handler.DomainHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, PublicURL: cfg.PublicURL}
 	contacts := &handler.ContactHandler{DB: db}
 	attachments := &handler.AttachmentHandler{DB: db}
-	drafts := &handler.DraftHandler{DB: db, ResendSvc: resendSvc, Bus: bus}
-	orgs := &handler.OrgHandler{DB: db, EncSvc: encSvc, ResendSvc: resendSvc, Bus: bus, StripeKey: stripeKey}
+	drafts := &handler.DraftHandler{DB: db, ResendSvc: resendSvc, Bus: bus, RDB: rdb}
+	orgs := &handler.OrgHandler{DB: db, RDB: rdb, EncSvc: encSvc, ResendSvc: resendSvc, Bus: bus, StripeKey: stripeKey, LimiterMap: limiterMap}
+	labels := &handler.LabelHandler{DB: db}
 	syncH := &handler.SyncHandler{DB: db, RDB: rdb}
-	events := &handler.EventHandler{DB: db}
+	events := &handler.EventHandler{DB: db, CatchupMaxAge: cfg.EventCatchupMaxAge}
 	cron := &handler.CronHandler{DB: db, ResendSvc: resendSvc}
 	billing := &handler.BillingHandler{
 		DB:                  db,
+		Bus:                 bus,
 		StripeKey:           stripeKey,
 		StripePriceID:       cfg.StripePriceID,
 		StripeWebhookSecret: cfg.StripeWebhookSecret,
@@ -61,8 +70,24 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 	// Health
 	r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		dbOK := db.Ping(ctx) == nil
+		redisOK := rdb.Ping(ctx).Err() == nil
+
+		status := "ok"
+		httpStatus := http.StatusOK
+		if !dbOK || !redisOK {
+			status = "degraded"
+			httpStatus = http.StatusServiceUnavailable
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		w.WriteHeader(httpStatus)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": status,
+			"db":     dbOK,
+			"redis":  redisOK,
+		})
 	})
 
 	// Public runtime config (self-host: no rebuild needed per deployment)
@@ -82,21 +107,20 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		})
 	})
 
-	// Public auth (with optional rate limiting when hosted)
-	if stripeKey != "" {
-		r.With(middleware.RateLimitByIP(rdb, 5, 1*60*60)).Post("/api/auth/signup", auth.Signup)
-		r.With(middleware.RateLimitByIP(rdb, 10, 15*60)).Post("/api/auth/login", auth.Login)
-		r.With(middleware.RateLimitByIP(rdb, 3, 1*60*60)).Post("/api/auth/forgot-password", auth.ForgotPassword)
-	} else {
-		r.Post("/api/auth/signup", auth.Signup)
-		r.Post("/api/auth/login", auth.Login)
-		r.Post("/api/auth/forgot-password", auth.ForgotPassword)
-	}
-	r.Post("/api/auth/reset-password", auth.ResetPassword)
-	r.Post("/api/auth/claim", auth.Claim)
-	r.Get("/api/auth/claim/validate", auth.ValidateClaim)
-	r.Post("/api/auth/verify-email", auth.VerifyEmail)
-	r.Post("/api/auth/resend-verification", auth.ResendVerification)
+	// Self-hosted setup (public, no auth — rate-limited for mutations)
+	r.With(middleware.RateLimitByIP(rdb, 60, 60)).Get("/api/setup/status", setup.Status)
+	r.With(middleware.RateLimitByIP(rdb, 3, 15*60)).Post("/api/setup", setup.Setup)
+	r.With(middleware.RateLimitByIP(rdb, 3, 15*60)).Post("/api/setup/validate-key", setup.ValidateKey)
+
+	// Public auth (always rate-limited)
+	r.With(middleware.RateLimitByIP(rdb, 5, 1*60*60)).Post("/api/auth/signup", auth.Signup)
+	r.With(middleware.RateLimitByIP(rdb, 10, 15*60), middleware.RateLimitByBodyField(rdb, "email", 10, 15*60)).Post("/api/auth/login", auth.Login)
+	r.With(middleware.RateLimitByIP(rdb, 3, 1*60*60), middleware.RateLimitByBodyField(rdb, "email", 3, 1*60*60)).Post("/api/auth/forgot-password", auth.ForgotPassword)
+	r.With(middleware.RateLimitByIP(rdb, 5, 15*60)).Post("/api/auth/reset-password", auth.ResetPassword)
+	r.With(middleware.RateLimitByIP(rdb, 5, 15*60)).Post("/api/auth/claim", auth.Claim)
+	r.With(middleware.RateLimitByIP(rdb, 10, 15*60)).Get("/api/auth/claim/validate", auth.ValidateClaim)
+	r.With(middleware.RateLimitByIP(rdb, 5, 15*60), middleware.RateLimitByBodyField(rdb, "email", 5, 15*60)).Post("/api/auth/verify-email", auth.VerifyEmail)
+	r.With(middleware.RateLimitByIP(rdb, 3, 1*60*60), middleware.RateLimitByBodyField(rdb, "email", 3, 1*60*60)).Post("/api/auth/resend-verification", auth.ResendVerification)
 
 	// Webhooks (signature-verified, not JWT)
 	r.Post("/api/webhooks/resend/{orgId}", webhooks.HandleResend)
@@ -106,24 +130,15 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 	// WebSocket
 	r.Get("/api/ws", func(w http.ResponseWriter, r *http.Request) {
-		ws.ServeWS(wsHub, secret, w, r)
+		ws.ServeWS(wsHub, secret, appURL, w, r)
 	})
 
 	// Protected
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.AuthMiddleware(secret))
+		r.Use(middleware.AuthMiddleware(secret, rdb, db))
 
 		// Always accessible (even without active plan)
 		r.Post("/api/auth/logout", auth.Logout)
-
-		// Onboarding
-		r.Get("/api/onboarding/status", onboarding.Status)
-		r.Post("/api/onboarding/connect", onboarding.Connect)
-		r.Post("/api/onboarding/domains", onboarding.SelectDomains)
-		r.Post("/api/onboarding/webhook", onboarding.SetupWebhook)
-		r.Get("/api/onboarding/addresses", onboarding.GetAddresses)
-		r.Post("/api/onboarding/addresses", onboarding.SetupAddresses)
-		r.Post("/api/onboarding/complete", onboarding.Complete)
 
 		// Org settings
 		r.Get("/api/orgs/settings", orgs.GetSettings)
@@ -132,14 +147,25 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		// User profile
 		r.Get("/api/users/me", users.Me)
 		r.Patch("/api/users/me", users.UpdateMe)
-		r.Patch("/api/users/me/password", users.UpdatePassword)
+		r.With(middleware.RateLimitByIP(rdb, 5, 15*60)).Patch("/api/users/me/password", users.UpdatePassword)
 		r.Get("/api/users/me/preferences", users.GetPreferences)
 		r.Patch("/api/users/me/preferences", users.UpdatePreferences)
+		r.Get("/api/users/me/sessions", users.ListSessions)
+		r.Delete("/api/users/me/sessions/{jti}", users.RevokeSession)
 
 		// Billing
 		r.Get("/api/billing", billing.GetBilling)
 		r.Post("/api/billing/checkout", billing.Checkout)
 		r.Post("/api/billing/portal", billing.Portal)
+
+		// System settings (self-hosted owner only)
+		if stripeKey == "" {
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireOwner(db))
+				r.Get("/api/system/email", setup.GetSystemEmail)
+				r.Patch("/api/system/email", setup.UpdateSystemEmail)
+			})
+		}
 
 		// Sync jobs
 		r.Post("/api/sync", syncH.StartSync)
@@ -148,17 +174,30 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		// Events catchup (for WS reconnection)
 		r.Get("/api/events", events.Since)
 
-		// Cron
-		r.Post("/api/cron/purge-trash", cron.PurgeTrash)
-		r.Post("/api/cron/cleanup-webhooks", cron.CleanupWebhooks)
+		// Admin-only routes
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireAdmin)
+			r.Use(middleware.RateLimitByIP(rdb, 5, 60))
+			r.Post("/api/cron/purge-trash", cron.PurgeTrash)
+			r.Post("/api/cron/cleanup-webhooks", cron.CleanupWebhooks)
+			r.Get("/api/admin/jobs", emails.AdminJobs)
+		})
 
 		// Require active plan for feature routes
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequirePlan(stripeKey, db))
 
+			// Onboarding
+			r.Get("/api/onboarding/status", onboarding.Status)
+			r.Post("/api/onboarding/connect", onboarding.Connect)
+			r.Post("/api/onboarding/domains", onboarding.SelectDomains)
+			r.Post("/api/onboarding/webhook", onboarding.SetupWebhook)
+			r.Get("/api/onboarding/addresses", onboarding.GetAddresses)
+			r.Post("/api/onboarding/addresses", onboarding.SetupAddresses)
+			r.Post("/api/onboarding/complete", onboarding.Complete)
+
 			// Threads
 			r.Get("/api/threads", threads.List)
-			r.Get("/api/threads/unread-count", threads.UnreadCount)
 			r.Patch("/api/threads/bulk", threads.BulkAction)
 			r.Get("/api/threads/{id}", threads.Get)
 			r.Patch("/api/threads/{id}/read", threads.MarkRead)
@@ -167,6 +206,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Patch("/api/threads/{id}/archive", threads.Archive)
 			r.Patch("/api/threads/{id}/trash", threads.Trash)
 			r.Patch("/api/threads/{id}/spam", threads.Spam)
+			r.Patch("/api/threads/{id}/mute", threads.Mute)
 			r.Patch("/api/threads/{id}/move", threads.Move)
 			r.Delete("/api/threads/{id}", threads.Delete)
 
@@ -179,21 +219,29 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Get("/api/domains/all", domains.ListAll)
 			r.Post("/api/domains", domains.Create)
 			r.Post("/api/domains/{id}/verify", domains.Verify)
+			r.Post("/api/domains/{id}/webhook", domains.ReregisterWebhook)
+			r.Delete("/api/domains/{id}", domains.Delete)
 			r.Patch("/api/domains/reorder", domains.Reorder)
 			r.Patch("/api/domains/visibility", domains.UpdateVisibility)
 			r.Get("/api/domains/unread-counts", domains.UnreadCounts)
 			r.Post("/api/domains/sync", domains.Sync)
 
-			// Users (management)
 			r.Get("/api/users", users.List)
 			r.Post("/api/users/invite", users.Invite)
-			r.Get("/api/users/{id}/reinvite", users.Reinvite)
+			r.Post("/api/users/{id}/reinvite", users.Reinvite)
 			r.Patch("/api/users/{id}/disable", users.Disable)
+			r.Patch("/api/users/{id}/role", users.ChangeRole)
+			r.Patch("/api/users/{id}/enable", users.Enable)
 			r.Get("/api/users/me/aliases", users.MyAliases)
+
+			// Org delete
+			r.Delete("/api/orgs", orgs.Delete)
+			r.Delete("/api/orgs/hard", orgs.HardDelete)
 
 			// Aliases
 			r.Get("/api/aliases", aliases.List)
 			r.Post("/api/aliases", aliases.Create)
+			r.Patch("/api/aliases/{id}", aliases.Update)
 			r.Delete("/api/aliases/{id}", aliases.Delete)
 			r.Post("/api/aliases/{id}/users", aliases.AddUser)
 			r.Delete("/api/aliases/{id}/users/{userId}", aliases.RemoveUser)
@@ -207,12 +255,18 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Delete("/api/drafts/{id}", drafts.Delete)
 			r.Post("/api/drafts/{id}/send", drafts.Send)
 
+			// Labels
+			r.Get("/api/labels", labels.List)
+			r.Post("/api/labels", labels.Create)
+			r.Patch("/api/labels/{id}", labels.Rename)
+			r.Delete("/api/labels/{id}", labels.Delete)
+
 			// Contacts
 			r.Get("/api/contacts/suggest", contacts.Suggest)
-			r.Get("/api/contacts/lookup", contacts.Lookup)
 
 			// Attachments
 			r.Post("/api/attachments/upload", attachments.Upload)
+			r.Get("/api/attachments/{id}/meta", attachments.Meta)
 			r.Get("/api/attachments/{id}", attachments.Download)
 		})
 	})

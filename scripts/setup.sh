@@ -142,8 +142,11 @@ else
 fi
 
 # ─── 7. Start services ──────────────────────────────────────────────────────
-# Find the actual brew service name for whatever postgres version is installed
-PG_SERVICE="$(brew services list 2>/dev/null | grep -oE 'postgresql(@[0-9]+)?' | head -1 || echo "")"
+# Prefer a postgres that's already running; otherwise start the highest version installed
+PG_SERVICE="$(brew services list 2>/dev/null | grep -E 'postgresql.*started' | grep -oE 'postgresql(@[0-9]+)?' | tail -1 || echo "")"
+if [[ -z "$PG_SERVICE" ]]; then
+  PG_SERVICE="$(brew services list 2>/dev/null | grep -oE 'postgresql(@[0-9]+)?' | tail -1 || echo "")"
+fi
 if [[ -z "$PG_SERVICE" ]]; then
   fail "PostgreSQL is installed but not registered as a brew service. Try: brew services start postgresql@$PG_VER"
 fi
@@ -166,36 +169,27 @@ else
   ok "Redis started"
 fi
 
-# ─── 8. Database ─────────────────────────────────────────────────────────────
-if psql -lqt 2>/dev/null | cut -d\| -f1 | grep -qw inboxes; then
-  info "Database 'inboxes' already exists"
-else
-  warn "Creating database...                      "
-  createdb inboxes 2>/dev/null || true
-  psql inboxes -c "
-    DO \$\$
-    BEGIN
-      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'inboxes') THEN
-        CREATE ROLE inboxes WITH LOGIN PASSWORD 'inboxes';
-      END IF;
-    END
-    \$\$;
-    GRANT ALL PRIVILEGES ON DATABASE inboxes TO inboxes;
-    GRANT ALL ON SCHEMA public TO inboxes;
-  " 2>/dev/null
-  ok "Database 'inboxes' created"
-fi
-
-# ─── 9. .env file ───────────────────────────────────────────────────────────
+# ─── 8. .env file ───────────────────────────────────────────────────────────
 ENV_FILE="$PROJECT_DIR/.env"
+DB_NAME="${DB_NAME:-inboxes}"
+DB_USER="${DB_USER:-inboxes}"
+DB_PASS="${DB_PASS:-inboxes}"
+
 if [[ -f "$ENV_FILE" ]]; then
   info ".env already exists (not overwriting)"
+  # Read DB settings from existing .env
+  _DB_URL="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2- || true)"
+  if [[ -n "$_DB_URL" ]]; then
+    DB_NAME="$(echo "$_DB_URL" | grep -oE '/[^/?]+\?' | tr -d '/?')"
+    DB_USER="$(echo "$_DB_URL" | grep -oE '://[^:]+:' | tr -d ':/' | head -1)"
+    DB_PASS="$(echo "$_DB_URL" | sed -E 's|.*://[^:]+:([^@]+)@.*|\1|')"
+  fi
 else
   warn "Generating .env...                        "
   SESSION_SECRET="$(openssl rand -hex 32)"
   ENCRYPTION_KEY="$(openssl rand -base64 32)"
   cat > "$ENV_FILE" <<EOF
-DATABASE_URL=postgres://inboxes:inboxes@localhost:5432/inboxes?sslmode=disable
+DATABASE_URL=postgres://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?sslmode=disable
 REDIS_URL=redis://localhost:6379
 SESSION_SECRET="${SESSION_SECRET}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY}"
@@ -203,6 +197,26 @@ PUBLIC_URL=http://localhost:8080
 NEXT_PUBLIC_API_URL=http://localhost:8080
 EOF
   ok ".env created"
+fi
+
+# ─── 9. Database ─────────────────────────────────────────────────────────────
+if psql -lqt 2>/dev/null | cut -d\| -f1 | grep -qw "$DB_NAME"; then
+  info "Database '$DB_NAME' already exists"
+else
+  warn "Creating database...                      "
+  createdb "$DB_NAME" 2>/dev/null || true
+  psql "$DB_NAME" -c "
+    DO \$\$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$DB_USER') THEN
+        CREATE ROLE $DB_USER WITH LOGIN PASSWORD '$DB_PASS';
+      END IF;
+    END
+    \$\$;
+    GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
+    GRANT ALL ON SCHEMA public TO $DB_USER;
+  " 2>/dev/null
+  ok "Database '$DB_NAME' created"
 fi
 
 # ─── 10. Frontend dependencies ──────────────────────────────────────────────

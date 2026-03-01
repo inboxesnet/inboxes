@@ -35,7 +35,11 @@ if [[ ! -f "$PROJECT_DIR/.env" ]]; then
 fi
 
 # ─── Ensure services are running ─────────────────────────────────────────────
-PG_SERVICE="$(brew services list 2>/dev/null | grep -oE 'postgresql(@[0-9]+)?' | head -1 || echo "")"
+# Prefer a postgres that's already running; otherwise start the highest version installed
+PG_SERVICE="$(brew services list 2>/dev/null | grep -E 'postgresql.*started' | grep -oE 'postgresql(@[0-9]+)?' | tail -1 || echo "")"
+if [[ -z "$PG_SERVICE" ]]; then
+  PG_SERVICE="$(brew services list 2>/dev/null | grep -oE 'postgresql(@[0-9]+)?' | tail -1 || echo "")"
+fi
 if [[ -z "$PG_SERVICE" ]]; then
   echo -e "${RED}PostgreSQL not found. Run ./scripts/setup.sh first.${NC}"
   exit 1

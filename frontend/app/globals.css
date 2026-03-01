@@ -26,6 +26,28 @@
     --radius: 0.5rem;
   }
 
+  .dark {
+    --background: 224 10% 10%;
+    --foreground: 210 40% 98%;
+    --card: 224 10% 10%;
+    --card-foreground: 210 40% 98%;
+    --popover: 224 10% 10%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217 10% 18%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 10% 18%;
+    --muted-foreground: 215 16% 64%;
+    --accent: 217 10% 18%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 50.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 10% 22%;
+    --input: 217 10% 22%;
+    --ring: 212.7 26.8% 83.9%;
+  }
+
   html {
     font-size: 15px;
   }
@@ -62,3 +84,4 @@
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
 }
+

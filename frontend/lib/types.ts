@@ -5,6 +5,7 @@ export interface User {
   name: string;
   role: "admin" | "member";
   status: "placeholder" | "invited" | "active" | "disabled";
+  is_owner?: boolean;
   created_at: string;
 }
 
@@ -19,7 +20,7 @@ export interface Domain {
   org_id: string;
   domain: string;
   resend_domain_id: string;
-  status: "pending" | "verified" | "active";
+  status: "pending" | "not_started" | "verified" | "active";
   mx_verified: boolean;
   spf_verified: boolean;
   dkim_verified: boolean;
@@ -41,10 +42,10 @@ export interface Thread {
   last_message_at: string;
   message_count: number;
   unread_count: number;
-  starred: boolean;
-  folder: Folder;
+  labels: string[];
   snippet: string;
   original_to: string;
+  trash_expires_at?: string;
   created_at: string;
   emails?: Email[];
 }
@@ -55,7 +56,19 @@ export interface ThreadListResponse {
   total: number;
 }
 
-export type Folder = "inbox" | "sent" | "drafts" | "archive" | "trash" | "spam" | "deleted_forever";
+// Label type for view routing (URL segment, not thread data)
+export type Label = "inbox" | "sent" | "drafts" | "archive" | "starred" | "trash" | "spam" | "deleted_forever";
+
+export function hasLabel(thread: { labels?: string[] }, label: string): boolean {
+  return thread.labels?.includes(label) ?? false;
+}
+
+export function threadBelongsInView(thread: { labels?: string[] }, viewLabel: string): boolean {
+  if (viewLabel === "trash" || viewLabel === "spam") return hasLabel(thread, viewLabel);
+  if (viewLabel === "archive") return !hasLabel(thread, "inbox") && !hasLabel(thread, "trash") && !hasLabel(thread, "spam");
+  // inbox, sent, starred:
+  return hasLabel(thread, viewLabel) && !hasLabel(thread, "trash") && !hasLabel(thread, "spam");
+}
 
 export interface Email {
   id: string;
@@ -70,6 +83,7 @@ export interface Email {
   to_addresses: string[];
   cc_addresses: string[];
   bcc_addresses: string[];
+  reply_to_addresses?: string[];
   subject: string;
   body_html: string;
   body_plain: string;
@@ -80,10 +94,12 @@ export interface Email {
   delivered_via_alias: string;
   sent_as_alias: string;
   spam_score: number;
+  is_read?: boolean;
   created_at: string;
 }
 
 export interface Attachment {
+  id?: string;
   filename: string;
   content_type: string;
   size: number;
@@ -139,6 +155,7 @@ export interface Draft {
   bcc_addresses: string[];
   body_html: string;
   body_plain: string;
+  attachment_ids?: string[];
   created_at: string;
   updated_at: string;
 }

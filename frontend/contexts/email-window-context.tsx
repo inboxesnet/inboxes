@@ -16,6 +16,7 @@ interface ComposeData {
   bodyPlain?: string;
   /** Quoted text shown as read-only preview below the editor (replies/forwards) */
   quotedHtml?: string;
+  attachmentIds?: string[];
   // Reply threading
   replyToThreadId?: string;
   inReplyTo?: string;
@@ -25,6 +26,7 @@ interface ComposeData {
 interface EmailWindowContextValue {
   composeState: WindowState;
   composeData: ComposeData | null;
+  currentDraftId: string | undefined;
   openCompose: (data?: ComposeData) => void;
   openDraft: (draft: Draft) => void;
   minimizeCompose: () => void;
@@ -53,6 +55,7 @@ export function EmailWindowProvider({ children }: { children: React.ReactNode })
       bccAddresses: draft.bcc_addresses,
       bodyHtml: draft.body_html,
       bodyPlain: draft.body_plain,
+      attachmentIds: draft.attachment_ids,
     });
     setComposeState("open");
   }, []);
@@ -75,6 +78,7 @@ export function EmailWindowProvider({ children }: { children: React.ReactNode })
       value={{
         composeState,
         composeData,
+        currentDraftId: composeData?.draftId,
         openCompose,
         openDraft,
         minimizeCompose,

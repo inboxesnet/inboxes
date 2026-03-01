@@ -2,15 +2,17 @@
 
 import { useState, useEffect, useRef } from "react";
 import DOMPurify from "dompurify";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/utils";
 import { useDomains } from "@/contexts/domain-context";
 import { useEmailWindow } from "@/contexts/email-window-context";
-import { useThread, useStarThread, useThreadAction } from "@/hooks/use-threads";
+import { useThread, useStarThread, useMuteThread, useThreadAction } from "@/hooks/use-threads";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   AlertTriangle,
   Archive,
@@ -23,14 +25,17 @@ import {
   Forward,
   ArrowLeft,
   Inbox,
+  BellOff,
+  Bell,
 } from "lucide-react";
 import { ContactCard } from "@/components/contact-card";
+import { hasLabel } from "@/lib/types";
 import type { Thread, Email } from "@/lib/types";
 
 interface ThreadViewProps {
   threadId: string;
   domainId: string;
-  folder?: string;
+  label?: string;
   onBack?: () => void;
 }
 
@@ -41,10 +46,28 @@ function formatSenderName(email: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function TrashCountdown({ expiresAt }: { expiresAt: string }) {
+  const [days, setDays] = useState(() => Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))));
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDays(Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))));
+    }, 60 * 60 * 1000); // Update every hour
+    return () => clearInterval(timer);
+  }, [expiresAt]);
+
+  return (
+    <div className="bg-destructive/10 text-destructive text-xs text-center py-1.5 px-4 border-b shrink-0">
+      {days > 0
+        ? `This conversation will be permanently deleted in ${days} day${days !== 1 ? "s" : ""}`
+        : "This conversation is scheduled for deletion"}
+    </div>
+  );
+}
+
 export function ThreadView({
   threadId,
   domainId,
-  folder,
+  label,
   onBack,
 }: ThreadViewProps) {
   const { data: thread, isLoading } = useThread(threadId);
@@ -55,7 +78,10 @@ export function ThreadView({
   const markedReadRef = useRef<string | null>(null);
 
   const starMutation = useStarThread();
+  const muteMutation = useMuteThread();
   const actionMutation = useThreadAction();
+  const isBusy = starMutation.isPending || muteMutation.isPending || actionMutation.isPending;
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   // Mark as read on first load — optimistically update cache so list reflects immediately
   useEffect(() => {
@@ -80,7 +106,7 @@ export function ThreadView({
         (old) => (old ? { ...old, unread_count: 0 } : old)
       );
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
-      api.patch(`/api/threads/${threadId}/read`);
+      api.patch(`/api/threads/${threadId}/read`).catch(() => toast.error("Failed to mark as read"));
     }
   }, [thread, threadId, qc]);
 
@@ -141,19 +167,42 @@ export function ThreadView({
   }
 
   function handleStar() {
-    starMutation.mutate(threadId);
+    if (!thread) return;
+    starMutation.mutate({ threadId, starred: !hasLabel(thread, "starred") });
+  }
+
+  function handleMute() {
+    muteMutation.mutate(threadId);
   }
 
   function handleAction(action: string) {
+    if (action === "delete") {
+      setConfirmDeleteOpen(true);
+      return;
+    }
     actionMutation.mutate({ threadId, action });
-    const navigateAway = ["archive", "trash", "spam", "delete", "unread"];
+    const navigateAway = ["archive", "trash", "spam", "unread"];
     if (navigateAway.includes(action) || action.startsWith("move:")) {
       onBack?.();
     }
   }
 
+  function handleConfirmDelete() {
+    actionMutation.mutate({ threadId, action: "delete" });
+    onBack?.();
+  }
+
   return (
     <div className="flex flex-col h-full">
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        onOpenChange={setConfirmDeleteOpen}
+        title="Permanently delete this conversation?"
+        description="This action cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        destructive
+      />
       {/* Header */}
       <div className="flex items-center gap-2 md:gap-3 pl-14 pr-4 md:px-6 py-3 border-b shrink-0">
         {onBack && (
@@ -169,15 +218,30 @@ export function ThreadView({
             variant="ghost"
             size="icon"
             onClick={handleStar}
-            title={thread.starred ? "Unstar" : "Star"}
+            disabled={isBusy}
+            title={hasLabel(thread, "starred") ? "Unstar" : "Star"}
           >
             <Star
-              className={`h-4 w-4 ${thread.starred ? "text-yellow-500 fill-yellow-500" : ""}`}
+              className={`h-4 w-4 ${hasLabel(thread, "starred") ? "text-yellow-500 fill-yellow-500" : ""}`}
             />
           </Button>
           <Button
             variant="ghost"
             size="icon"
+            onClick={handleMute}
+            disabled={isBusy}
+            title={hasLabel(thread, "muted") ? "Unmute" : "Mute"}
+          >
+            {hasLabel(thread, "muted") ? (
+              <BellOff className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <Bell className="h-4 w-4" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={isBusy}
             onClick={() =>
               handleAction(thread.unread_count > 0 ? "read" : "unread")
             }
@@ -190,10 +254,11 @@ export function ThreadView({
             )}
           </Button>
           {/* Primary: Archive or Move to Inbox */}
-          {(folder === "trash" || folder === "archive" || folder === "spam") ? (
+          {(label === "trash" || label === "archive" || label === "spam") ? (
             <Button
               variant="ghost"
               size="icon"
+              disabled={isBusy}
               onClick={() => handleAction("move:inbox")}
               title="Move to Inbox"
             >
@@ -203,6 +268,7 @@ export function ThreadView({
             <Button
               variant="ghost"
               size="icon"
+              disabled={isBusy}
               onClick={() => handleAction("archive")}
               title="Archive"
             >
@@ -210,10 +276,11 @@ export function ThreadView({
             </Button>
           )}
           {/* Report Spam — not on sent or spam */}
-          {folder !== "sent" && folder !== "spam" && (
+          {label !== "sent" && label !== "spam" && (
             <Button
               variant="ghost"
               size="icon"
+              disabled={isBusy}
               onClick={() => handleAction("spam")}
               title="Report spam"
             >
@@ -221,10 +288,11 @@ export function ThreadView({
             </Button>
           )}
           {/* Destructive: Trash or Delete permanently */}
-          {folder === "trash" ? (
+          {label === "trash" ? (
             <Button
               variant="ghost"
               size="icon"
+              disabled={isBusy}
               onClick={() => handleAction("delete")}
               title="Delete permanently"
               className="text-destructive hover:text-destructive"
@@ -235,6 +303,7 @@ export function ThreadView({
             <Button
               variant="ghost"
               size="icon"
+              disabled={isBusy}
               onClick={() => handleAction("trash")}
               title="Trash"
             >
@@ -243,6 +312,9 @@ export function ThreadView({
           )}
         </div>
       </div>
+
+      {/* Trash countdown banner */}
+      {thread.trash_expires_at && <TrashCountdown expiresAt={thread.trash_expires_at} />}
 
       {/* Emails — Gmail style: all visible, older collapsed, newest expanded */}
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-2">
@@ -294,6 +366,77 @@ export function ThreadView({
   );
 }
 
+// ─── Email Sanitization ─────────────────────────────────────────────────
+
+const ALLOWED_CSS_PROPERTIES = new Set([
+  'color', 'background-color', 'font-size', 'font-weight',
+  'font-family', 'font-style', 'text-align', 'text-decoration',
+  'line-height', 'letter-spacing', 'word-spacing',
+  'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'border', 'border-radius', 'border-color', 'border-style', 'border-width',
+  'border-top', 'border-right', 'border-bottom', 'border-left',
+  'width', 'height', 'max-width', 'max-height', 'min-width', 'min-height',
+  'display', 'vertical-align', 'list-style-type', 'white-space',
+  'overflow', 'text-overflow', 'word-break',
+  'table-layout', 'border-collapse', 'border-spacing',
+]);
+
+function sanitizeEmailHtml(html: string, showImages: boolean) {
+  let hasBlockedImages = false;
+
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    // PRD-013: Block external images (tracking pixels)
+    if (node.tagName === 'IMG') {
+      const src = node.getAttribute('src');
+      if (src && !src.startsWith('data:') && !src.startsWith('cid:')) {
+        hasBlockedImages = true;
+        if (!showImages) {
+          node.setAttribute('data-original-src', src);
+          node.removeAttribute('src');
+          node.setAttribute('alt', '[Image blocked for privacy]');
+        }
+      }
+    }
+
+    // PRD-014: Sanitize CSS against allowlist
+    if (node.hasAttribute('style')) {
+      const style = (node as HTMLElement).style;
+      const safeStyles: string[] = [];
+      for (let i = 0; i < style.length; i++) {
+        const prop = style[i];
+        if (ALLOWED_CSS_PROPERTIES.has(prop)) {
+          const value = style.getPropertyValue(prop);
+          if (!value.includes('url(')) {
+            safeStyles.push(`${prop}: ${value}`);
+          }
+        }
+      }
+      if (safeStyles.length > 0) {
+        node.setAttribute('style', safeStyles.join('; '));
+      } else {
+        node.removeAttribute('style');
+      }
+    }
+  });
+
+  const result = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      "p", "br", "strong", "em", "u", "a", "ul", "ol", "li",
+      "h1", "h2", "h3", "h4", "blockquote", "pre", "code",
+      "img", "table", "thead", "tbody", "tr", "td", "th",
+      "div", "span",
+    ],
+    ALLOWED_ATTR: [
+      "href", "src", "alt", "style", "class", "target", "width", "height",
+      "data-original-src", "dir",
+    ],
+  });
+
+  DOMPurify.removeAllHooks();
+  return { html: result, hasBlockedImages };
+}
+
 // ─── Email Message ─────────────────────────────────────────────────────
 
 function EmailMessage({
@@ -303,22 +446,13 @@ function EmailMessage({
 }: {
   email: Email;
   defaultExpanded?: boolean;
-  onReply?: (email: Email, mode: "reply" | "replyAll") => void;
+  onReply?: (email: Email, mode: "reply" | "replyAll" | "forward") => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [showImages, setShowImages] = useState(false);
 
-  const sanitizedHtml = email.body_html
-    ? DOMPurify.sanitize(email.body_html, {
-        ALLOWED_TAGS: [
-          "p", "br", "strong", "em", "u", "a", "ul", "ol", "li",
-          "h1", "h2", "h3", "h4", "blockquote", "pre", "code",
-          "img", "table", "thead", "tbody", "tr", "td", "th",
-          "div", "span",
-        ],
-        ALLOWED_ATTR: [
-          "href", "src", "alt", "style", "class", "target", "width", "height",
-        ],
-      })
+  const sanitized = email.body_html
+    ? sanitizeEmailHtml(email.body_html, showImages)
     : null;
 
   if (!expanded) {
@@ -327,6 +461,8 @@ function EmailMessage({
       <button
         onClick={() => setExpanded(true)}
         className="flex items-center gap-3 w-full px-4 py-2 text-left rounded-lg hover:bg-muted/50 transition-colors"
+        aria-expanded={false}
+        aria-label={`Expand email from ${formatSenderName(email.from_address)}`}
       >
         <div className="h-7 w-7 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0">
           {email.from_address.charAt(0).toUpperCase()}
@@ -350,9 +486,14 @@ function EmailMessage({
       <button
         onClick={() => setExpanded(false)}
         className="flex items-baseline gap-3 w-full px-4 py-2.5 text-left"
+        aria-expanded={true}
+        aria-label={`Collapse email from ${formatSenderName(email.from_address)}`}
       >
-        <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0 self-center">
+        <div className="relative h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0 self-center">
           {email.from_address.charAt(0).toUpperCase()}
+          {email.is_read === false && (
+            <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-primary border-2 border-background" />
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2">
@@ -364,6 +505,9 @@ function EmailMessage({
             <span className="hidden md:inline text-xs text-muted-foreground truncate">
               {email.from_address}
             </span>
+            {email.direction === "outbound" && (
+              <StatusBadge status={email.status} />
+            )}
             <span className="text-xs text-muted-foreground shrink-0 ml-auto">
               {formatRelativeTime(email.created_at)}
             </span>
@@ -378,13 +522,26 @@ function EmailMessage({
             <p>Cc: {parseAddresses(email.cc_addresses).join(", ")}</p>
           )}
         </div>
-        {sanitizedHtml ? (
-          <div
-            className="max-w-2xl text-[13px] leading-relaxed [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-muted [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_pre]:text-xs [&_pre]:overflow-x-auto"
-            dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
-          />
+        {sanitized?.html ? (
+          <>
+            {sanitized.hasBlockedImages && !showImages && (
+              <button
+                onClick={() => setShowImages(true)}
+                className="w-full text-xs text-muted-foreground bg-muted/50 rounded-md px-3 py-1.5 mb-2 hover:bg-muted transition-colors text-left"
+              >
+                Images are hidden for your privacy. Click to load.
+              </button>
+            )}
+            <div style={{ position: 'relative', overflow: 'hidden' }}>
+              <div
+                dir="auto"
+                className="max-w-2xl text-[13px] leading-relaxed dark:bg-white dark:text-black dark:rounded-md dark:p-3 dark:-mx-3 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-muted [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_pre]:text-xs [&_pre]:overflow-x-auto"
+                dangerouslySetInnerHTML={{ __html: sanitized.html }}
+              />
+            </div>
+          </>
         ) : (
-          <pre className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed max-w-2xl">
+          <pre dir="auto" className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed max-w-2xl dark:bg-white dark:text-black dark:rounded-md dark:p-3 dark:-mx-3">
             {email.body_plain}
           </pre>
         )}
@@ -425,10 +582,38 @@ function EmailMessage({
               <ReplyAll className="h-3 w-3 mr-1" />
               Reply All
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onReply(email, "forward")}
+              className="h-7 text-xs"
+            >
+              <Forward className="h-3 w-3 mr-1" />
+              Forward
+            </Button>
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+// ─── Status Badge ──────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: string }) {
+  const config: Record<string, { color: string; label: string }> = {
+    delivered: { color: "bg-green-500", label: "Delivered" },
+    sent: { color: "bg-yellow-500", label: "Sent" },
+    queued: { color: "bg-yellow-500", label: "Queued" },
+    bounced: { color: "bg-red-500", label: "Bounced" },
+    failed: { color: "bg-red-500", label: "Failed" },
+  };
+  const c = config[status] || { color: "bg-gray-400", label: status };
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
+      <span className={`h-1.5 w-1.5 rounded-full ${c.color}`} />
+      {c.label}
+    </span>
   );
 }
 
@@ -481,14 +666,19 @@ function getReplyRecipients(
     return { defaultTo: toAddresses, defaultCc: [] };
   }
 
-  // Inbound — reply to sender
+  // Inbound — reply to Reply-To address if present, otherwise From
+  const replyTarget =
+    lastEmail.reply_to_addresses?.length
+      ? lastEmail.reply_to_addresses[0]
+      : lastEmail.from_address;
+
   if (mode === "replyAll") {
     const allRecipients = [...toAddresses, ...ccAddresses].filter(
-      (a) => a !== myAddress && a !== lastEmail.from_address
+      (a) => a !== myAddress && a !== replyTarget && a !== lastEmail.from_address
     );
-    return { defaultTo: [lastEmail.from_address], defaultCc: allRecipients };
+    return { defaultTo: [replyTarget], defaultCc: allRecipients };
   }
-  return { defaultTo: [lastEmail.from_address], defaultCc: [] };
+  return { defaultTo: [replyTarget], defaultCc: [] };
 }
 
 function getReplySubject(subject: string, mode: "reply" | "replyAll" | "forward"): string {
@@ -499,25 +689,35 @@ function getReplySubject(subject: string, mode: "reply" | "replyAll" | "forward"
   return `Re: ${stripped}`;
 }
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function getQuotedHtml(email: Email, mode: "reply" | "replyAll" | "forward"): string {
-  const date = new Date(email.created_at).toLocaleString();
-  const sender = email.from_address;
-  const body = email.body_html || email.body_plain || "";
+  const date = escapeHtml(new Date(email.created_at).toLocaleString());
+  const sender = escapeHtml(email.from_address);
+  const sanitizedBody = DOMPurify.sanitize(email.body_html || email.body_plain || "");
 
   if (mode === "forward") {
-    const toAddresses = parseAddresses(email.to_addresses).join(", ");
+    const toAddresses = escapeHtml(parseAddresses(email.to_addresses).join(", "));
+    const subject = escapeHtml(email.subject || "");
     return `<div style="margin-top:16px;padding-top:16px;border-top:1px solid #ccc">
       <p style="color:#666;font-size:12px">---------- Forwarded message ----------<br>
       From: ${sender}<br>
       Date: ${date}<br>
-      Subject: ${email.subject}<br>
+      Subject: ${subject}<br>
       To: ${toAddresses}</p>
-      <div>${body}</div>
+      <div>${sanitizedBody}</div>
     </div>`;
   }
 
   return `<div style="margin-top:16px;padding-top:16px;border-top:1px solid #ccc">
     <p style="color:#666;font-size:12px">On ${date}, ${sender} wrote:</p>
-    <blockquote style="margin:0;padding-left:8px;border-left:2px solid #ccc;color:#666">${body}</blockquote>
+    <blockquote style="margin:0;padding-left:8px;border-left:2px solid #ccc;color:#666">${sanitizedBody}</blockquote>
   </div>`;
 }

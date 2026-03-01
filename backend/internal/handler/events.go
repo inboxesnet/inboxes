@@ -11,11 +11,13 @@ import (
 )
 
 type EventHandler struct {
-	DB *pgxpool.Pool
+	DB             *pgxpool.Pool
+	CatchupMaxAge  time.Duration
 }
 
 // Since returns events after a given event ID for reconnection catchup.
 // GET /api/events?since={lastEventId}&limit=100
+// Returns 410 Gone if the sinceID points to an event older than CatchupMaxAge.
 func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	if claims == nil {
@@ -30,14 +32,32 @@ func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	maxAge := h.CatchupMaxAge
+	if maxAge <= 0 {
+		maxAge = 48 * time.Hour
+	}
+
+	// Check if sinceID is too old — return 410 Gone so client does a full refetch
+	if sinceID > 0 {
+		var eventAge time.Time
+		err := h.DB.QueryRow(ctx,
+			"SELECT created_at FROM events WHERE id = $1", sinceID,
+		).Scan(&eventAge)
+		if err != nil || time.Since(eventAge) > maxAge {
+			writeJSON(w, http.StatusGone, map[string]interface{}{
+				"error": "events too old, please refetch",
+			})
+			return
+		}
+	}
 
 	rows, err := h.DB.Query(ctx,
 		`SELECT id, event_type, domain_id, thread_id, payload, created_at
 		 FROM events
-		 WHERE org_id = $1 AND id > $2
+		 WHERE org_id = $1 AND id > $2 AND created_at > $4
 		 ORDER BY id ASC
 		 LIMIT $3`,
-		claims.OrgID, sinceID, limit,
+		claims.OrgID, sinceID, limit, time.Now().Add(-maxAge),
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch events")

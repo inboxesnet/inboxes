@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams, useRouter } from "next/navigation";
 import {
   DndContext,
   DragOverlay,
@@ -22,17 +22,38 @@ import { NotificationListener } from "@/components/notification-listener";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { DragPreview } from "@/components/drag-preview";
 import { Spinner } from "@/components/ui/spinner";
+import { useBroadcastSync } from "@/hooks/use-broadcast-sync";
 import { Menu } from "lucide-react";
 import type { Thread } from "@/lib/types";
 
 function DomainLayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const domainId = params.domainId as string;
-  const { setActiveDomainId, loading } = useDomains();
+  const { setActiveDomainId, loading: domainsLoading } = useDomains();
+  // Always show loading on first render (both SSR and client) to avoid hydration mismatch.
+  // useEffect fires client-only after hydration, switching to the real loading state.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  const loading = !mounted || domainsLoading;
   const { openCompose } = useEmailWindow();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<string | undefined>(undefined);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [draggedThread, setDraggedThread] = useState<Thread | null>(null);
+  const [billingSuccess, setBillingSuccess] = useState(false);
+  useBroadcastSync();
+
+  // Handle Stripe checkout success redirect
+  useEffect(() => {
+    if (searchParams.get("billing") === "success") {
+      setBillingSuccess(true);
+      router.replace(`/d/${domainId}/inbox`);
+      const timer = setTimeout(() => setBillingSuccess(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [searchParams, domainId, router]);
 
   const mouseSensor = useSensor(MouseSensor, {
     activationConstraint: { distance: 8 },
@@ -61,16 +82,29 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
       const { active, over } = event;
       if (!over) return;
 
-      const targetFolder = over.id as string;
+      const targetLabel = over.id as string;
+      const threadIds = (active.data.current?.threadIds as string[]) || [];
       const thread = active.data.current?.thread as Thread | undefined;
-      if (!thread || thread.folder === targetFolder) return;
 
-      try {
-        await api.patch(`/api/threads/${thread.id}/move`, {
-          folder: targetFolder,
-        });
-      } catch {
-        // Move failed silently
+      if (threadIds.length > 1) {
+        // Multi-thread drag — bulk move
+        try {
+          await api.patch("/api/threads/bulk", {
+            thread_ids: threadIds,
+            action: "move",
+            label: targetLabel,
+          });
+        } catch {
+          // Move failed silently
+        }
+      } else if (thread) {
+        try {
+          await api.patch(`/api/threads/${thread.id}/move`, {
+            label: targetLabel,
+          });
+        } catch {
+          // Move failed silently
+        }
       }
     },
     []
@@ -89,9 +123,16 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
       sensors={sensors}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      accessibility={{ screenReaderInstructions: { draggable: "" } }}
+      accessibility={{ screenReaderInstructions: { draggable: "Drag to move between folders, or press V to open the move dialog" } }}
     >
       <div className="flex h-dvh">
+        {/* Skip to main content — accessibility */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:bg-background focus:text-foreground focus:px-4 focus:py-2 focus:rounded-md focus:border focus:shadow-md"
+        >
+          Skip to main content
+        </a>
         {/* Mobile sidebar overlay */}
         {sidebarOpen && (
           <div className="fixed inset-0 z-40 md:hidden">
@@ -102,7 +143,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
             <div className="relative z-10 h-full shadow-xl">
               <DomainSidebar
                 onCompose={handleCompose}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={(tab?: string) => { setSettingsTab(tab); setSettingsOpen(true); }}
                 onCloseSidebar={() => setSidebarOpen(false)}
               />
             </div>
@@ -111,21 +152,27 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
 
         {/* Desktop sidebar */}
         <div className="hidden md:flex">
-          <DomainSidebar onCompose={handleCompose} onOpenSettings={() => setSettingsOpen(true)} />
+          <DomainSidebar onCompose={handleCompose} onOpenSettings={(tab?: string) => { setSettingsTab(tab); setSettingsOpen(true); }} />
         </div>
 
-        <main className="flex-1 overflow-hidden relative">
+        <main id="main-content" className="flex-1 overflow-hidden relative" tabIndex={-1}>
           {/* Mobile hamburger */}
           <button
             onClick={() => setSidebarOpen(true)}
             className="absolute top-3.5 left-3 z-30 p-1.5 rounded-md hover:bg-muted md:hidden"
+            aria-label="Open sidebar"
           >
             <Menu className="h-5 w-5" />
           </button>
+          {billingSuccess && (
+            <div className="bg-green-500/10 text-green-700 dark:text-green-400 text-sm text-center py-2 px-4 border-b border-green-500/20">
+              Subscription activated! You now have full access.
+            </div>
+          )}
           {children}
         </main>
         <FloatingComposeWindow />
-        <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+        <SettingsModal open={settingsOpen} onOpenChange={(v) => { setSettingsOpen(v); if (!v) setSettingsTab(undefined); }} defaultTab={settingsTab as any} />
         <NotificationListener />
         <KeyboardShortcuts onCompose={handleCompose} />
       </div>

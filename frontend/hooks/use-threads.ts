@@ -1,16 +1,18 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
-import type { Thread, ThreadListResponse, Folder } from "@/lib/types";
+import { hasLabel } from "@/lib/types";
+import type { Thread, ThreadListResponse, Label } from "@/lib/types";
 
 const LIMIT = 100;
 
-export function useThreadList(domainId: string, folder: Folder, page: number) {
+export function useThreadList(domainId: string, label: Label, page: number) {
   return useQuery({
-    queryKey: queryKeys.threads.list(domainId, folder, page),
+    queryKey: queryKeys.threads.list(domainId, label, page),
     queryFn: () =>
       api.get<ThreadListResponse>(
-        `/api/threads?domain_id=${domainId}&folder=${folder}&page=${page}&limit=${LIMIT}`
+        `/api/threads?domain_id=${domainId}&label=${label}&page=${page}&limit=${LIMIT}`
       ),
   });
 }
@@ -25,24 +27,81 @@ export function useThread(threadId: string) {
   });
 }
 
+export function toggleStarredLabel(labels: string[]): string[] {
+  if (labels.includes("starred")) {
+    return labels.filter((l) => l !== "starred");
+  }
+  return [...labels, "starred"];
+}
+
+export function toggleMutedLabel(labels: string[]): string[] {
+  if (labels.includes("muted")) {
+    return labels.filter((l) => l !== "muted");
+  }
+  return [...labels, "muted"];
+}
+
 export function useStarThread() {
   const qc = useQueryClient();
 
   return useMutation({
-    mutationFn: (threadId: string) =>
-      api.patch(`/api/threads/${threadId}/star`),
-    onMutate: async (threadId) => {
+    mutationFn: ({ threadId, starred }: { threadId: string; starred: boolean }) =>
+      api.patch(`/api/threads/${threadId}/star`, { starred }),
+    onMutate: async ({ threadId, starred }) => {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
+
+      const setLabels = (labels: string[]) =>
+        starred
+          ? labels.includes("starred") ? labels : [...labels, "starred"]
+          : labels.filter((l) => l !== "starred");
 
       // Optimistic: update all thread lists
       qc.setQueriesData<ThreadListResponse>(
         { queryKey: queryKeys.threads.lists() },
         (old) => {
           if (!old) return old;
+
+          const queryLabel = qc
+            .getQueryCache()
+            .findAll({ queryKey: queryKeys.threads.lists() })
+            .find((q) => q.state.data === old)?.queryKey?.[3] as
+            | string
+            | undefined;
+
+          return {
+            ...old,
+            threads: old.threads
+              .map((t) =>
+                t.id === threadId
+                  ? { ...t, labels: setLabels(t.labels || []) }
+                  : t
+              )
+              .filter((t) => {
+                if (queryLabel === "starred" && t.id === threadId && !starred) {
+                  return false;
+                }
+                return true;
+              }),
+            total:
+              queryLabel === "starred" && !starred &&
+              old.threads.some((t) => t.id === threadId)
+                ? old.total - 1
+                : old.total,
+          };
+        }
+      );
+
+      // Optimistic: update search caches
+      qc.setQueriesData<{ threads: Thread[] }>(
+        { queryKey: queryKeys.search.all },
+        (old) => {
+          if (!old) return old;
           return {
             ...old,
             threads: old.threads.map((t) =>
-              t.id === threadId ? { ...t, starred: !t.starred } : t
+              t.id === threadId
+                ? { ...t, labels: setLabels(t.labels || []) }
+                : t
             ),
           };
         }
@@ -51,11 +110,64 @@ export function useStarThread() {
       // Optimistic: update thread detail
       qc.setQueryData<Thread>(
         queryKeys.threads.detail(threadId),
-        (old) => (old ? { ...old, starred: !old.starred } : old)
+        (old) => (old ? { ...old, labels: setLabels(old.labels || []) } : old)
       );
     },
     onError: () => {
+      toast.error("Failed to update star");
       qc.invalidateQueries({ queryKey: queryKeys.threads.all });
+      qc.invalidateQueries({ queryKey: queryKeys.search.all });
+    },
+  });
+}
+
+export function useMuteThread() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: (threadId: string) =>
+      api.patch(`/api/threads/${threadId}/mute`),
+    onMutate: async (threadId) => {
+      await qc.cancelQueries({ queryKey: queryKeys.threads.all });
+
+      qc.setQueriesData<ThreadListResponse>(
+        { queryKey: queryKeys.threads.lists() },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            threads: old.threads.map((t) =>
+              t.id === threadId ? { ...t, labels: toggleMutedLabel(t.labels || []) } : t
+            ),
+          };
+        }
+      );
+
+      // Optimistic: update search caches
+      qc.setQueriesData<{ threads: Thread[] }>(
+        { queryKey: queryKeys.search.all },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            threads: old.threads.map((t) =>
+              t.id === threadId
+                ? { ...t, labels: toggleMutedLabel(t.labels || []) }
+                : t
+            ),
+          };
+        }
+      );
+
+      qc.setQueryData<Thread>(
+        queryKeys.threads.detail(threadId),
+        (old) => (old ? { ...old, labels: toggleMutedLabel(old.labels || []) } : old)
+      );
+    },
+    onError: () => {
+      toast.error("Failed to update mute");
+      qc.invalidateQueries({ queryKey: queryKeys.threads.all });
+      qc.invalidateQueries({ queryKey: queryKeys.search.all });
     },
   });
 }
@@ -72,8 +184,8 @@ export function useThreadAction() {
       action: string;
     }) => {
       if (action.startsWith("move:")) {
-        const folder = action.split(":")[1];
-        return api.patch(`/api/threads/${threadId}/move`, { folder });
+        const label = action.split(":")[1];
+        return api.patch(`/api/threads/${threadId}/move`, { label });
       }
       if (action === "delete") {
         return api.delete(`/api/threads/${threadId}`);
@@ -114,11 +226,63 @@ export function useThreadAction() {
               ),
             };
           }
+          if (action === "mute") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                t.id === threadId ? { ...t, labels: toggleMutedLabel(t.labels || []) } : t
+              ),
+            };
+          }
+          return old;
+        }
+      );
+
+      // Optimistic: update search caches
+      qc.setQueriesData<{ threads: Thread[] }>(
+        { queryKey: queryKeys.search.all },
+        (old) => {
+          if (!old) return old;
+          if (isMoving) {
+            return { ...old, threads: old.threads.filter((t) => t.id !== threadId) };
+          }
+          if (action === "read") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                t.id === threadId ? { ...t, unread_count: 0 } : t
+              ),
+            };
+          }
+          if (action === "unread") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                t.id === threadId ? { ...t, unread_count: 1 } : t
+              ),
+            };
+          }
+          if (action === "mute") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                t.id === threadId
+                  ? { ...t, labels: toggleMutedLabel(t.labels || []) }
+                  : t
+              ),
+            };
+          }
           return old;
         }
       );
 
       // Optimistic: update thread detail cache
+      if (action === "mute") {
+        qc.setQueryData<Thread>(
+          queryKeys.threads.detail(threadId),
+          (old) => (old ? { ...old, labels: toggleMutedLabel(old.labels || []) } : old)
+        );
+      }
       if (action === "read") {
         qc.setQueryData<Thread>(
           queryKeys.threads.detail(threadId),
@@ -134,10 +298,28 @@ export function useThreadAction() {
         qc.removeQueries({ queryKey: queryKeys.threads.detail(threadId) });
       }
     },
-    onSettled: (_data, _err, { threadId }) => {
-      qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
-      qc.invalidateQueries({ queryKey: queryKeys.threads.detail(threadId) });
+    onError: (_err, { action }) => {
+      const label = action === "archive" ? "archive" : action === "trash" ? "trash" : action;
+      toast.error(`Failed to ${label} thread`);
+      qc.invalidateQueries({ queryKey: queryKeys.threads.all });
+      qc.invalidateQueries({ queryKey: queryKeys.search.all });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+    },
+    onSuccess: (_data, { threadId, action }) => {
+      if (action === "archive" || action === "trash") {
+        const label = action === "archive" ? "Archived" : "Moved to trash";
+        toast(label, {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              api.patch(`/api/threads/${threadId}/move`, { label: "inbox" }).then(() => {
+                qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+                qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+              }).catch(() => toast.error("Failed to undo"));
+            },
+          },
+        });
+      }
     },
   });
 }
@@ -149,16 +331,25 @@ export function useBulkAction() {
     mutationFn: ({
       threadIds,
       action,
-      folder,
+      label,
+      selectAll,
+      filterLabel,
+      filterDomainId,
     }: {
       threadIds: string[];
       action: string;
-      folder?: string;
+      label?: string;
+      selectAll?: boolean;
+      filterLabel?: string;
+      filterDomainId?: string;
     }) =>
       api.patch("/api/threads/bulk", {
         thread_ids: threadIds,
         action,
-        folder,
+        label,
+        select_all: selectAll,
+        filter_label: filterLabel,
+        filter_domain_id: filterDomainId,
       }),
     onMutate: async ({ threadIds, action }) => {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
@@ -196,6 +387,77 @@ export function useBulkAction() {
               ),
             };
           }
+          if (action === "mute") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                threadIds.includes(t.id)
+                  ? { ...t, labels: [...(t.labels || []).filter((l) => l !== "muted"), "muted"] }
+                  : t
+              ),
+            };
+          }
+          if (action === "unmute") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                threadIds.includes(t.id)
+                  ? { ...t, labels: (t.labels || []).filter((l) => l !== "muted") }
+                  : t
+              ),
+            };
+          }
+          return old;
+        }
+      );
+
+      // Optimistic: update search caches
+      qc.setQueriesData<{ threads: Thread[] }>(
+        { queryKey: queryKeys.search.all },
+        (old) => {
+          if (!old) return old;
+          if (movingActions.includes(action)) {
+            return {
+              ...old,
+              threads: old.threads.filter((t) => !threadIds.includes(t.id)),
+            };
+          }
+          if (action === "read") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                threadIds.includes(t.id) ? { ...t, unread_count: 0 } : t
+              ),
+            };
+          }
+          if (action === "unread") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                threadIds.includes(t.id) ? { ...t, unread_count: 1 } : t
+              ),
+            };
+          }
+          if (action === "mute") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                threadIds.includes(t.id)
+                  ? { ...t, labels: [...(t.labels || []).filter((l) => l !== "muted"), "muted"] }
+                  : t
+              ),
+            };
+          }
+          if (action === "unmute") {
+            return {
+              ...old,
+              threads: old.threads.map((t) =>
+                threadIds.includes(t.id)
+                  ? { ...t, labels: (t.labels || []).filter((l) => l !== "muted") }
+                  : t
+              ),
+            };
+          }
           return old;
         }
       );
@@ -217,10 +479,32 @@ export function useBulkAction() {
         }
       }
     },
-    onSettled: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
-      qc.invalidateQueries({ queryKey: queryKeys.threads.details() });
+    onError: (_err, { action }) => {
+      toast.error(`Failed to ${action} threads`);
+      qc.invalidateQueries({ queryKey: queryKeys.threads.all });
+      qc.invalidateQueries({ queryKey: queryKeys.search.all });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+    },
+    onSuccess: (_data, { threadIds, action }) => {
+      if (action === "archive" || action === "trash") {
+        const label = action === "archive" ? "Archived" : "Moved to trash";
+        const count = threadIds.length;
+        toast(`${label} ${count} conversation${count > 1 ? "s" : ""}`, {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              api.patch("/api/threads/bulk", {
+                thread_ids: threadIds,
+                action: "move",
+                label: "inbox",
+              }).then(() => {
+                qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+                qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+              }).catch(() => toast.error("Failed to undo"));
+            },
+          },
+        });
+      }
     },
   });
 }

@@ -1,17 +1,11 @@
 "use client";
 
 import type { Thread } from "@/lib/types";
+import { extractSender } from "@/lib/thread-helpers";
 
 interface DragPreviewProps {
   thread: Thread;
   count?: number;
-}
-
-function extractSender(emails: string[]): string {
-  if (!emails || emails.length === 0) return "Unknown";
-  const first = Array.isArray(emails) ? emails[0] : String(emails);
-  const atIndex = first.indexOf("@");
-  return atIndex > 0 ? first.substring(0, atIndex) : first;
 }
 
 export function DragPreview({ thread, count = 1 }: DragPreviewProps) {

@@ -82,7 +82,15 @@ export function getDomainColor(domain: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-export function truncate(str: string, maxLen: number): string {
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 1) + "\u2026";
+/**
+ * Validates password against backend rules.
+ * Returns error message or null if valid.
+ */
+export function validatePassword(password: string): string | null {
+  if (password.length < 8) return "Password must be at least 8 characters";
+  if (password.length > 128) return "Password must be 128 characters or fewer";
+  if (!/[A-Z]/.test(password)) return "Password must include an uppercase letter";
+  if (!/[a-z]/.test(password)) return "Password must include a lowercase letter";
+  if (!/[0-9]/.test(password)) return "Password must include a number";
+  return null;
 }

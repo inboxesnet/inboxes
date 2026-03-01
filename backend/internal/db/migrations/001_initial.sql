@@ -27,7 +27,7 @@ CREATE TABLE orgs (
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   org_id UUID NOT NULL REFERENCES orgs(id),
-  email TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL UNIQUE, -- NOTE: Global uniqueness blocks multi-org. See PRD-120: change to UNIQUE(org_id, email) when multi-org is needed.
   name TEXT NOT NULL DEFAULT '',
   password_hash TEXT,
   role user_role NOT NULL DEFAULT 'member',

@@ -74,7 +74,7 @@ func ClassifySpam(headers map[string]string, fromAddress, subject, bodyPlain str
 	spamSubjectKeywords := []string{
 		"urgent", "act now", "limited time", "congratulations",
 		"winner", "claim your", "free money", "$$", "100% free",
-		"click here", "unsubscribe", "opt out",
+		"click here",
 	}
 	for _, kw := range spamSubjectKeywords {
 		if strings.Contains(subjectLower, kw) {
@@ -93,7 +93,6 @@ func ClassifySpam(headers map[string]string, fromAddress, subject, bodyPlain str
 	// Body-based heuristics
 	bodyLower := strings.ToLower(bodyPlain)
 	spamBodyIndicators := []string{
-		"click here to unsubscribe",
 		"this is not spam",
 		"you have been selected",
 		"act immediately",
@@ -118,4 +117,32 @@ func ClassifySpam(headers map[string]string, fromAddress, subject, bodyPlain str
 		Score:   score,
 		Reasons: reasons,
 	}
+}
+
+// IsBounceNotification checks whether an email is an automated bounce/delivery failure notification.
+func IsBounceNotification(from string, headers map[string]string) bool {
+	fromLower := strings.ToLower(from)
+
+	// Check From address for bounce senders
+	bouncePatterns := []string{"mailer-daemon@", "postmaster@"}
+	for _, pattern := range bouncePatterns {
+		if strings.Contains(fromLower, pattern) {
+			return true
+		}
+	}
+
+	// Check bounce-specific headers
+	if headers != nil {
+		if v, ok := headers["auto-submitted"]; ok {
+			vLower := strings.ToLower(v)
+			if vLower == "auto-replied" || vLower == "auto-generated" {
+				return true
+			}
+		}
+		if _, ok := headers["x-failed-recipients"]; ok {
+			return true
+		}
+	}
+
+	return false
 }

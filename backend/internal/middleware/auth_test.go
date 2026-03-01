@@ -15,7 +15,7 @@ const testSecret = "test-secret-key-for-unit-tests"
 
 func TestGenerateToken_Valid(t *testing.T) {
 	t.Parallel()
-	tokenStr, err := GenerateToken(testSecret, "user1", "org1", "admin")
+	tokenStr, _, err := GenerateToken(testSecret, "user1", "org1", "admin")
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestGenerateToken_Valid(t *testing.T) {
 
 func TestGenerateToken_DifferentSecrets(t *testing.T) {
 	t.Parallel()
-	tokenStr, err := GenerateToken("secret-A", "user1", "org1", "admin")
+	tokenStr, _, err := GenerateToken("secret-A", "user1", "org1", "admin")
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestGetCurrentUser_WithClaims(t *testing.T) {
 
 func TestAuthMiddleware_NoCookie(t *testing.T) {
 	t.Parallel()
-	handler := AuthMiddleware(testSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called")
 	}))
 	req := httptest.NewRequest("GET", "/", nil)
@@ -102,7 +102,7 @@ func TestAuthMiddleware_NoCookie(t *testing.T) {
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	t.Parallel()
-	handler := AuthMiddleware(testSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called")
 	}))
 	req := httptest.NewRequest("GET", "/", nil)
@@ -116,13 +116,13 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 
 func TestAuthMiddleware_ValidToken(t *testing.T) {
 	t.Parallel()
-	tokenStr, err := GenerateToken(testSecret, "user1", "org1", "member")
+	tokenStr, _, err := GenerateToken(testSecret, "user1", "org1", "member")
 	if err != nil {
 		t.Fatalf("GenerateToken: %v", err)
 	}
 
 	called := false
-	handler := AuthMiddleware(testSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		claims := GetCurrentUser(r.Context())
 		if claims == nil {
@@ -166,7 +166,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 		t.Fatalf("sign expired token: %v", err)
 	}
 
-	handler := AuthMiddleware(testSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called for expired token")
 	}))
 

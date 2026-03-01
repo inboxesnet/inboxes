@@ -2,6 +2,32 @@
 
 A self-hostable email client powered by [Resend](https://resend.com). Connect your domain, import existing emails, and manage your inbox with a clean UI.
 
+## Features
+
+- **Multi-domain inbox** — manage multiple domains from a single interface, reorder and hide domains in the sidebar
+- **Threads** — grouped conversations with inbox, sent, archive, trash, spam, and starred views
+- **Custom labels** — create labels, drag threads between folders, bulk actions
+- **Compose & drafts** — floating compose window, draft auto-save, reply/forward
+- **Attachments** — upload and download file attachments
+- **Aliases** — create aliases, assign users, control who can send from which address
+- **Team management** — invite users, assign roles (admin/member), deactivate with data reassignment
+- **Email sync** — import historical emails from Resend with background job processing
+- **Real-time updates** — WebSocket push with alias-based event filtering and cross-tab sync
+- **Contact autocomplete** — suggestions from address history
+- **Keyboard shortcuts** — Gmail-style shortcuts for power users
+- **Dark mode** — system-aware with manual toggle
+- **Self-hosted or commercial** — run for free on your own server, or enable Stripe billing for SaaS mode
+- **Domain monitoring** — automatic heartbeat checks against Resend, self-healing reconnection
+
+## Security
+
+- **Encryption at rest** — Resend API keys encrypted with AES-256-GCM
+- **JWT authentication** — tokens in httpOnly cookies, token blacklist for revocation
+- **Rate limiting** — per-IP and per-identity rate limits on all public endpoints
+- **Request validation** — body size limits, content-type validation, input sanitization
+- **Security headers** — X-Content-Type-Options, X-Frame-Options, Referrer-Policy, CSP
+- **Webhook verification** — Resend and Stripe webhook signatures verified before processing
+
 ## Install (macOS)
 
 ```bash
@@ -34,12 +60,15 @@ cd inboxes
 
 cp .env.example .env
 # Edit .env — set DOMAIN, generate ENCRYPTION_KEY and SESSION_SECRET:
-#   openssl rand -hex 32
+#   openssl rand -base64 32   (ENCRYPTION_KEY)
+#   openssl rand -hex 32      (SESSION_SECRET)
 
 docker compose up -d
 ```
 
 Caddy handles HTTPS automatically via Let's Encrypt. Visit `https://your.domain.com` to get started.
+
+See [Deployment Guide](docs/deployment.md) for Coolify setup, env var details, and troubleshooting.
 
 ## Environment Variables
 
@@ -50,17 +79,35 @@ Caddy handles HTTPS automatically via Let's Encrypt. Visit `https://your.domain.
 | `SESSION_SECRET` | Yes | — | `openssl rand -hex 32` |
 | `DATABASE_URL` | No | `postgres://inboxes:inboxes@localhost:5432/inboxes?sslmode=disable` | PostgreSQL connection |
 | `REDIS_URL` | No | `redis://localhost:6379` | Redis connection |
-| `PUBLIC_URL` | No | `http://localhost:8080` | Backend URL (for webhooks) |
+| `PUBLIC_URL` | No | `http://localhost:8080` | Backend URL (for Resend webhook registration) |
+| `APP_URL` | No | `http://localhost:3000` | Frontend URL (cookie domain, CORS) |
 | `RESEND_SYSTEM_API_KEY` | No | — | For sending invite/reset emails |
 | `API_PORT` | No | `8080` | Backend port |
+| `EVENT_RETENTION_DAYS` | No | `90` | How long to keep events for WS catch-up |
+| `STRIPE_KEY` | No | — | Enables commercial mode (billing + email verification) |
+| `STRIPE_WEBHOOK_SECRET` | If Stripe | — | Required when `STRIPE_KEY` is set |
+| `STRIPE_PRICE_ID` | If Stripe | — | Required when `STRIPE_KEY` is set |
 
 ## Architecture
 
 - **Backend:** Go + Chi router + pgx + Redis
 - **Frontend:** Next.js 15, React 19, Tailwind CSS, shadcn/ui
-- **Database:** PostgreSQL 16
+- **Database:** PostgreSQL 16 (31 auto-managed migrations via goose)
 - **Cache/PubSub:** Redis 7
 - **Reverse Proxy:** Caddy 2 (auto-HTTPS, production only)
+- **Background Workers:** 6 workers — email sync, send queue, trash collector, domain heartbeat, event pruner, status recovery
+
+## Self-Hosted vs Commercial
+
+Inboxes runs in self-hosted mode by default. Setting `STRIPE_KEY` enables commercial mode with billing, email verification, and plan enforcement. See [Self-Hosted Guide](docs/self-hosted.md) for details.
+
+## Documentation
+
+- [API Reference](docs/api.md) — all endpoints, auth, rate limits
+- [WebSocket Events](docs/websocket.md) — event types, payloads, filtering
+- [Self-Hosted Guide](docs/self-hosted.md) — mode differences, setup wizard
+- [Operations Guide](docs/operations.md) — workers, backup, monitoring
+- [Deployment Guide](docs/deployment.md) — Docker Compose, Coolify, env vars
 
 ## License
 

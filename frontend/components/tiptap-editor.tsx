@@ -127,7 +127,9 @@ export function TipTapEditor({
               editor.chain().focus().unsetLink().run();
             } else {
               const url = window.prompt("URL:");
-              if (url) editor.chain().focus().setLink({ href: url }).run();
+              if (url && /^(https?:\/\/|mailto:)/i.test(url)) {
+                editor.chain().focus().setLink({ href: url }).run();
+              }
             }
           }}
           title="Link"

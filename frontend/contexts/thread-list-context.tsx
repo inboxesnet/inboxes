@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { Thread, Folder } from "@/lib/types";
+import type { Thread, Label } from "@/lib/types";
 
 interface ThreadListContextType {
   threads: Thread[];
@@ -13,8 +13,9 @@ interface ThreadListContextType {
   setFocusedIndex: (index: number) => void;
   handleStar: (id: string) => void;
   handleAction: (id: string, action: string) => void;
-  folder: Folder;
+  label: Label;
   domainId: string;
+  onThreadClick?: (id: string) => void;
 }
 
 const ThreadListContext = createContext<ThreadListContextType | null>(null);

@@ -14,27 +14,37 @@ import { ThreadListProvider } from "@/contexts/thread-list-context";
 import { queryKeys } from "@/lib/query-keys";
 import { api } from "@/lib/api";
 import { Search, X } from "lucide-react";
-import type { Folder, Thread } from "@/lib/types";
+import type { Label, Thread } from "@/lib/types";
 
 const LIMIT = 100;
 
-const EMPTY_MESSAGES: Record<Folder, string> = {
+const EMPTY_MESSAGES: Record<Label, string> = {
   inbox: "Your inbox is empty",
   sent: "No sent messages",
   drafts: "No drafts",
   archive: "No archived messages",
+  starred: "No starred messages",
   trash: "Trash is empty",
   spam: "No spam messages",
   deleted_forever: "No deleted messages",
 };
 
+function getThreadLabel(thread: Thread): Label {
+  const labels = thread.labels || [];
+  if (labels.includes("trash")) return "trash";
+  if (labels.includes("spam")) return "spam";
+  if (labels.includes("archive")) return "archive";
+  if (labels.includes("sent")) return "sent";
+  return "inbox";
+}
+
 interface ThreadListPageProps {
-  folder: Folder;
+  label: Label;
   title: string;
   subtitle?: string;
 }
 
-export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps) {
+export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) {
   const params = useParams();
   const domainId = params.domainId as string;
   const qc = useQueryClient();
@@ -44,19 +54,17 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
+  const scrollPositionRef = useRef(0);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [selectAllPages, setSelectAllPages] = useState(false);
 
-  const { data, isLoading, isFetching } = useThreadList(domainId, folder, page);
+  const { data, isLoading, isFetching } = useThreadList(domainId, label, page);
   const threads = data?.threads ?? [];
   const total = data?.total ?? 0;
 
-  const threadIds = useMemo(() => threads.map((t) => t.id), [threads]);
-  const selection = useThreadSelection(threadIds);
-  const clearSelectionRef = useRef(selection.clearSelection);
-  clearSelectionRef.current = selection.clearSelection;
-
-  const { data: searchData, isFetching: searchFetching } = useQuery({
-    queryKey: ["search", domainId, searchQuery],
+  const { data: searchData, isFetching: searchFetching, isError: searchError, refetch: searchRefetch } = useQuery({
+    queryKey: queryKeys.search.results(domainId, searchQuery),
     queryFn: () =>
       api.get<{ threads: Thread[] }>(
         `/api/emails/search?q=${encodeURIComponent(searchQuery)}&domain_id=${domainId}`
@@ -65,27 +73,61 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
   });
   const searchResults = searchData?.threads ?? [];
 
+  const isSearching = searchQuery.length > 0;
+  const activeThreads = isSearching ? searchResults : threads;
+
+  const threadIds = useMemo(() => activeThreads.map((t) => t.id), [activeThreads]);
+  const selection = useThreadSelection(threadIds);
+  const clearSelectionRef = useRef(selection.clearSelection);
+  clearSelectionRef.current = selection.clearSelection;
+
   const starMutation = useStarThread();
   const actionMutation = useThreadAction();
   const bulkMutation = useBulkAction();
 
-  // Reset selection, focus, and reading pane when domain/folder changes
+  // Update page title
+  useEffect(() => {
+    document.title = `${title} - Inboxes`;
+  }, [title]);
+
+  // Reset selection, focus, and reading pane when domain/label changes
   useEffect(() => {
     setPage(1);
     clearSelectionRef.current();
     setFocusedIndex(-1);
     setSelectedThreadId(null);
-  }, [domainId, folder]);
+    setSelectAllPages(false);
+  }, [domainId, label]);
+
+  // Reset selection and focus when search changes
+  useEffect(() => {
+    clearSelectionRef.current();
+    setFocusedIndex(-1);
+    setSelectAllPages(false);
+  }, [searchQuery]);
+
+  // Listen for focus-search custom event (from keyboard shortcuts)
+  useEffect(() => {
+    function handleFocusSearch() {
+      searchInputRef.current?.focus();
+    }
+    window.addEventListener("focus-search", handleFocusSearch);
+    return () => window.removeEventListener("focus-search", handleFocusSearch);
+  }, []);
 
   const handleRefresh = useCallback(() => {
     qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
     qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
-  }, [qc]);
+    if (isSearching) {
+      qc.invalidateQueries({ queryKey: queryKeys.search.all });
+    }
+  }, [qc, isSearching]);
 
   const handlePageChange = useCallback(
     (newPage: number) => {
       selection.clearSelection();
       setFocusedIndex(-1);
+      setSelectAllPages(false);
       setPage(newPage);
     },
     [selection.clearSelection]
@@ -93,9 +135,10 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
 
   const handleStar = useCallback(
     (threadId: string) => {
-      starMutation.mutate(threadId);
+      const thread = threads.find((t) => t.id === threadId);
+      starMutation.mutate({ threadId, starred: !thread?.labels?.includes("starred") });
     },
-    [starMutation]
+    [starMutation, threads]
   );
 
   const handleAction = useCallback(
@@ -112,15 +155,38 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
 
   const handleThreadClick = useCallback(
     (threadId: string) => {
+      // Save scroll position before opening thread
+      if (listScrollRef.current) {
+        scrollPositionRef.current = listScrollRef.current.scrollTop;
+      }
       setSelectedThreadId(threadId);
     },
     []
   );
 
+  // Restore scroll position when returning from thread view
+  useEffect(() => {
+    if (!selectedThreadId && listScrollRef.current && scrollPositionRef.current > 0) {
+      listScrollRef.current.scrollTop = scrollPositionRef.current;
+    }
+  }, [selectedThreadId]);
+
+  const handleToggleSelectAllPages = useCallback(() => {
+    if (selectAllPages) {
+      // Clear select-all-pages mode
+      setSelectAllPages(false);
+      selection.clearSelection();
+    } else {
+      // Enable select-all-pages mode (select all visible first)
+      selection.selectIds(activeThreads.map((t) => t.id));
+      setSelectAllPages(true);
+    }
+  }, [selectAllPages, selection, activeThreads]);
+
   const handleBulkAction = useCallback(
     (actionStr: string) => {
       const ids = Array.from(selection.selectedIds);
-      if (ids.length === 0) return;
+      if (ids.length === 0 && !selectAllPages) return;
 
       let action = actionStr;
       let moveFolder: string | undefined;
@@ -128,12 +194,33 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
       if (actionStr.startsWith("move:")) {
         action = "move";
         moveFolder = actionStr.split(":")[1];
+      } else if (actionStr.startsWith("label:")) {
+        action = "label";
+        moveFolder = actionStr.split(":")[1];
+      } else if (actionStr.startsWith("unlabel:")) {
+        action = "unlabel";
+        moveFolder = actionStr.split(":")[1];
       }
 
-      selection.clearSelection();
-      bulkMutation.mutate({ threadIds: ids, action, folder: moveFolder });
+      // Clear selection only on success — preserve on error so user can retry
+      bulkMutation.mutate(
+        {
+          threadIds: ids,
+          action,
+          label: moveFolder,
+          selectAll: selectAllPages || undefined,
+          filterLabel: selectAllPages ? label : undefined,
+          filterDomainId: selectAllPages ? domainId : undefined,
+        },
+        {
+          onSuccess: () => {
+            selection.clearSelection();
+            setSelectAllPages(false);
+          },
+        }
+      );
     },
-    [selection.selectedIds, selection.clearSelection, bulkMutation]
+    [selection.selectedIds, selection.clearSelection, bulkMutation, selectAllPages, label, domainId]
   );
 
   if (isLoading) {
@@ -163,7 +250,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
               ref={searchInputRef}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search emails..."
+              placeholder={`Search ${title.toLowerCase()} by subject, sender, or content...`}
               className="h-8 pl-8 bg-muted"
             />
           </div>
@@ -182,66 +269,84 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
         </form>
       </div>
 
-      {searchQuery ? (
+      {/* Toolbar — always shown */}
+      <ThreadToolbar
+        label={label}
+        title={isSearching ? "Search results" : title}
+        subtitle={isSearching ? undefined : subtitle}
+        threads={activeThreads}
+        selectedIds={selection.selectedIds}
+        allSelected={selection.allSelected}
+        someSelected={selection.someSelected}
+        hasSelection={selection.selectedIds.size > 0}
+        selectAllPages={selectAllPages}
+        onToggleSelectAll={selection.toggleSelectAll}
+        onSelectIds={selection.selectIds}
+        onToggleSelectAllPages={handleToggleSelectAllPages}
+        onBulkAction={handleBulkAction}
+        onRefresh={handleRefresh}
+        page={isSearching ? 1 : page}
+        total={isSearching ? searchResults.length : total}
+        limit={isSearching ? searchResults.length : LIMIT}
+        onPageChange={handlePageChange}
+        loading={isSearching ? searchFetching : refreshing}
+        isPending={bulkMutation.isPending}
+      />
+
+      {isSearching ? (
         /* Search results */
-        <div className="flex-1 overflow-y-auto overflow-x-hidden relative">
+        <div ref={listScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden relative">
           {searchFetching ? (
             <div className="flex items-center justify-center h-32">
               <Spinner className="h-6 w-6" />
             </div>
+          ) : searchError ? (
+            <div className="flex flex-col items-center justify-center h-32 gap-2 text-sm">
+              <span className="text-destructive">Search failed</span>
+              <button onClick={() => searchRefetch()} className="text-primary hover:underline text-xs">
+                Try again
+              </button>
+            </div>
           ) : searchResults.length === 0 ? (
-            <div className="flex items-center justify-center h-32 text-muted-foreground text-sm">
-              No results found
+            <div className="flex flex-col items-center justify-center h-32 gap-2 text-sm">
+              <span className="text-muted-foreground">No results found for &ldquo;{searchQuery}&rdquo;</span>
+              <button
+                onClick={() => { setSearchInput(""); setSearchQuery(""); }}
+                className="text-primary hover:underline text-xs"
+              >
+                Clear search
+              </button>
             </div>
           ) : (
             <ThreadList
               threads={searchResults}
               domainId={domainId}
-              folder={folder}
+              label={label}
               selectedId={selectedThreadId ?? undefined}
               selectedIds={selection.selectedIds}
-              focusedIndex={-1}
+              focusedIndex={focusedIndex}
               onToggleSelect={selection.toggleSelect}
               onToggleSelectAll={selection.toggleSelectAll}
               onStar={handleStar}
               onAction={handleAction}
               onThreadClick={handleThreadClick}
+              resolveLabel={getThreadLabel}
             />
           )}
         </div>
       ) : (
         <>
-          {/* Toolbar */}
-          <ThreadToolbar
-            folder={folder}
-            title={title}
-            threads={threads}
-            selectedIds={selection.selectedIds}
-            allSelected={selection.allSelected}
-            someSelected={selection.someSelected}
-            hasSelection={selection.selectedIds.size > 0}
-            onToggleSelectAll={selection.toggleSelectAll}
-            onSelectIds={selection.selectIds}
-            onBulkAction={handleBulkAction}
-            onRefresh={handleRefresh}
-            page={page}
-            total={total}
-            limit={LIMIT}
-            onPageChange={handlePageChange}
-            loading={refreshing}
-          />
-
           {/* Thread list or empty state */}
-          <div className={`flex-1 overflow-y-auto overflow-x-hidden relative ${refreshing ? "opacity-60" : ""}`}>
+          <div ref={listScrollRef} className={`flex-1 overflow-y-auto overflow-x-hidden relative ${refreshing ? "opacity-60" : ""}`}>
             {threads.length === 0 ? (
               <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                {EMPTY_MESSAGES[folder]}
+                {EMPTY_MESSAGES[label]}
               </div>
             ) : (
               <ThreadList
                 threads={threads}
                 domainId={domainId}
-                folder={folder}
+                label={label}
                 selectedId={selectedThreadId ?? undefined}
                 selectedIds={selection.selectedIds}
                 focusedIndex={focusedIndex}
@@ -261,7 +366,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
   return (
     <ThreadListProvider
       value={{
-        threads,
+        threads: activeThreads,
         selectedIds: selection.selectedIds,
         toggleSelect: selection.toggleSelect,
         handleBulkAction,
@@ -270,8 +375,9 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
         setFocusedIndex,
         handleStar,
         handleAction,
-        folder,
+        label,
         domainId,
+        onThreadClick: handleThreadClick,
       }}
     >
       <div className="h-full flex">
@@ -287,7 +393,7 @@ export function ThreadListPage({ folder, title, subtitle }: ThreadListPageProps)
               key={selectedThreadId}
               threadId={selectedThreadId}
               domainId={domainId}
-              folder={folder}
+              label={label}
               onBack={() => setSelectedThreadId(null)}
             />
           </div>

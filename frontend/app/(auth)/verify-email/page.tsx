@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,8 +17,16 @@ import { Spinner } from "@/components/ui/spinner";
 
 function VerifyEmailForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const emailParam = searchParams.get("email") || "";
+  const [emailParam, setEmailParam] = useState("");
+
+  useEffect(() => {
+    const stored = sessionStorage.getItem("verify-email") || "";
+    if (!stored) {
+      router.replace("/login");
+      return;
+    }
+    setEmailParam(stored);
+  }, [router]);
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -76,12 +84,12 @@ function VerifyEmailForm() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            <div role="alert" className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
               {error}
             </div>
           )}
           {resendSuccess && (
-            <div className="text-sm text-green-700 bg-green-50 p-3 rounded-md">
+            <div className="text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/40 p-3 rounded-md">
               A new code has been sent to your email.
             </div>
           )}

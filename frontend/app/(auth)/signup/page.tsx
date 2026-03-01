@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
@@ -15,6 +15,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { validatePassword } from "@/lib/utils";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -24,10 +25,35 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [blocked, setBlocked] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{ needs_setup: boolean; commercial: boolean }>("/api/setup/status")
+      .then((res) => {
+        if (res.needs_setup) {
+          router.replace("/setup");
+        } else if (!res.commercial) {
+          setBlocked(true);
+        }
+      })
+      .catch(() => {
+        // If status check fails, allow form to show
+      })
+      .finally(() => setChecking(false));
+  }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+
+    const pwError = validatePassword(password);
+    if (pwError) {
+      setError(pwError);
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -41,7 +67,8 @@ export default function SignupPage() {
         }
       );
       if (res.requires_verification) {
-        router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+        sessionStorage.setItem("verify-email", email);
+        router.push("/verify-email");
       } else {
         router.push("/onboarding");
       }
@@ -56,6 +83,35 @@ export default function SignupPage() {
     }
   }
 
+  if (checking) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center py-12">
+          <Spinner className="h-6 w-6" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (blocked) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Registration closed</CardTitle>
+          <CardDescription>
+            This instance is invite-only. Contact your administrator to request
+            access.
+          </CardDescription>
+        </CardHeader>
+        <CardFooter>
+          <Link href="/login" className="text-sm text-primary hover:underline">
+            Back to login
+          </Link>
+        </CardFooter>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -67,7 +123,7 @@ export default function SignupPage() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            <div role="alert" className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
               {error}
             </div>
           )}
@@ -121,6 +177,9 @@ export default function SignupPage() {
               minLength={8}
               required
             />
+            <p className="text-xs text-muted-foreground">
+              Must include uppercase, lowercase, and a number
+            </p>
           </div>
         </CardContent>
         <CardFooter className="flex flex-col space-y-4">

@@ -7,6 +7,7 @@ import (
 
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/util"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -36,26 +37,40 @@ func (w *SyncWorker) Run(ctx context.Context) {
 		default:
 		}
 
-		// Block for up to 5s waiting for a job ID on the queue
-		result, err := w.rdb.BRPop(ctx, 5*time.Second, syncJobsQueue).Result()
-		if err != nil {
-			if err == redis.Nil || ctx.Err() != nil {
-				continue
-			}
-			slog.Error("sync worker: BRPOP error", "error", err)
-			time.Sleep(time.Second)
-			continue
-		}
-		if len(result) < 2 {
-			continue
-		}
-
-		jobID := result[1]
-		w.processJob(ctx, jobID)
+		w.runOnce(ctx)
 	}
 }
 
+func (w *SyncWorker) runOnce(ctx context.Context) {
+	defer util.RecoverWorker("sync-worker")
+
+	// Block for up to 5s waiting for a job ID on the queue
+	result, err := w.rdb.BRPop(ctx, 5*time.Second, syncJobsQueue).Result()
+	if err != nil {
+		if err == redis.Nil || ctx.Err() != nil {
+			return
+		}
+		slog.Error("sync worker: BRPOP error", "error", err)
+		time.Sleep(time.Second)
+		return
+	}
+	if len(result) < 2 {
+		return
+	}
+
+	jobID := result[1]
+	w.processJob(ctx, jobID)
+}
+
 func (w *SyncWorker) processJob(ctx context.Context, jobID string) {
+	var panicErr error
+	defer util.RecoverWorkerJob("sync-worker-job", &panicErr)
+	defer func() {
+		if panicErr != nil {
+			w.failJob(ctx, jobID, 0, 0, "panic: "+panicErr.Error())
+		}
+	}()
+
 	// Load job from Postgres
 	var orgID, userID, sentCursor, receivedCursor, status string
 	var retryCount, maxRetries int
@@ -89,7 +104,9 @@ func (w *SyncWorker) processJob(ctx context.Context, jobID string) {
 	// Start heartbeat goroutine
 	heartCtx, heartCancel := context.WithCancel(ctx)
 	defer heartCancel()
-	go w.heartbeat(heartCtx, jobID)
+	util.SafeGo("sync-heartbeat", func() {
+		w.heartbeat(heartCtx, jobID)
+	})
 
 	// Load org's non-hidden domains
 	rows, err := w.pool.Query(ctx,
@@ -131,10 +148,12 @@ func (w *SyncWorker) processJob(ctx context.Context, jobID string) {
 	}
 
 	// Mark completed
-	w.pool.Exec(ctx,
+	if _, err := w.pool.Exec(ctx,
 		`UPDATE sync_jobs SET status='completed', heartbeat_at=now(), updated_at=now() WHERE id=$1`,
 		jobID,
-	)
+	); err != nil {
+		slog.Error("sync worker: failed to mark completed", "job_id", jobID, "error", err)
+	}
 	slog.Info("sync worker: job completed", "job_id", jobID)
 }
 
@@ -146,9 +165,11 @@ func (w *SyncWorker) heartbeat(ctx context.Context, jobID string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.pool.Exec(ctx,
+			if _, err := w.pool.Exec(ctx,
 				`UPDATE sync_jobs SET heartbeat_at=now() WHERE id=$1`, jobID,
-			)
+			); err != nil {
+				slog.Error("sync worker: heartbeat failed", "job_id", jobID, "error", err)
+			}
 		}
 	}
 }
@@ -156,21 +177,27 @@ func (w *SyncWorker) heartbeat(ctx context.Context, jobID string) {
 func (w *SyncWorker) failJob(ctx context.Context, jobID string, retryCount, maxRetries int, errMsg string) {
 	newRetry := retryCount + 1
 	if newRetry >= maxRetries {
-		w.pool.Exec(ctx,
+		if _, err := w.pool.Exec(ctx,
 			`UPDATE sync_jobs SET status='failed', error_message=$1, retry_count=$2,
 			 heartbeat_at=now(), updated_at=now() WHERE id=$3`,
 			errMsg, newRetry, jobID,
-		)
+		); err != nil {
+			slog.Error("sync worker: failed to mark job failed", "job_id", jobID, "error", err)
+		}
 		slog.Error("sync worker: job permanently failed", "job_id", jobID, "retries", newRetry)
 	} else {
 		// Reset to pending for retry
-		w.pool.Exec(ctx,
+		if _, err := w.pool.Exec(ctx,
 			`UPDATE sync_jobs SET status='pending', error_message=$1, retry_count=$2,
 			 heartbeat_at=now(), updated_at=now() WHERE id=$3`,
 			errMsg, newRetry, jobID,
-		)
+		); err != nil {
+			slog.Error("sync worker: failed to mark job pending", "job_id", jobID, "error", err)
+		}
 		// Re-enqueue
-		w.rdb.LPush(ctx, syncJobsQueue, jobID)
+		if err := w.rdb.LPush(ctx, syncJobsQueue, jobID).Err(); err != nil {
+			slog.Error("sync worker: redis lpush retry failed", "job_id", jobID, "error", err)
+		}
 		slog.Warn("sync worker: job failed, re-enqueued for retry", "job_id", jobID, "retry", newRetry)
 	}
 }
@@ -187,7 +214,10 @@ func (w *SyncWorker) RunStaleRecovery(ctx context.Context) {
 			slog.Info("sync worker: stale recovery stopped")
 			return
 		case <-ticker.C:
-			w.recoverStaleJobs(ctx)
+			func() {
+				defer util.RecoverWorker("sync-stale-recovery")
+				w.recoverStaleJobs(ctx)
+			}()
 		}
 	}
 }
@@ -209,10 +239,12 @@ func (w *SyncWorker) recoverStaleJobs(ctx context.Context) {
 		rows.Scan(&id, &retryCount, &maxRetries)
 
 		if retryCount >= maxRetries {
-			w.pool.Exec(ctx,
+			if _, err := w.pool.Exec(ctx,
 				`UPDATE sync_jobs SET status='failed', error_message='stale: max retries exceeded',
 				 updated_at=now() WHERE id=$1`, id,
-			)
+			); err != nil {
+				slog.Error("sync worker: stale recovery mark failed", "job_id", id, "error", err)
+			}
 			slog.Warn("sync worker: stale job permanently failed", "job_id", id)
 			continue
 		}
@@ -222,7 +254,9 @@ func (w *SyncWorker) recoverStaleJobs(ctx context.Context) {
 			 error_message='recovered from stale heartbeat', updated_at=now() WHERE id=$1`, id,
 		)
 		if err == nil {
-			w.rdb.LPush(ctx, syncJobsQueue, id)
+			if lpushErr := w.rdb.LPush(ctx, syncJobsQueue, id).Err(); lpushErr != nil {
+				slog.Error("sync worker: stale recovery lpush failed", "job_id", id, "error", lpushErr)
+			}
 			slog.Warn("sync worker: recovered stale job", "job_id", id)
 		}
 	}

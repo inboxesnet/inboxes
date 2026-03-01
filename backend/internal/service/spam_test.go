@@ -276,3 +276,38 @@ func TestClassifySpam_EmptyEverything(t *testing.T) {
 		t.Errorf("ClassifySpam(EmptyEverything): got IsSpam=true, want false")
 	}
 }
+
+func TestClassifySpam_LegitUnsubscribeContent(t *testing.T) {
+	t.Parallel()
+	headers := map[string]string{
+		"Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+		"Message-ID":            "<abc@example.com>",
+		"Date":                  "Mon, 1 Jan 2024 00:00:00 +0000",
+	}
+	// "unsubscribe" in subject and "click here to unsubscribe" in body are
+	// CAN-SPAM compliance signals, not spam indicators.
+	result := ClassifySpam(headers, "newsletter@example.com",
+		"Your weekly update — unsubscribe anytime",
+		"Thanks for reading. Click here to unsubscribe if you no longer wish to receive these emails.")
+	if result.Score > scoreEpsilon {
+		t.Errorf("ClassifySpam(LegitUnsubscribeContent): got score %f, want 0 — unsubscribe content should not increase spam score", result.Score)
+	}
+	if result.IsSpam {
+		t.Errorf("ClassifySpam(LegitUnsubscribeContent): got IsSpam=true, want false")
+	}
+}
+
+func TestClassifySpam_OptOutSubject(t *testing.T) {
+	t.Parallel()
+	headers := map[string]string{
+		"Authentication-Results": "spf=pass dkim=pass dmarc=pass",
+		"Message-ID":            "<abc@example.com>",
+		"Date":                  "Mon, 1 Jan 2024 00:00:00 +0000",
+	}
+	result := ClassifySpam(headers, "updates@company.com",
+		"How to opt out of marketing emails",
+		"Normal email body with no spam indicators.")
+	if result.Score > scoreEpsilon {
+		t.Errorf("ClassifySpam(OptOutSubject): got score %f, want 0 — 'opt out' should not increase spam score", result.Score)
+	}
+}

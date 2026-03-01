@@ -69,6 +69,48 @@ func TestHandleResend_InvalidPayloadJSON(t *testing.T) {
 	// The actual JSON parsing test requires a DB connection, which is out of scope for unit tests.
 }
 
+func TestHandleResend_EmptyOrgIDParam(t *testing.T) {
+	t.Parallel()
+	h := &WebhookHandler{}
+	// Set up chi context with empty orgId
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("orgId", "")
+	req := httptest.NewRequest("POST", "/webhooks/resend/", strings.NewReader(`{}`))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.HandleResend(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("HandleResend(empty orgId): got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleResend_ReachesDBWithValidOrgID(t *testing.T) {
+	t.Parallel()
+	// When orgId is set, the handler should proceed past the orgId check.
+	// Without a real DB, it panics on h.DB.QueryRow — that's expected.
+	h := &WebhookHandler{}
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("orgId", "org-valid")
+	req := httptest.NewRequest("POST", "/webhooks/resend/org-valid", strings.NewReader(`{"type":"email.sent"}`))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		h.HandleResend(w, req)
+	}()
+	// Should panic on nil DB (means it got past orgId check)
+	if !panicked && w.Code == http.StatusBadRequest {
+		// Didn't panic and got 400 = still in orgId check, which is wrong
+		t.Errorf("HandleResend(valid orgId): should proceed past orgId check")
+	}
+}
+
 // Suppress lint about unused context import
 func init() {
 	_ = context.Background

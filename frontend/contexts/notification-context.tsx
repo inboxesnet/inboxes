@@ -9,18 +9,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { queryClient } from "@/lib/query-client";
 import type { WSMessage } from "@/lib/types";
 
 // In local dev, NEXT_PUBLIC_WS_URL points to backend (ws://localhost:8080).
 // In production behind Caddy, derive from current page origin.
-function getWsUrl() {
+function getWsUrl(): string {
   if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
   if (typeof window !== "undefined") {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${window.location.host}`;
   }
-  return "ws://localhost:8080";
+  return ""; // SSR — will be set on client-side hydration
 }
 
 type EventHandler = (msg: WSMessage) => void;
@@ -40,6 +41,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastEventIdRef = useRef<number>(0);
   const hadConnectionRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
 
   const dispatch = useCallback((msg: WSMessage) => {
     // Dispatch to event-specific handlers
@@ -59,26 +61,36 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (lastEventIdRef.current === 0) return;
     try {
       const data = await api.get<{ events: WSMessage[] }>(
-        `/api/events?since=${lastEventIdRef.current}&limit=100`
+        `/api/events?since=${lastEventIdRef.current}&limit=200`
       );
       for (const evt of data.events) {
         dispatch(evt);
       }
-    } catch {
-      // Catchup failed — handlers will refetch on next interaction
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 410) {
+        // Events too old — invalidate all caches for a full refetch
+        queryClient.invalidateQueries();
+        lastEventIdRef.current = 0;
+        return;
+      }
+      // Other catchup failures — handlers will refetch on next interaction
     }
   }, [dispatch]);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
+    const url = getWsUrl();
+    if (!url) return; // No URL available yet (SSR)
+
     const isReconnect = hadConnectionRef.current;
-    const ws = new WebSocket(`${getWsUrl()}/api/ws`);
+    const ws = new WebSocket(`${url}/api/ws`);
     wsRef.current = ws;
 
     ws.onopen = () => {
       setConnected(true);
       hadConnectionRef.current = true;
+      reconnectAttemptRef.current = 0;
       // Catch up on missed events if this is a reconnection
       if (isReconnect) {
         catchupEvents();
@@ -96,7 +108,13 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     ws.onclose = () => {
       setConnected(false);
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+      const attempt = reconnectAttemptRef.current;
+      reconnectAttemptRef.current = attempt + 1;
+      // Full jitter: random value between 1s and the exponential backoff cap.
+      // Spreads reconnections over a wide window to prevent thundering herd.
+      const baseDelay = Math.min(1000 * Math.pow(2, attempt), 30000);
+      const delay = Math.max(1000, Math.random() * baseDelay);
+      reconnectTimeoutRef.current = setTimeout(connect, delay);
     };
 
     ws.onerror = () => {

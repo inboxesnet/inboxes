@@ -14,6 +14,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { validatePassword } from "@/lib/utils";
 
 export default function ClaimPage() {
   return (
@@ -56,6 +57,13 @@ function ClaimForm() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+
+    const pwError = validatePassword(password);
+    if (pwError) {
+      setError(pwError);
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -91,6 +99,11 @@ function ClaimForm() {
             This invite link is invalid or has expired.
           </CardDescription>
         </CardHeader>
+        <CardFooter>
+          <Button variant="outline" className="w-full" onClick={() => router.push("/login")}>
+            Go to login
+          </Button>
+        </CardFooter>
       </Card>
     );
   }
@@ -106,7 +119,7 @@ function ClaimForm() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            <div role="alert" className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
               {error}
             </div>
           )}
@@ -119,6 +132,7 @@ function ClaimForm() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Jane Smith"
+              maxLength={255}
               required
             />
           </div>
@@ -135,13 +149,19 @@ function ClaimForm() {
               minLength={8}
               required
             />
+            <p className="text-xs text-muted-foreground">
+              Must include uppercase, lowercase, and a number
+            </p>
           </div>
         </CardContent>
-        <CardFooter>
+        <CardFooter className="flex-col gap-3">
           <Button className="w-full" disabled={loading}>
             {loading ? <Spinner className="mr-2" /> : null}
             Set up account
           </Button>
+          <a href="/login" className="text-sm text-muted-foreground hover:text-primary">
+            Back to sign in
+          </a>
         </CardFooter>
       </form>
     </Card>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
@@ -22,6 +22,20 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showSignup, setShowSignup] = useState(true);
+
+  useEffect(() => {
+    api
+      .get<{ commercial: boolean }>("/api/setup/status")
+      .then((res) => {
+        if (!res.commercial) {
+          setShowSignup(false);
+        }
+      })
+      .catch(() => {
+        // If status check fails, keep signup link visible
+      });
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,7 +55,8 @@ export default function LoginPage() {
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.message === "email_not_verified") {
-          router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+          sessionStorage.setItem("verify-email", email);
+          router.push("/verify-email");
           return;
         }
         setError(err.message);
@@ -62,7 +77,7 @@ export default function LoginPage() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            <div role="alert" className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
               {error}
             </div>
           )}
@@ -105,12 +120,14 @@ export default function LoginPage() {
             {loading ? <Spinner className="mr-2" /> : null}
             Sign in
           </Button>
-          <p className="text-sm text-muted-foreground text-center">
-            Don&apos;t have an account?{" "}
-            <Link href="/signup" className="text-primary hover:underline">
-              Sign up
-            </Link>
-          </p>
+          {showSignup && (
+            <p className="text-sm text-muted-foreground text-center">
+              Don&apos;t have an account?{" "}
+              <Link href="/signup" className="text-primary hover:underline">
+                Sign up
+              </Link>
+            </p>
+          )}
         </CardFooter>
       </form>
     </Card>

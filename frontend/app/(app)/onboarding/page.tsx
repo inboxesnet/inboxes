@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useDomains } from "@/contexts/domain-context";
 import { api, ApiError } from "@/lib/api";
 import { useSyncJob } from "@/hooks/use-sync-job";
@@ -30,6 +31,8 @@ import {
   Archive,
   Search,
   Mail,
+  AlertTriangle,
+  X,
 } from "lucide-react";
 
 const IMPORT_TIPS = [
@@ -71,8 +74,10 @@ const STEPS: { key: Step; label: string; icon: React.ReactNode }[] = [
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { refreshDomains, refreshUnreadCounts } = useDomains();
   const [step, setStep] = useState<Step | null>(null);
+  const [billingSuccess, setBillingSuccess] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [domains, setDomains] = useState<Domain[]>([]);
   const [selectedDomainIds, setSelectedDomainIds] = useState<Set<string>>(new Set());
@@ -84,15 +89,27 @@ export default function OnboardingPage() {
   >({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [webhookWarning, setWebhookWarning] = useState<string | null>(null);
   const {
     progress: syncProgress,
     result: syncResult,
     error: syncError,
     isRunning: syncRunning,
     isComplete: syncComplete,
+    aliasesReady,
     startSync,
     resumeJob,
   } = useSyncJob();
+
+  // Handle Stripe checkout success redirect
+  useEffect(() => {
+    if (searchParams.get("billing") === "success") {
+      setBillingSuccess(true);
+      router.replace("/onboarding");
+      const timer = setTimeout(() => setBillingSuccess(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [searchParams, router]);
 
   // Resume onboarding at the right step based on server state
   useEffect(() => {
@@ -109,7 +126,7 @@ export default function OnboardingPage() {
         }
 
         // If a sync is already in progress, resume polling
-        if (res.step === "sync" && res.sync_in_progress && res.sync_job_id) {
+        if (res.sync_in_progress && res.sync_job_id) {
           resumeJob(res.sync_job_id);
         }
 
@@ -177,7 +194,15 @@ export default function OnboardingPage() {
         domain_ids: Array.from(selectedDomainIds),
       });
       // Set up webhook in background — don't block the user
-      api.post("/api/onboarding/webhook").catch(() => {});
+      api.post<{ webhook_skipped?: boolean; reason?: string }>("/api/onboarding/webhook")
+        .then((res) => {
+          if (res.webhook_skipped) {
+            setWebhookWarning(res.reason || "Webhook registration was skipped.");
+          }
+        })
+        .catch(() => {
+          setWebhookWarning("Failed to register webhook with Resend. Incoming emails won\u2019t sync automatically. Check your PUBLIC_URL and network settings.");
+        });
       setStep("sync");
     } catch (err) {
       setError(
@@ -188,9 +213,10 @@ export default function OnboardingPage() {
     }
   }
 
-  // When sync completes, fetch addresses for the next step
+  // When aliases are ready (scan complete), fetch addresses and show selection.
+  // Sync continues importing in background.
   useEffect(() => {
-    if (syncComplete && syncResult) {
+    if (aliasesReady && step === "sync") {
       api
         .get<DiscoveredAddress[]>("/api/onboarding/addresses")
         .then((rows) => {
@@ -200,10 +226,11 @@ export default function OnboardingPage() {
             defaults[a.id] = "alias";
           });
           setAddressAssignments(defaults);
+          setStep("addresses");
         })
-        .catch(() => {});
+        .catch(() => { toast.error("Failed to load addresses"); });
     }
-  }, [syncComplete, syncResult]);
+  }, [aliasesReady, step]);
 
   async function handleComplete() {
     setError("");
@@ -236,6 +263,11 @@ export default function OnboardingPage() {
   return (
     <div className="min-h-screen bg-muted/30 flex items-start justify-center pt-16 p-4">
       <div className="w-full max-w-2xl space-y-8">
+        {billingSuccess && (
+          <div className="bg-green-500/10 text-green-700 dark:text-green-400 text-sm text-center py-2 px-4 rounded-lg border border-green-500/20">
+            Subscription activated! You now have full access.
+          </div>
+        )}
         {/* Progress */}
         <div className="flex items-center justify-center gap-2">
           {STEPS.map((s, i) => (
@@ -262,6 +294,38 @@ export default function OnboardingPage() {
             </div>
           ))}
         </div>
+
+        {/* Webhook warning banner */}
+        {webhookWarning && (
+          <div className="relative rounded-lg border border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-950/40 p-4 pr-10">
+            <button
+              type="button"
+              onClick={() => setWebhookWarning(null)}
+              className="absolute top-3 right-3 text-yellow-600 dark:text-yellow-400 hover:text-yellow-800 dark:hover:text-yellow-200"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <div className="flex gap-3">
+              <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
+                  Webhook not registered
+                </p>
+                <p className="text-sm text-yellow-700 dark:text-yellow-400">
+                  {webhookWarning}
+                </p>
+                <a
+                  href="https://github.com/headswim/inboxes/blob/main/docs/self-hosted.md"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block text-sm font-medium text-yellow-800 dark:text-yellow-300 underline underline-offset-2 hover:text-yellow-900 dark:hover:text-yellow-200 mt-1"
+                >
+                  Setup guide &rarr;
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Step: Connect */}
         {step === "connect" && (
@@ -495,17 +559,17 @@ export default function OnboardingPage() {
 
               {/* Final result */}
               {syncResult && (
-                <div className="rounded-lg bg-green-50 border border-green-200 p-4 space-y-1">
-                  <p className="text-sm text-green-800">
+                <div className="rounded-lg bg-green-50 dark:bg-green-950/40 border border-green-200 dark:border-green-800/40 p-4 space-y-1">
+                  <p className="text-sm text-green-800 dark:text-green-400">
                     Imported{" "}
                     <strong>{syncResult.sent_count}</strong> sent and{" "}
                     <strong>{syncResult.received_count}</strong> received emails
                   </p>
-                  <p className="text-sm text-green-800">
+                  <p className="text-sm text-green-800 dark:text-green-400">
                     Created{" "}
                     <strong>{syncResult.thread_count}</strong> threads
                   </p>
-                  <p className="text-sm text-green-800">
+                  <p className="text-sm text-green-800 dark:text-green-400">
                     Discovered{" "}
                     <strong>{syncResult.address_count}</strong> addresses
                   </p>
@@ -513,18 +577,9 @@ export default function OnboardingPage() {
               )}
             </CardContent>
             <CardFooter>
-              {syncResult ? (
-                <Button
-                  className="w-full"
-                  onClick={() => setStep("addresses")}
-                >
-                  Continue
-                </Button>
-              ) : (
-                <div className="flex items-center gap-2 w-full text-sm text-muted-foreground justify-center">
-                  <Spinner className="h-4 w-4" /> Importing your emails...
-                </div>
-              )}
+              <div className="flex items-center gap-2 w-full text-sm text-muted-foreground justify-center">
+                <Spinner className="h-4 w-4" /> Scanning your emails...
+              </div>
             </CardFooter>
           </Card>
         )}
@@ -538,6 +593,12 @@ export default function OnboardingPage() {
                 Categorize each discovered address as a person, alias, or skip.
               </CardDescription>
             </CardHeader>
+            {syncRunning && syncProgress && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground px-6 pb-2">
+                <Spinner className="h-3 w-3" />
+                Importing emails in background ({syncProgress.imported}/{syncProgress.total})...
+              </div>
+            )}
             <CardContent>
               {error && (
                 <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md mb-4">

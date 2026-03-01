@@ -13,7 +13,7 @@ export default function ArchiveThreadPage() {
     <ThreadView
       threadId={threadId}
       domainId={domainId}
-      folder="archive"
+      label="archive"
       onBack={() => router.push(`/d/${domainId}/archive`)}
     />
   );

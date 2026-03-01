@@ -12,17 +12,28 @@ import (
 
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/util"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
 	DB        *pgxpool.Pool
+	RDB       *redis.Client
 	Secret    string
 	AppURL    string
 	ResendSvc *service.ResendService
 	StripeKey string
+}
+
+// dummyHash is used for constant-time comparison when user is not found,
+// preventing timing attacks that could reveal whether an email exists.
+var dummyHash []byte
+
+func init() {
+	dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
 }
 
 type signupRequest struct {
@@ -53,17 +64,40 @@ type claimRequest struct {
 }
 
 func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
+	// Solo mode: block signups when at least one user exists
+	if h.StripeKey == "" {
+		ctx := r.Context()
+		var count int
+		if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err == nil && count > 0 {
+			writeError(w, http.StatusForbidden, "registration is closed")
+			return
+		}
+	}
+
 	var req signupRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 	if req.Email == "" || req.Password == "" || req.OrgName == "" {
 		writeError(w, http.StatusBadRequest, "email, password, and org_name are required")
 		return
 	}
-	if len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+	if err := validateEmail(req.Email); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateLength(req.OrgName, "org_name", 255); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateLength(req.Name, "name", 255); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validatePassword(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -74,15 +108,18 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	tx, err := h.DB.Begin(ctx)
+	dbCtx, dbCancel := util.DBCtx(ctx)
+	defer dbCancel()
+
+	tx, err := h.DB.Begin(dbCtx)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback(dbCtx)
 
 	var orgID string
-	err = tx.QueryRow(ctx,
+	err = tx.QueryRow(dbCtx,
 		"INSERT INTO orgs (name) VALUES ($1) RETURNING id", req.OrgName,
 	).Scan(&orgID)
 	if err != nil {
@@ -101,7 +138,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		emailVerified = false
 	}
 
-	err = tx.QueryRow(ctx,
+	err = tx.QueryRow(dbCtx,
 		`INSERT INTO users (org_id, email, name, password_hash, role, status, email_verified)
 		 VALUES ($1, $2, $3, $4, 'admin', 'active', $5) RETURNING id`,
 		orgID, req.Email, name, string(hash), emailVerified,
@@ -121,7 +158,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	if h.StripeKey != "" {
 		code := generateVerificationCode()
 		expires := time.Now().Add(15 * time.Minute)
-		_, err = tx.Exec(ctx,
+		_, err = tx.Exec(dbCtx,
 			"UPDATE users SET verification_code = $1, verification_expires_at = $2 WHERE id = $3",
 			code, expires, userID,
 		)
@@ -130,14 +167,19 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(dbCtx); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to commit")
 			return
 		}
 
 		// Send verification email
+		from := h.ResendSvc.GetSystemFrom(ctx)
+		if from == "" {
+			from = "noreply@inboxes.net"
+			slog.Warn("auth: using hardcoded noreply fallback — configure system email in settings")
+		}
 		h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
-			"from":    "noreply@inboxes.app",
+			"from":    from,
 			"to":      []string{req.Email},
 			"subject": "Verify your email",
 			"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),
@@ -150,12 +192,12 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(dbCtx); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit")
 		return
 	}
 
-	token, err := middleware.GenerateToken(h.Secret, userID, orgID, "admin")
+	token, _, err := middleware.GenerateToken(h.Secret, userID, orgID, "admin")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -179,8 +221,17 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 	if req.Email == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "email and password are required")
+		return
+	}
+	if err := validateEmail(req.Email); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Password) > 128 {
+		writeError(w, http.StatusBadRequest, "password must be 128 characters or fewer")
 		return
 	}
 
@@ -193,6 +244,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		req.Email,
 	).Scan(&userID, &orgID, &name, &role, &status, &passwordHash, &emailVerified)
 	if err != nil {
+		// Constant-time comparison to prevent timing attacks revealing email existence
+		bcrypt.CompareHashAndPassword(dummyHash, []byte(req.Password))
 		slog.Warn("auth: login failed", "email", req.Email, "reason", "user not found")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -216,17 +269,22 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
+	token, jti, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
 	middleware.SetTokenCookie(w, token, h.AppURL)
 
+	// Track session
+	loginBlacklist := service.NewTokenBlacklist(h.RDB)
+	loginBlacklist.RegisterSession(ctx, userID, jti)
+
 	slog.Info("auth: login", "email", req.Email)
 
 	var onboardingCompleted bool
-	h.DB.QueryRow(ctx, "SELECT onboarding_completed FROM orgs WHERE id = $1", orgID).Scan(&onboardingCompleted)
+	warnIfErr(h.DB.QueryRow(ctx, "SELECT onboarding_completed FROM orgs WHERE id = $1", orgID).Scan(&onboardingCompleted),
+		"auth: failed to check onboarding status", "org_id", orgID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user": map[string]string{
@@ -241,6 +299,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	// Revoke the current token so it can't be reused
+	claims := middleware.GetCurrentUser(r.Context())
+	if claims != nil && claims.ID != "" && claims.ExpiresAt != nil {
+		blacklist := service.NewTokenBlacklist(h.RDB)
+		if err := blacklist.RevokeToken(r.Context(), claims.ID, claims.ExpiresAt.Time); err != nil {
+			slog.Error("auth: failed to revoke token on logout", "error", err)
+		}
+		blacklist.ClearSessions(r.Context(), claims.UserID)
+	}
 	middleware.ClearTokenCookie(w, h.AppURL)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "logged out"})
 }
@@ -251,12 +318,24 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 	if req.Email == "" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
+	if err := validateEmail(req.Email); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	ctx := r.Context()
+
+	// Self-hosted: early return if no system email key is available
+	if h.StripeKey == "" && !h.ResendSvc.HasSystemKey(ctx) {
+		writeError(w, http.StatusServiceUnavailable, "email_not_configured")
+		return
+	}
+
 	tokenBytes := make([]byte, 32)
 	rand.Read(tokenBytes)
 	resetToken := hex.EncodeToString(tokenBytes)
@@ -276,8 +355,13 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 	// Send reset email via system Resend key
 	resetURL := h.AppURL + "/reset-password?token=" + resetToken
+	from := h.ResendSvc.GetSystemFrom(ctx)
+	if from == "" {
+		from = "noreply@inboxes.net"
+		slog.Warn("auth: using hardcoded noreply fallback — configure system email in settings")
+	}
 	h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
-		"from":    "noreply@inboxes.app",
+		"from":    from,
 		"to":      []string{req.Email},
 		"subject": "Reset your password",
 		"html":    "<p>Click <a href=\"" + resetURL + "\">here</a> to reset your password. This link expires in 1 hour.</p>",
@@ -296,8 +380,8 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "token and password are required")
 		return
 	}
-	if len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+	if err := validatePassword(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -308,15 +392,24 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	tag, err := h.DB.Exec(ctx,
+	var resetUserID string
+	err = h.DB.QueryRow(ctx,
 		`UPDATE users SET password_hash = $1, reset_token = NULL, reset_expires_at = NULL
-		 WHERE reset_token = $2 AND reset_expires_at > now()`,
+		 WHERE reset_token = $2 AND reset_expires_at > now()
+		 RETURNING id`,
 		string(hash), req.Token,
-	)
-	if err != nil || tag.RowsAffected() == 0 {
+	).Scan(&resetUserID)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or expired reset token")
 		return
 	}
+
+	// Revoke all existing tokens — password reset implies possible compromise
+	blacklist := service.NewTokenBlacklist(h.RDB)
+	if err := blacklist.RevokeAllForUser(ctx, resetUserID); err != nil {
+		slog.Error("auth: session revocation failed during password reset", "user_id", resetUserID, "error", err)
+	}
+	blacklist.ClearSessions(ctx, resetUserID)
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "password reset successfully"})
 }
@@ -331,8 +424,8 @@ func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "token and password are required")
 		return
 	}
-	if len(req.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
+	if err := validatePassword(req.Password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -357,12 +450,16 @@ func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
+	token, jti, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
 	middleware.SetTokenCookie(w, token, h.AppURL)
+
+	// Track session
+	claimBlacklist := service.NewTokenBlacklist(h.RDB)
+	claimBlacklist.RegisterSession(ctx, userID, jti)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user": map[string]string{
@@ -383,6 +480,7 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 	if req.Email == "" || req.Code == "" {
 		writeError(w, http.StatusBadRequest, "email and code are required")
 		return
@@ -401,7 +499,7 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
+	token, _, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -427,6 +525,7 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.Email = normalizeEmail(req.Email)
 	if req.Email == "" {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
@@ -447,8 +546,13 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	from2 := h.ResendSvc.GetSystemFrom(ctx)
+	if from2 == "" {
+		from2 = "noreply@inboxes.net"
+		slog.Warn("auth: using hardcoded noreply fallback — configure system email in settings")
+	}
 	h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
-		"from":    "noreply@inboxes.app",
+		"from":    from2,
 		"to":      []string{req.Email},
 		"subject": "Verify your email",
 		"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),

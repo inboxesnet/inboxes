@@ -16,12 +16,25 @@ type CronHandler struct {
 }
 
 func (h *CronHandler) PurgeTrash(w http.ResponseWriter, r *http.Request) {
-	// Delete threads that have been in trash for more than 30 days
-	tag, err := h.DB.Exec(r.Context(),
-		`DELETE FROM threads WHERE folder = 'trash' AND trash_expires_at IS NOT NULL AND trash_expires_at < now()`)
+	ctx := r.Context()
+
+	// Soft-delete threads with trash label past expiry
+	tag, err := h.DB.Exec(ctx,
+		`WITH expired AS (
+			SELECT t.id FROM threads t
+			JOIN thread_labels tl ON tl.thread_id = t.id AND tl.label = 'trash'
+			WHERE t.trash_expires_at < now() AND t.deleted_at IS NULL
+		)
+		UPDATE threads SET deleted_at = now(), updated_at = now() WHERE id IN (SELECT id FROM expired)`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to purge trash")
 		return
+	}
+
+	// Clean up orphaned labels
+	if _, err := h.DB.Exec(ctx,
+		`DELETE FROM thread_labels WHERE thread_id IN (SELECT id FROM threads WHERE deleted_at IS NOT NULL)`); err != nil {
+		slog.Error("cron: label cleanup failed", "error", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{

@@ -51,11 +51,20 @@ export function ContactCard({ email, children }: ContactCardProps) {
     };
   }, [open, close]);
 
+  const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   async function handleCopy() {
     await navigator.clipboard.writeText(email);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
   }
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   return (
     <span className="relative inline-block">

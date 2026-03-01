@@ -1,11 +1,15 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,6 +26,46 @@ func RateLimitByIP(rdb *redis.Client, limit int, windowSecs int) func(http.Handl
 			}
 			key := fmt.Sprintf("rl:%s:%s", r.URL.Path, ip)
 
+			allowed, retryAfter := checkRateLimit(r.Context(), rdb, key, limit, windowSecs)
+			if !allowed {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write([]byte(`{"error":"rate limit exceeded"}`))
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RateLimitByBodyField returns middleware that rate-limits requests by a JSON
+// body field value (e.g. "email"). This is used alongside RateLimitByIP to
+// prevent abuse targeting a specific identity.
+func RateLimitByBodyField(rdb *redis.Client, fieldName string, limit int, windowSecs int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			if err != nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			var body map[string]interface{}
+			if json.Unmarshal(bodyBytes, &body) != nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			val, ok := body[fieldName].(string)
+			if !ok || val == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			key := fmt.Sprintf("rl:body:%s:%s", r.URL.Path, strings.ToLower(val))
 			allowed, retryAfter := checkRateLimit(r.Context(), rdb, key, limit, windowSecs)
 			if !allowed {
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))

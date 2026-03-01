@@ -31,7 +31,13 @@ export default function ForgotPasswordPage() {
       setSent(true);
     } catch (err) {
       if (err instanceof ApiError) {
-        setError(err.message);
+        if (err.message === "email_not_configured") {
+          setError(
+            "Password reset is unavailable. Email sending is not configured on this instance. Contact your administrator."
+          );
+        } else {
+          setError(err.message);
+        }
       } else {
         setError("Something went wrong");
       }
@@ -69,7 +75,7 @@ export default function ForgotPasswordPage() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            <div role="alert" className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
               {error}
             </div>
           )}

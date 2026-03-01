@@ -108,16 +108,10 @@ func (h *SyncHandler) GetSync(w http.ResponseWriter, r *http.Request) {
 	err := h.DB.QueryRow(ctx,
 		`SELECT org_id, status, phase, imported, total, sent_count, received_count,
 		 thread_count, address_count, error_message, created_at, updated_at
-		 FROM sync_jobs WHERE id = $1`, jobID,
+		 FROM sync_jobs WHERE id = $1 AND org_id = $2`, jobID, claims.OrgID,
 	).Scan(&orgID, &status, &phase, &imported, &total, &sentCount, &receivedCount,
 		&threadCount, &addressCount, &errorMessage, &createdAt, &updatedAt)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "sync job not found")
-		return
-	}
-
-	// Verify org ownership
-	if orgID != claims.OrgID {
 		writeError(w, http.StatusNotFound, "sync job not found")
 		return
 	}

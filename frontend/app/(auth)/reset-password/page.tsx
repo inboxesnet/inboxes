@@ -14,6 +14,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { validatePassword } from "@/lib/utils";
 
 export default function ResetPasswordPage() {
   return (
@@ -41,6 +42,12 @@ function ResetPasswordForm() {
       return;
     }
 
+    const pwError = validatePassword(password);
+    if (pwError) {
+      setError(pwError);
+      return;
+    }
+
     setLoading(true);
     try {
       await api.post("/api/auth/reset-password", { token, password });
@@ -65,7 +72,7 @@ function ResetPasswordForm() {
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-4">
           {error && (
-            <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
+            <div role="alert" className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
               {error}
             </div>
           )}
@@ -82,6 +89,9 @@ function ResetPasswordForm() {
               minLength={8}
               required
             />
+            <p className="text-xs text-muted-foreground">
+              Must include uppercase, lowercase, and a number
+            </p>
           </div>
           <div className="space-y-2">
             <label htmlFor="confirm" className="text-sm font-medium">

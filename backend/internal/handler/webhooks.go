@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"log/slog"
 	"math"
@@ -19,13 +18,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/util"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 type WebhookHandler struct {
 	DB        *pgxpool.Pool
 	Bus       *event.Bus
 	ResendSvc *service.ResendService
+	RDB       *redis.Client
+	EncSvc    *service.EncryptionService
 }
 
 type webhookPayload struct {
@@ -60,21 +63,59 @@ func (h *WebhookHandler) HandleResend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10MB limit
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
 
+	// Early guard: return 410 for deleted orgs to signal Resend to stop
+	var orgDeletedAt *time.Time
+	if err := h.DB.QueryRow(r.Context(),
+		"SELECT deleted_at FROM orgs WHERE id = $1", orgID,
+	).Scan(&orgDeletedAt); err != nil {
+		http.Error(w, "org not found", http.StatusNotFound)
+		return
+	}
+	if orgDeletedAt != nil {
+		w.WriteHeader(http.StatusGone) // 410
+		return
+	}
+
 	// Verify Svix signature with org-specific webhook secret
+	// Prefer encrypted secret; fall back to plaintext for pre-migration orgs
 	var webhookSecret string
-	if err := h.DB.QueryRow(r.Context(), "SELECT resend_webhook_secret FROM orgs WHERE id = $1", orgID).Scan(&webhookSecret); err == nil && webhookSecret != "" {
-		if err := verifySvixSignature(body, r.Header, webhookSecret); err != nil {
-			slog.Warn("webhook: signature verification failed", "org_id", orgID, "error", err)
-			http.Error(w, "invalid signature", http.StatusUnauthorized)
-			return
+	var encSecret, encIV, encTag *string
+	var plainSecret *string
+	if err := h.DB.QueryRow(r.Context(),
+		`SELECT resend_webhook_secret, resend_webhook_secret_encrypted, resend_webhook_secret_iv, resend_webhook_secret_tag FROM orgs WHERE id = $1`, orgID,
+	).Scan(&plainSecret, &encSecret, &encIV, &encTag); err != nil {
+		slog.Error("webhook: failed to look up webhook secret", "org_id", orgID, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if encSecret != nil && *encSecret != "" && h.EncSvc != nil {
+		decrypted, decErr := h.EncSvc.Decrypt(*encSecret, *encIV, *encTag)
+		if decErr != nil {
+			slog.Error("webhook: failed to decrypt webhook secret", "org_id", orgID, "error", decErr)
+		} else {
+			webhookSecret = decrypted
 		}
+	}
+	if webhookSecret == "" && plainSecret != nil {
+		webhookSecret = *plainSecret
+	}
+	if webhookSecret == "" {
+		slog.Warn("webhook: no webhook secret configured, rejecting", "org_id", orgID)
+		http.Error(w, "webhook secret not configured", http.StatusUnauthorized)
+		return
+	}
+	if err := verifySvixSignature(body, r.Header, webhookSecret); err != nil {
+		slog.Warn("webhook: signature verification failed", "org_id", orgID, "error", err)
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
 	}
 
 	var payload webhookPayload
@@ -94,6 +135,8 @@ func (h *WebhookHandler) HandleResend(w http.ResponseWriter, r *http.Request) {
 		h.handleEmailStatus(ctx, orgID, "delivered", payload.Data)
 	case "email.bounced":
 		h.handleEmailStatus(ctx, orgID, "bounced", payload.Data)
+	case "email.complained":
+		h.handleEmailStatus(ctx, orgID, "complained", payload.Data)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -106,251 +149,135 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 		return
 	}
 
-	// Determine which domain this email is for (based on TO addresses)
-	var domainID string
-	var recipientAddress string
-	for _, to := range emailData.To {
-		parts := strings.Split(to, "@")
-		if len(parts) != 2 {
-			continue
-		}
-		err := h.DB.QueryRow(ctx,
-			"SELECT id FROM domains WHERE org_id = $1 AND domain = $2",
-			orgID, parts[1],
-		).Scan(&domainID)
-		if err == nil {
-			recipientAddress = to
-			break
-		}
+	dbCtx, dbCancel := util.DBCtx(ctx)
+	defer dbCancel()
+
+	// Guard: skip processing for deleted orgs
+	var orgDeletedAt *time.Time
+	if err := h.DB.QueryRow(dbCtx,
+		"SELECT deleted_at FROM orgs WHERE id = $1", orgID,
+	).Scan(&orgDeletedAt); err != nil {
+		slog.Error("webhook: org lookup failed", "org_id", orgID, "error", err)
+		return
 	}
-	// If no match found in To, check CC addresses
-	if domainID == "" {
-		for _, cc := range emailData.CC {
-			parts := strings.Split(cc, "@")
-			if len(parts) != 2 {
-				continue
-			}
-			err := h.DB.QueryRow(ctx,
-				"SELECT id FROM domains WHERE org_id = $1 AND domain = $2",
-				orgID, parts[1],
-			).Scan(&domainID)
-			if err == nil {
-				recipientAddress = cc
-				break
-			}
-		}
-	}
-	if domainID == "" {
-		slog.Warn("webhook: no matching domain for received email", "to", emailData.To, "cc", emailData.CC)
+	if orgDeletedAt != nil {
+		slog.Info("webhook: org deleted, ignoring email", "org_id", orgID, "resend_email_id", emailData.EmailID)
 		return
 	}
 
 	// Idempotency: skip if we already processed this email
 	var existingID string
-	if err := h.DB.QueryRow(ctx,
+	if err := h.DB.QueryRow(dbCtx,
 		"SELECT id FROM emails WHERE resend_email_id = $1", emailData.EmailID,
 	).Scan(&existingID); err == nil {
 		slog.Info("webhook: duplicate email, skipping", "resend_email_id", emailData.EmailID)
 		return
 	}
 
-	// Fetch full email (body, headers, attachments) from Resend API —
-	// the webhook payload only contains metadata, not the actual content.
-	type resendFullEmail struct {
-		HTML        string            `json:"html"`
-		Text        string            `json:"text"`
-		Headers     map[string]string `json:"headers"`
-		ReplyTo     []string          `json:"reply_to"`
-		Attachments []struct {
-			Filename    string `json:"filename"`
-			ContentType string `json:"content_type"`
-			Size        int    `json:"size"`
-			URL         string `json:"url"`
-		} `json:"attachments"`
+	// Find admin user for this org
+	var adminUserID string
+	if err := h.DB.QueryRow(dbCtx,
+		"SELECT id FROM users WHERE org_id = $1 AND role = 'admin' AND status = 'active' LIMIT 1",
+		orgID,
+	).Scan(&adminUserID); err != nil {
+		slog.Error("webhook: no admin user found", "org_id", orgID, "error", err)
+		return
 	}
-	var full resendFullEmail
-	bodyData, err := h.ResendSvc.Fetch(ctx, orgID, "GET", "/emails/receiving/"+emailData.EmailID, nil)
+
+	webhookDataJSON, err := json.Marshal(emailData)
 	if err != nil {
-		slog.Error("webhook: fetch full email from Resend", "error", err, "email_id", emailData.EmailID)
-		// Fall back to whatever the webhook payload contained (likely empty)
-	} else {
-		if err := json.Unmarshal(bodyData, &full); err != nil {
-			slog.Error("webhook: parse full email response", "error", err)
-		}
-	}
-
-	// Merge fetched data — prefer API response over webhook payload
-	bodyHTML := full.HTML
-	bodyPlain := full.Text
-	headers := full.Headers
-	if headers == nil {
-		headers = emailData.Headers
-	}
-	replyTo := full.ReplyTo
-	if replyTo == nil {
-		replyTo = emailData.ReplyTo
-	}
-
-	// 3-phase routing: direct user -> alias -> catch-all
-	userID := h.routeEmail(ctx, orgID, domainID, recipientAddress)
-	if userID == "" {
-		slog.Warn("webhook: no user found for", "address", recipientAddress)
+		slog.Error("webhook: failed to marshal email data", "error", err)
 		return
 	}
 
-	// Spam classification
-	spamResult := service.ClassifySpam(headers, emailData.From, emailData.Subject, bodyPlain)
-	folder := "inbox"
-	if spamResult.IsSpam {
-		folder = "spam"
-		slog.Info("webhook: email classified as spam", "from", emailData.From, "score", spamResult.Score)
-	}
-
-	// Find or create thread using 3-step matching:
-	// 1. In-Reply-To header match
-	// 2. Subject + counterparty match
-	// 3. Create new thread
-	cleanSubject := cleanSubjectForThread(emailData.Subject)
-	var threadID string
-	found := false
-
-	snippet := truncateRunes(bodyPlain, 200)
-
-	// Step 1: Match by In-Reply-To header
-	inReplyToHeader := ""
-	if headers != nil {
-		inReplyToHeader = headers["In-Reply-To"]
-	}
-	if inReplyToHeader != "" {
-		err := h.DB.QueryRow(ctx,
-			`SELECT thread_id FROM emails WHERE message_id = $1 AND org_id = $2 LIMIT 1`,
-			inReplyToHeader, orgID,
-		).Scan(&threadID)
-		if err == nil {
-			found = true
-		}
-	}
-
-	// Step 2: Match by subject + counterparty (the from address for inbound)
-	if !found {
-		fromClean := service.ExtractEmail(emailData.From)
-		counterpartyJSON, _ := json.Marshal([]string{fromClean})
-		err := h.DB.QueryRow(ctx,
-			`SELECT id FROM threads WHERE org_id = $1 AND domain_id = $2 AND subject = $3
-			 AND participant_emails @> $4::jsonb
-			 ORDER BY last_message_at DESC LIMIT 1`,
-			orgID, domainID, cleanSubject, counterpartyJSON,
-		).Scan(&threadID)
-		if err == nil {
-			found = true
-		}
-	}
-
-	// Step 3: Create new thread
-	if !found {
-		participants, _ := json.Marshal(append([]string{emailData.From}, emailData.To...))
-		if err := h.DB.QueryRow(ctx,
-			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, folder, original_to, snippet)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-			orgID, userID, domainID, cleanSubject, participants, folder, recipientAddress, snippet,
-		).Scan(&threadID); err != nil {
-			slog.Error("webhook: create thread failed", "org_id", orgID, "from", emailData.From, "error", err)
-			return
-		}
-	}
-
-	// Insert email with all available fields
-	toJSON, _ := json.Marshal(emailData.To)
-	ccJSON, _ := json.Marshal(emailData.CC)
-	bccJSON, _ := json.Marshal(emailData.BCC)
-	replyToJSON, _ := json.Marshal(replyTo)
-	headersJSON, _ := json.Marshal(headers)
-	spamReasons, _ := json.Marshal(spamResult.Reasons)
-
-	// Build attachments JSON from API response
-	attachmentsJSON := []byte("[]")
-	if len(full.Attachments) > 0 {
-		attachmentsJSON, _ = json.Marshal(full.Attachments)
-	}
-
-	// Extract threading headers
-	var inReplyTo string
-	var refsJSON []byte
-	if headers != nil {
-		inReplyTo = headers["In-Reply-To"]
-		if refs, ok := headers["References"]; ok {
-			refsJSON, _ = json.Marshal(strings.Fields(refs))
-		}
-	}
-	if refsJSON == nil {
-		refsJSON = []byte("[]")
-	}
-
-	var emailID string
-	if err := h.DB.QueryRow(ctx,
-		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, message_id,
-		 direction, from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses,
-		 subject, body_html, body_plain, status, headers, in_reply_to, references_header,
-		 spam_score, spam_reasons, attachments)
-		 VALUES ($1, $2, $3, $4, $5, $6, 'inbound', $7, $8, $9, $10, $11, $12, $13, $14, 'received',
-		 $15, $16, $17, $18, $19, $20)
+	// Atomic idempotent INSERT — partial unique index on (resend_email_id) WHERE status IN ('pending','running')
+	// prevents duplicate jobs without a check-then-insert race condition
+	var jobID string
+	if err := h.DB.QueryRow(dbCtx,
+		`INSERT INTO email_jobs (org_id, user_id, job_type, resend_email_id, webhook_data)
+		 VALUES ($1, $2, 'fetch', $3, $4)
+		 ON CONFLICT (resend_email_id) WHERE status IN ('pending', 'running') DO NOTHING
 		 RETURNING id`,
-		threadID, userID, orgID, domainID, emailData.EmailID, emailData.MessageID,
-		emailData.From, toJSON, ccJSON, bccJSON, replyToJSON,
-		emailData.Subject, bodyHTML, bodyPlain,
-		headersJSON, inReplyTo, refsJSON, spamResult.Score, spamReasons, attachmentsJSON,
-	).Scan(&emailID); err != nil {
-		slog.Error("webhook: insert email failed", "thread_id", threadID, "resend_email_id", emailData.EmailID, "error", err)
+		orgID, adminUserID, emailData.EmailID, webhookDataJSON,
+	).Scan(&jobID); err != nil {
+		// ON CONFLICT DO NOTHING returns no rows — this is a duplicate, not an error
+		slog.Info("webhook: duplicate job, skipping", "resend_email_id", emailData.EmailID)
 		return
 	}
 
-	// Update thread stats and snippet
-	if _, err := h.DB.Exec(ctx,
-		`UPDATE threads SET message_count = message_count + 1, unread_count = unread_count + 1,
-		 last_message_at = now(), snippet = $2, updated_at = now() WHERE id = $1`, threadID, snippet,
-	); err != nil {
-		slog.Error("webhook: update thread failed", "thread_id", threadID, "error", err)
+	// Push to Redis queue
+	if err := h.RDB.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
+		slog.Error("webhook: redis lpush failed", "job_id", jobID, "error", err)
 	}
-
-	slog.Info("webhook: email processed", "email_id", emailID, "thread_id", threadID, "folder", folder, "from", emailData.From, "resend_email_id", emailData.EmailID)
-
-	// Publish event
-	h.Bus.Publish(ctx, event.Event{
-		EventType: event.EmailReceived,
-		OrgID:     orgID,
-		UserID:    userID,
-		DomainID:  domainID,
-		ThreadID:  threadID,
-		Payload: map[string]interface{}{
-			"email_id": emailID,
-			"from":     emailData.From,
-			"subject":  emailData.Subject,
-			"folder":   folder,
-		},
-	})
+	slog.Info("webhook: enqueued fetch job", "job_id", jobID, "resend_email_id", emailData.EmailID)
 }
 
 func (h *WebhookHandler) handleEmailStatus(ctx context.Context, orgID, status string, data json.RawMessage) {
+	h.handleEmailStatusWithRetry(ctx, orgID, status, data, 0)
+}
+
+func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, status string, data json.RawMessage, attempt int) {
 	var statusData emailStatusData
 	if err := json.Unmarshal(data, &statusData); err != nil {
 		slog.Error("webhook: parse status event", "status", status, "error", err)
 		return
 	}
 
-	var threadID, domainID string
-	if err := h.DB.QueryRow(ctx,
-		"SELECT thread_id, domain_id FROM emails WHERE resend_email_id = $1",
-		statusData.EmailID,
-	).Scan(&threadID, &domainID); err != nil {
-		slog.Warn("webhook: email not found for status update", "resend_email_id", statusData.EmailID, "status", status)
-	}
+	dbCtx, dbCancel := util.DBCtx(ctx)
+	defer dbCancel()
 
-	if _, err := h.DB.Exec(ctx,
+	// UPDATE first — check rows affected
+	tag, err := h.DB.Exec(dbCtx,
 		"UPDATE emails SET status = $1, updated_at = now() WHERE resend_email_id = $2",
 		status, statusData.EmailID,
-	); err != nil {
+	)
+	if err != nil {
 		slog.Error("webhook: update email status failed", "resend_email_id", statusData.EmailID, "status", status, "error", err)
+		return
 	}
+
+	if tag.RowsAffected() == 0 {
+		// Email not yet inserted (race: status webhook arrived before fetch job completed)
+		if attempt >= 3 {
+			slog.Warn("webhook: email not found after retries, dropping status update",
+				"resend_email_id", statusData.EmailID, "status", status)
+			return
+		}
+
+		// Use Redis INCR as a retry counter with 5-min TTL
+		retryKey := fmt.Sprintf("webhook:status:retry:%s", statusData.EmailID)
+		count, err := h.RDB.Incr(ctx, retryKey).Result()
+		if err != nil {
+			slog.Error("webhook: redis retry counter failed", "error", err)
+			return
+		}
+		if count == 1 {
+			h.RDB.Expire(ctx, retryKey, 5*time.Minute)
+		}
+		if count > 3 {
+			slog.Warn("webhook: max retries exceeded for status update",
+				"resend_email_id", statusData.EmailID, "status", status)
+			return
+		}
+
+		// Retry after 10s delay
+		slog.Info("webhook: email not found, scheduling retry",
+			"resend_email_id", statusData.EmailID, "status", status, "attempt", count)
+		util.SafeGo("webhook-status-retry", func() {
+			time.Sleep(10 * time.Second)
+			// Fire-and-forget retry — use a bounded timeout since the original request ctx is done
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer retryCancel()
+			h.handleEmailStatusWithRetry(retryCtx, orgID, status, data, int(count))
+		})
+		return
+	}
+
+	var threadID, domainID string
+	warnIfErr(h.DB.QueryRow(dbCtx,
+		"SELECT thread_id, domain_id FROM emails WHERE resend_email_id = $1",
+		statusData.EmailID,
+	).Scan(&threadID, &domainID), "webhook: failed to look up thread/domain for event", "resend_email_id", statusData.EmailID)
 
 	slog.Info("webhook: status update", "resend_email_id", statusData.EmailID, "status", status)
 
@@ -364,46 +291,6 @@ func (h *WebhookHandler) handleEmailStatus(ctx context.Context, orgID, status st
 			"status":   status,
 		},
 	})
-}
-
-func (h *WebhookHandler) routeEmail(ctx context.Context, orgID, domainID, address string) string {
-	// Phase 1: Direct user match
-	var userID string
-	err := h.DB.QueryRow(ctx,
-		"SELECT id FROM users WHERE org_id = $1 AND email = $2 AND status = 'active'",
-		orgID, address,
-	).Scan(&userID)
-	if err == nil {
-		return userID
-	}
-
-	// Phase 2: Alias match
-	var aliasID string
-	err = h.DB.QueryRow(ctx,
-		"SELECT id FROM aliases WHERE org_id = $1 AND address = $2",
-		orgID, address,
-	).Scan(&aliasID)
-	if err == nil {
-		// Get first user assigned to this alias
-		err = h.DB.QueryRow(ctx,
-			"SELECT user_id FROM alias_users WHERE alias_id = $1 LIMIT 1",
-			aliasID,
-		).Scan(&userID)
-		if err == nil {
-			return userID
-		}
-	}
-
-	// Phase 3: Catch-all — assign to org admin
-	err = h.DB.QueryRow(ctx,
-		"SELECT id FROM users WHERE org_id = $1 AND role = 'admin' AND status = 'active' LIMIT 1",
-		orgID,
-	).Scan(&userID)
-	if err == nil {
-		return userID
-	}
-
-	return ""
 }
 
 // verifySvixSignature verifies a Svix-signed webhook payload.
@@ -454,28 +341,3 @@ func verifySvixSignature(payload []byte, headers http.Header, secret string) err
 	return fmt.Errorf("no matching signature found")
 }
 
-func truncateRunes(s string, maxRunes int) string {
-	s = html.UnescapeString(s)
-	runes := []rune(s)
-	if len(runes) > maxRunes {
-		return string(runes[:maxRunes])
-	}
-	return s
-}
-
-func cleanSubjectForThread(subject string) string {
-	s := subject
-	for {
-		lower := strings.ToLower(s)
-		if strings.HasPrefix(lower, "re: ") {
-			s = s[4:]
-		} else if strings.HasPrefix(lower, "fwd: ") {
-			s = s[5:]
-		} else {
-			break
-		}
-	}
-	// Collapse multiple spaces into one
-	parts := strings.Fields(strings.TrimSpace(s))
-	return strings.Join(parts, " ")
-}

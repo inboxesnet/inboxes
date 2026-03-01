@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useDomains } from "@/contexts/domain-context";
 import { useThreadList } from "@/contexts/thread-list-context";
+import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog";
 
 interface KeyboardShortcutsProps {
   onCompose: () => void;
@@ -14,6 +15,14 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
   const pathname = usePathname();
   const { domains, activeDomain } = useDomains();
   const threadList = useThreadList();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // Listen for custom event from sidebar button
+  useEffect(() => {
+    function handleOpen() { setShortcutsOpen(true); }
+    window.addEventListener("open-shortcuts-dialog", handleOpen);
+    return () => window.removeEventListener("open-shortcuts-dialog", handleOpen);
+  }, []);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -29,12 +38,10 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
 
       const isMeta = e.metaKey || e.ctrlKey;
 
-      // Cmd+K or / — search
+      // Cmd+K or / — focus inline search
       if ((isMeta && e.key === "k") || (e.key === "/" && !isMeta)) {
         e.preventDefault();
-        if (activeDomain) {
-          router.push(`/d/${activeDomain.id}/search`);
-        }
+        window.dispatchEvent(new Event("focus-search"));
         return;
       }
 
@@ -55,6 +62,13 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
         return;
       }
 
+      // ? — open keyboard shortcuts dialog
+      if (e.key === "?" && !isMeta) {
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+
       // Thread-list shortcuts (no modifier, only when context is available)
       if (!isMeta && threadList && activeDomain) {
         const {
@@ -67,7 +81,7 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
           setFocusedIndex,
           handleStar,
           handleAction,
-          folder,
+          label,
           domainId,
         } = threadList;
 
@@ -96,10 +110,15 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
           }
           case "Enter":
           case "o": {
-            // Open focused thread
+            // Open focused thread (split-pane if available, else navigate)
             e.preventDefault();
             if (focusedIndex >= 0 && focusedIndex < threads.length) {
-              router.push(`/d/${domainId}/${folder}/${threads[focusedIndex].id}`);
+              const tid = threads[focusedIndex].id;
+              if (threadList.onThreadClick) {
+                threadList.onThreadClick(tid);
+              } else {
+                router.push(`/d/${domainId}/${label}/${tid}`);
+              }
             }
             return;
           }
@@ -129,6 +148,24 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
             if (focusedIndex >= 0 && focusedIndex < threads.length) {
               handleStar(threads[focusedIndex].id);
             }
+            return;
+          }
+          case "m": {
+            // Mute/unmute focused or selected
+            e.preventDefault();
+            if (selectedIds.size > 0) {
+              const selectedThreads = threads.filter((t) => selectedIds.has(t.id));
+              const allMuted = selectedThreads.every((t) => t.labels?.includes("muted"));
+              handleBulkAction(allMuted ? "unmute" : "mute");
+            } else if (focusedIndex >= 0 && focusedIndex < threads.length) {
+              handleAction(threads[focusedIndex].id, "mute");
+            }
+            return;
+          }
+          case "v": {
+            // Move to — dispatch custom event to open move dialog in toolbar
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent("open-move-dialog"));
             return;
           }
           case "r": {
@@ -169,5 +206,5 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [router, pathname, domains, activeDomain, onCompose, threadList]);
 
-  return null;
+  return <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />;
 }
