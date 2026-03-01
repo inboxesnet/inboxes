@@ -8,17 +8,7 @@ import (
 )
 
 // ── Create ──
-
-func TestDraftCreate_Unauthorized(t *testing.T) {
-	t.Parallel()
-	h := &DraftHandler{}
-	req := httptest.NewRequest("POST", "/drafts", nil)
-	w := httptest.NewRecorder()
-	h.Create(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("DraftCreate(no auth): got status %d, want %d", w.Code, http.StatusUnauthorized)
-	}
-}
+// Auth enforcement is handled by AuthMiddleware in the router.
 
 func TestDraftCreate_InvalidJSON(t *testing.T) {
 	t.Parallel()
@@ -52,17 +42,6 @@ func TestDraftCreate_MissingDomainID(t *testing.T) {
 }
 
 // ── Update ──
-
-func TestDraftUpdate_Unauthorized(t *testing.T) {
-	t.Parallel()
-	h := &DraftHandler{}
-	req := httptest.NewRequest("PATCH", "/drafts/123", nil)
-	w := httptest.NewRecorder()
-	h.Update(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("DraftUpdate(no auth): got status %d, want %d", w.Code, http.StatusUnauthorized)
-	}
-}
 
 func TestDraftUpdate_InvalidJSON(t *testing.T) {
 	t.Parallel()
@@ -114,41 +93,4 @@ func TestDraftCreate_DefaultKind(t *testing.T) {
 	}
 }
 
-// ── List ──
-
-func TestDraftList_Unauthorized(t *testing.T) {
-	t.Parallel()
-	h := &DraftHandler{}
-	req := httptest.NewRequest("GET", "/drafts", nil)
-	w := httptest.NewRecorder()
-	h.List(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("DraftList(no auth): got status %d, want %d", w.Code, http.StatusUnauthorized)
-	}
-}
-
-// ── Delete ──
-
-func TestDraftDelete_Unauthorized(t *testing.T) {
-	t.Parallel()
-	h := &DraftHandler{}
-	req := httptest.NewRequest("DELETE", "/drafts/123", nil)
-	w := httptest.NewRecorder()
-	h.Delete(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("DraftDelete(no auth): got status %d, want %d", w.Code, http.StatusUnauthorized)
-	}
-}
-
-// ── Send ──
-
-func TestDraftSend_Unauthorized(t *testing.T) {
-	t.Parallel()
-	h := &DraftHandler{}
-	req := httptest.NewRequest("POST", "/drafts/123/send", nil)
-	w := httptest.NewRecorder()
-	h.Send(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("DraftSend(no auth): got status %d, want %d", w.Code, http.StatusUnauthorized)
-	}
-}
+// Auth enforcement for List, Delete, Send is handled by AuthMiddleware in the router.

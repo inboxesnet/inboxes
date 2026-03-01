@@ -178,12 +178,14 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 			from = "noreply@inboxes.net"
 			slog.Warn("auth: using hardcoded noreply fallback — configure system email in settings")
 		}
-		h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+		if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
 			"from":    from,
 			"to":      []string{req.Email},
 			"subject": "Verify your email",
 			"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),
-		})
+		}); err != nil {
+			slog.Error("auth: failed to send verification email", "email", req.Email, "error", err)
+		}
 
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"requires_verification": true,
@@ -360,12 +362,14 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		from = "noreply@inboxes.net"
 		slog.Warn("auth: using hardcoded noreply fallback — configure system email in settings")
 	}
-	h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+	if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
 		"from":    from,
 		"to":      []string{req.Email},
 		"subject": "Reset your password",
 		"html":    "<p>Click <a href=\"" + resetURL + "\">here</a> to reset your password. This link expires in 1 hour.</p>",
-	})
+	}); err != nil {
+		slog.Error("auth: failed to send password reset email", "email", req.Email, "error", err)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "if that email exists, a reset link has been sent"})
 }
@@ -551,12 +555,16 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 		from2 = "noreply@inboxes.net"
 		slog.Warn("auth: using hardcoded noreply fallback — configure system email in settings")
 	}
-	h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+	if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
 		"from":    from2,
 		"to":      []string{req.Email},
 		"subject": "Verify your email",
 		"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),
-	})
+	}); err != nil {
+		slog.Error("auth: failed to resend verification email", "email", req.Email, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to send verification email")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "if that email needs verification, a new code has been sent"})
 }

@@ -30,37 +30,10 @@ func (h *DomainHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list domains")
 		return
 	}
-	defer rows.Close()
-
-	var domains []map[string]interface{}
-	for rows.Next() {
-		var id, orgID, domain string
-		var resendDomainID *string
-		var status string
-		var displayOrder int
-		var dnsRecords json.RawMessage
-		var createdAt interface{}
-
-		if err := rows.Scan(&id, &orgID, &domain, &resendDomainID, &status,
-			&displayOrder, &dnsRecords, &createdAt); err != nil {
-			continue
-		}
-
-		d := map[string]interface{}{
-			"id":               id,
-			"org_id":           orgID,
-			"domain":           domain,
-			"resend_domain_id": resendDomainID,
-			"status":           status,
-			"display_order":    displayOrder,
-			"dns_records":      dnsRecords,
-			"created_at":       createdAt,
-		}
-		domains = append(domains, d)
-	}
-
-	if domains == nil {
-		domains = []map[string]interface{}{}
+	domains, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list domains")
+		return
 	}
 	writeJSON(w, http.StatusOK, domains)
 }
@@ -76,39 +49,10 @@ func (h *DomainHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list domains")
 		return
 	}
-	defer rows.Close()
-
-	var domains []map[string]interface{}
-	for rows.Next() {
-		var id, orgID, domain string
-		var resendDomainID *string
-		var status string
-		var hidden bool
-		var displayOrder int
-		var dnsRecords json.RawMessage
-		var createdAt interface{}
-
-		if err := rows.Scan(&id, &orgID, &domain, &resendDomainID, &status,
-			&displayOrder, &dnsRecords, &hidden, &createdAt); err != nil {
-			continue
-		}
-
-		d := map[string]interface{}{
-			"id":               id,
-			"org_id":           orgID,
-			"domain":           domain,
-			"resend_domain_id": resendDomainID,
-			"status":           status,
-			"display_order":    displayOrder,
-			"dns_records":      dnsRecords,
-			"hidden":           hidden,
-			"created_at":       createdAt,
-		}
-		domains = append(domains, d)
-	}
-
-	if domains == nil {
-		domains = []map[string]interface{}{}
+	domains, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list domains")
+		return
 	}
 	writeJSON(w, http.StatusOK, domains)
 }
@@ -291,11 +235,6 @@ func (h *DomainHandler) UnreadCounts(w http.ResponseWriter, r *http.Request) {
 func (h *DomainHandler) UpdateVisibility(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin role required")
-		return
-	}
-
 	var req struct {
 		Visible []string `json:"visible"`
 	}
@@ -409,49 +348,16 @@ func (h *DomainHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list domains after sync")
 		return
 	}
-	defer rows.Close()
-
-	var domains []map[string]interface{}
-	for rows.Next() {
-		var id, orgID, domain string
-		var resendDomainID *string
-		var status string
-		var hidden bool
-		var displayOrder int
-		var dnsRecords json.RawMessage
-		var createdAt interface{}
-
-		if err := rows.Scan(&id, &orgID, &domain, &resendDomainID, &status,
-			&displayOrder, &dnsRecords, &hidden, &createdAt); err != nil {
-			continue
-		}
-
-		d := map[string]interface{}{
-			"id":               id,
-			"org_id":           orgID,
-			"domain":           domain,
-			"resend_domain_id": resendDomainID,
-			"status":           status,
-			"display_order":    displayOrder,
-			"dns_records":      dnsRecords,
-			"hidden":           hidden,
-			"created_at":       createdAt,
-		}
-		domains = append(domains, d)
-	}
-
-	if domains == nil {
-		domains = []map[string]interface{}{}
+	domains, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list domains after sync")
+		return
 	}
 	writeJSON(w, http.StatusOK, domains)
 }
 
 func (h *DomainHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin role required")
-		return
-	}
 
 	domainID := chi.URLParam(r, "id")
 	ctx := r.Context()
@@ -496,10 +402,6 @@ func (h *DomainHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *DomainHandler) ReregisterWebhook(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin role required")
-		return
-	}
 
 	ctx := r.Context()
 	webhookURL := h.PublicURL + "/api/webhooks/resend/" + claims.OrgID

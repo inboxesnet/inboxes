@@ -32,10 +32,6 @@ type BillingHandler struct {
 // Checkout creates a Stripe checkout session for the org.
 func (h *BillingHandler) Checkout(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 	ctx := r.Context()
 
 	stripe.Key = h.StripeKey
@@ -130,10 +126,6 @@ func (h *BillingHandler) Checkout(w http.ResponseWriter, r *http.Request) {
 // Portal creates a Stripe billing portal session.
 func (h *BillingHandler) Portal(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 	ctx := r.Context()
 
 	stripe.Key = h.StripeKey

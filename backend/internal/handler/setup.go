@@ -260,12 +260,14 @@ func (h *SetupHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		}
 
 		util.SafeGo("setup-welcome-email", func() {
-			h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+			if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
 				"from":    from,
 				"to":      []string{req.Email},
 				"subject": "Welcome to Inboxes",
 				"html":    welcomeEmailHTML(name, h.AppURL),
-			})
+			}); err != nil {
+				slog.Error("setup: failed to send welcome email", "email", req.Email, "error", err)
+			}
 		})
 	}
 

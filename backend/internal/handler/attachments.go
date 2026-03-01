@@ -140,6 +140,9 @@ func (h *AttachmentHandler) Meta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Download serves the full attachment content. The 10MB upload cap (enforced by
+// ParseMultipartForm in Upload) keeps full-blob loading acceptable here;
+// streaming would add complexity for no practical benefit at this size limit.
 func (h *AttachmentHandler) Download(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	attachmentID := chi.URLParam(r, "id")

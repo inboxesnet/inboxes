@@ -28,10 +28,6 @@ type UserHandler struct {
 
 func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" && claims.Role != "owner" {
-		writeError(w, http.StatusForbidden, "admin access required")
-		return
-	}
 
 	rows, err := h.DB.Query(r.Context(),
 		`SELECT id, email, name, role, status, created_at FROM users WHERE org_id = $1 ORDER BY created_at`,
@@ -40,32 +36,16 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list users")
 		return
 	}
-	defer rows.Close()
-
-	var users []map[string]interface{}
-	for rows.Next() {
-		var id, email, name, role, status string
-		var createdAt time.Time
-		if rows.Scan(&id, &email, &name, &role, &status, &createdAt) == nil {
-			users = append(users, map[string]interface{}{
-				"id": id, "email": email, "name": name, "role": role,
-				"status": status, "created_at": createdAt,
-			})
-		}
-	}
-
-	if users == nil {
-		users = []map[string]interface{}{}
+	users, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list users")
+		return
 	}
 	writeJSON(w, http.StatusOK, users)
 }
 
 func (h *UserHandler) Invite(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	var req struct {
 		Email string `json:"email"`
@@ -134,22 +114,22 @@ func (h *UserHandler) Invite(w http.ResponseWriter, r *http.Request) {
 	if inviterName != "" {
 		inviteIntro = fmt.Sprintf("<strong>%s</strong> has invited you to join <strong>%s</strong> on Inboxes.", inviterName, orgName)
 	}
-	h.ResendSvc.SystemFetch(r.Context(), "POST", "/emails", map[string]interface{}{
+	if _, err := h.ResendSvc.SystemFetch(r.Context(), "POST", "/emails", map[string]interface{}{
 		"from":    from,
 		"to":      []string{req.Email},
 		"subject": fmt.Sprintf("You're invited to %s on Inboxes", orgName),
 		"html":    fmt.Sprintf("<p>%s</p><p><a href='%s/claim?token=%s'>Accept Invitation</a></p>", inviteIntro, h.AppURL, token),
-	})
+	}); err != nil {
+		slog.Error("users: failed to send invite email", "email", req.Email, "error", err)
+		writeError(w, http.StatusInternalServerError, "user created but invite email failed to send")
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{"id": userID, "status": "invited"})
 }
 
 func (h *UserHandler) Reinvite(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	userID := chi.URLParam(r, "id")
 
@@ -179,22 +159,22 @@ func (h *UserHandler) Reinvite(w http.ResponseWriter, r *http.Request) {
 		from = "noreply@inboxes.net"
 		slog.Warn("users: using hardcoded noreply fallback — configure system email in settings")
 	}
-	h.ResendSvc.SystemFetch(r.Context(), "POST", "/emails", map[string]interface{}{
+	if _, err := h.ResendSvc.SystemFetch(r.Context(), "POST", "/emails", map[string]interface{}{
 		"from":    from,
 		"to":      []string{email},
 		"subject": fmt.Sprintf("Reminder: You're invited to %s on Inboxes", reinviteOrgName),
 		"html":    fmt.Sprintf("<p>You've been invited to join <strong>%s</strong> on Inboxes.</p><p><a href='%s/claim?token=%s'>Accept Invitation</a></p>", reinviteOrgName, h.AppURL, token),
-	})
+	}); err != nil {
+		slog.Error("users: failed to send reinvite email", "email", email, "error", err)
+		writeError(w, http.StatusInternalServerError, "reinvite email failed to send")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reinvited"})
 }
 
 func (h *UserHandler) Disable(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	userID := chi.URLParam(r, "id")
 	if userID == claims.UserID {
@@ -215,7 +195,11 @@ func (h *UserHandler) Disable(w http.ResponseWriter, r *http.Request) {
 		if err := h.DB.QueryRow(r.Context(),
 			`SELECT COUNT(*) FROM users WHERE org_id = $1 AND role = 'admin' AND status = 'active'`,
 			claims.OrgID,
-		).Scan(&adminCount); err == nil && adminCount <= 2 {
+		).Scan(&adminCount); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check admin count")
+			return
+		}
+		if adminCount <= 2 {
 			writeError(w, http.StatusBadRequest, "cannot disable: at least 2 active admins required")
 			return
 		}
@@ -543,33 +527,16 @@ func (h *UserHandler) MyAliases(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list aliases")
 		return
 	}
-	defer rows.Close()
-
-	var aliases []map[string]interface{}
-	for rows.Next() {
-		var id, address, name, domainID string
-		var canSendAs, isDefault bool
-		if rows.Scan(&id, &address, &name, &domainID, &canSendAs, &isDefault) == nil {
-			aliases = append(aliases, map[string]interface{}{
-				"id": id, "address": address, "name": name,
-				"domain_id": domainID, "can_send_as": canSendAs,
-				"is_default": isDefault,
-			})
-		}
-	}
-
-	if aliases == nil {
-		aliases = []map[string]interface{}{}
+	aliases, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list aliases")
+		return
 	}
 	writeJSON(w, http.StatusOK, aliases)
 }
 
 func (h *UserHandler) ChangeRole(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	userID := chi.URLParam(r, "id")
 	if userID == claims.UserID {
@@ -606,7 +573,11 @@ func (h *UserHandler) ChangeRole(w http.ResponseWriter, r *http.Request) {
 		if err := h.DB.QueryRow(r.Context(),
 			`SELECT COUNT(*) FROM users WHERE org_id = $1 AND role = 'admin' AND status = 'active'`,
 			claims.OrgID,
-		).Scan(&adminCount); err == nil && adminCount <= 2 {
+		).Scan(&adminCount); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check admin count")
+			return
+		}
+		if adminCount <= 2 {
 			writeError(w, http.StatusBadRequest, "cannot demote: at least 2 active admins required")
 			return
 		}
@@ -626,10 +597,6 @@ func (h *UserHandler) ChangeRole(w http.ResponseWriter, r *http.Request) {
 
 func (h *UserHandler) Enable(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	userID := chi.URLParam(r, "id")
 

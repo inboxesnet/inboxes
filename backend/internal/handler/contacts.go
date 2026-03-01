@@ -23,7 +23,7 @@ func (h *ContactHandler) Suggest(w http.ResponseWriter, r *http.Request) {
 
 	// Search across from_address and to_addresses in user's org emails
 	rows, err := h.DB.Query(r.Context(),
-		`SELECT DISTINCT address, COUNT(*) as cnt
+		`SELECT address AS email, COUNT(*) as count
 		 FROM (
 		   SELECT from_address as address FROM emails WHERE org_id = $1
 		   UNION ALL
@@ -31,29 +31,17 @@ func (h *ContactHandler) Suggest(w http.ResponseWriter, r *http.Request) {
 		 ) sub
 		 WHERE address ILIKE $2
 		 GROUP BY address
-		 ORDER BY cnt DESC
+		 ORDER BY count DESC
 		 LIMIT 10`,
 		claims.OrgID, "%"+escapeLIKE(query)+"%")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to search contacts")
 		return
 	}
-	defer rows.Close()
-
-	var suggestions []map[string]interface{}
-	for rows.Next() {
-		var address string
-		var count int
-		if rows.Scan(&address, &count) == nil {
-			suggestions = append(suggestions, map[string]interface{}{
-				"email": address,
-				"count": count,
-			})
-		}
-	}
-
-	if suggestions == nil {
-		suggestions = []map[string]interface{}{}
+	suggestions, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to search contacts")
+		return
 	}
 	writeJSON(w, http.StatusOK, suggestions)
 }

@@ -21,14 +21,6 @@ type SyncHandler struct {
 // POST /api/sync
 func (h *SyncHandler) StartSync(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	ctx := r.Context()
 
@@ -92,10 +84,6 @@ func (h *SyncHandler) StartSync(w http.ResponseWriter, r *http.Request) {
 // GET /api/sync/{id}
 func (h *SyncHandler) GetSync(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	jobID := chi.URLParam(r, "id")
 	ctx := r.Context()

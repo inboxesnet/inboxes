@@ -53,10 +53,6 @@ func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 
 func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	var req struct {
 		Name      string `json:"name"`

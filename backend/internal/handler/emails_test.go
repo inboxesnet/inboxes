@@ -7,19 +7,7 @@ import (
 	"testing"
 )
 
-func TestSend_Unauthorized(t *testing.T) {
-	t.Parallel()
-	h := &EmailHandler{}
-	req := httptest.NewRequest("POST", "/emails/send", nil)
-	w := httptest.NewRecorder()
-	h.Send(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Send(no auth): got status %d, want %d", w.Code, http.StatusUnauthorized)
-	}
-	if !strings.Contains(w.Body.String(), "unauthorized") {
-		t.Errorf("Send(no auth): body = %q, want containing 'unauthorized'", w.Body.String())
-	}
-}
+// Auth enforcement is handled by AuthMiddleware in the router.
 
 func TestSend_InvalidJSON(t *testing.T) {
 	t.Parallel()

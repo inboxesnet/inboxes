@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -77,10 +78,6 @@ func appendAliasVisibility(filter string, args []interface{}, argIdx int, aliasA
 
 func (h *ThreadHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	domainID := r.URL.Query().Get("domain_id")
 	label := r.URL.Query().Get("label")
@@ -215,12 +212,8 @@ func (h *ThreadHandler) List(w http.ResponseWriter, r *http.Request) {
 			"snippet":            snippet,
 			"created_at":         createdAt,
 		}
-		if originalTo != nil {
-			t["original_to"] = *originalTo
-		}
-		if trashExpiresAt != nil {
-			t["trash_expires_at"] = *trashExpiresAt
-		}
+		setIfNotNil(t, "original_to", originalTo)
+		setIfNotNil(t, "trash_expires_at", trashExpiresAt)
 		threads = append(threads, t)
 		threadIDs = append(threadIDs, id)
 	}
@@ -250,10 +243,6 @@ func (h *ThreadHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
@@ -345,27 +334,15 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 			"is_read":            isRead,
 			"created_at":         eCreatedAt,
 		}
-		if bodyHTML != nil {
-			email["body_html"] = *bodyHTML
-		}
-		if bodyPlain != nil {
-			email["body_plain"] = *bodyPlain
-		}
-		if messageID != nil {
-			email["message_id"] = *messageID
-		}
-		if inReplyTo != nil {
-			email["in_reply_to"] = *inReplyTo
-		}
+		setIfNotNil(email, "body_html", bodyHTML)
+		setIfNotNil(email, "body_plain", bodyPlain)
+		setIfNotNil(email, "message_id", messageID)
+		setIfNotNil(email, "in_reply_to", inReplyTo)
 		if refsHeader != nil {
 			email["references"] = refsHeader
 		}
-		if deliveredViaAlias != nil {
-			email["delivered_via_alias"] = *deliveredViaAlias
-		}
-		if sentAsAlias != nil {
-			email["sent_as_alias"] = *sentAsAlias
-		}
+		setIfNotNil(email, "delivered_via_alias", deliveredViaAlias)
+		setIfNotNil(email, "sent_as_alias", sentAsAlias)
 		emails = append(emails, email)
 	}
 	if emails == nil {
@@ -385,19 +362,13 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 		"created_at":         createdAt,
 		"emails":             emails,
 	}
-	if trashExpiresAt != nil {
-		threadMap["trash_expires_at"] = *trashExpiresAt
-	}
+	setIfNotNil(threadMap, "trash_expires_at", trashExpiresAt)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"thread": threadMap})
 }
 
 func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	var req struct {
 		ThreadIDs     []string `json:"thread_ids"`
@@ -426,7 +397,11 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 		resolved, err := h.resolveFilteredThreadIDs(ctx, claims, req.FilterLabel, req.FilterDomain)
 		if err != nil {
 			slog.Error("threads: resolve select-all IDs failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to resolve threads")
+			if err.Error() == "too many threads selected; please narrow your filter" {
+				writeError(w, http.StatusBadRequest, err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to resolve threads")
+			}
 			return
 		}
 		req.ThreadIDs = resolved
@@ -596,6 +571,10 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "label is required for label action")
 			return
 		}
+		if isReservedLabel(req.Label) {
+			writeError(w, http.StatusBadRequest, "cannot use reserved label name")
+			return
+		}
 		if err := bulkAddLabel(ctx, h.DB, req.ThreadIDs, claims.OrgID, req.Label); err != nil {
 			slog.Error("threads: bulk add label failed", "label", req.Label, "error", err)
 		}
@@ -604,6 +583,10 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 	case "unlabel":
 		if req.Label == "" {
 			writeError(w, http.StatusBadRequest, "label is required for unlabel action")
+			return
+		}
+		if isReservedLabel(req.Label) {
+			writeError(w, http.StatusBadRequest, "cannot use reserved label name")
 			return
 		}
 		if err := bulkRemoveLabel(ctx, h.DB, req.ThreadIDs, req.Label); err != nil {
@@ -702,10 +685,6 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	threadID := chi.URLParam(r, "id")
 
@@ -746,9 +725,7 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var domainID string
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2", threadID, claims.OrgID).Scan(&domainID),
-		"threads: domain_id lookup failed", "thread_id", threadID)
+	domainID := threadDomainID(ctx, h.DB, threadID, claims.OrgID)
 
 	tx, err := h.DB.Begin(ctx)
 	if err != nil {
@@ -782,6 +759,10 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 	case "archive":
 		txErr = removeLabel(ctx, tx, threadID, "inbox")
 	default:
+		if isReservedLabel(req.Label) {
+			writeError(w, http.StatusBadRequest, "cannot use reserved label name")
+			return
+		}
 		txErr = addLabel(ctx, tx, threadID, claims.OrgID, req.Label)
 	}
 	if txErr != nil {
@@ -811,16 +792,10 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	var domainID string
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2", threadID, claims.OrgID).Scan(&domainID),
-		"threads: domain_id lookup failed", "thread_id", threadID)
+	domainID := threadDomainID(ctx, h.DB, threadID, claims.OrgID)
 
 	tag, err := h.DB.Exec(ctx,
 		"UPDATE threads SET unread_count = 0, updated_at = now() WHERE id = $1 AND org_id = $2",
@@ -851,16 +826,10 @@ func (h *ThreadHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) MarkUnread(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	var domainID string
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2", threadID, claims.OrgID).Scan(&domainID),
-		"threads: domain_id lookup failed", "thread_id", threadID)
+	domainID := threadDomainID(ctx, h.DB, threadID, claims.OrgID)
 
 	tag, err := h.DB.Exec(ctx,
 		"UPDATE threads SET unread_count = 1, updated_at = now() WHERE id = $1 AND org_id = $2",
@@ -894,10 +863,6 @@ func (h *ThreadHandler) MarkUnread(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Star(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
@@ -951,10 +916,6 @@ func (h *ThreadHandler) Star(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Mute(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
@@ -995,16 +956,10 @@ func (h *ThreadHandler) Mute(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Archive(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	var domainID string
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2", threadID, claims.OrgID).Scan(&domainID),
-		"threads: domain_id lookup failed", "thread_id", threadID)
+	domainID := threadDomainID(ctx, h.DB, threadID, claims.OrgID)
 
 	if err := removeLabel(ctx, h.DB, threadID, "inbox"); err != nil {
 		slog.Error("threads: archive removeLabel failed", "thread_id", threadID, "error", err)
@@ -1028,16 +983,10 @@ func (h *ThreadHandler) Archive(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Trash(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	var domainID string
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2", threadID, claims.OrgID).Scan(&domainID),
-		"threads: domain_id lookup failed", "thread_id", threadID)
+	domainID := threadDomainID(ctx, h.DB, threadID, claims.OrgID)
 
 	tx, err := h.DB.Begin(ctx)
 	if err != nil {
@@ -1079,10 +1028,6 @@ func (h *ThreadHandler) Trash(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
@@ -1091,9 +1036,7 @@ func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {
 	}
 	readJSON(r, &req)
 
-	var domainID string
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2", threadID, claims.OrgID).Scan(&domainID),
-		"threads: domain_id lookup failed", "thread_id", threadID)
+	domainID := threadDomainID(ctx, h.DB, threadID, claims.OrgID)
 
 	evtType := event.ThreadSpammed
 	payload := map[string]interface{}{}
@@ -1145,16 +1088,10 @@ func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {
 
 func (h *ThreadHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	var domainID string
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2", threadID, claims.OrgID).Scan(&domainID),
-		"threads: domain_id lookup failed", "thread_id", threadID)
+	domainID := threadDomainID(ctx, h.DB, threadID, claims.OrgID)
 
 	// Only allow deleting threads that have trash label
 	if !hasLabel(ctx, h.DB, threadID, "trash") {
@@ -1244,6 +1181,8 @@ func (h *ThreadHandler) resolveFilteredThreadIDs(ctx context.Context, claims *mi
 		query += vis
 	}
 
+	query += " LIMIT 10001"
+
 	rows, err := h.DB.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -1257,6 +1196,9 @@ func (h *ThreadHandler) resolveFilteredThreadIDs(ctx context.Context, claims *mi
 			continue
 		}
 		ids = append(ids, id)
+	}
+	if len(ids) > 10000 {
+		return nil, fmt.Errorf("too many threads selected; please narrow your filter")
 	}
 	return ids, nil
 }
@@ -1296,18 +1238,12 @@ func (h *ThreadHandler) fetchThreadSummary(ctx context.Context, threadID, orgID 
 		"snippet":            snippet,
 		"created_at":         createdAt,
 	}
-	if originalTo != nil {
-		t["original_to"] = *originalTo
-	}
+	setIfNotNil(t, "original_to", originalTo)
 	return t
 }
 
 func (h *ThreadHandler) updateThread(w http.ResponseWriter, r *http.Request, query string) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 	threadID := chi.URLParam(r, "id")
 	tag, err := h.DB.Exec(r.Context(), query, threadID, claims.OrgID)
 	if err != nil || tag.RowsAffected() == 0 {

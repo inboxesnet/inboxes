@@ -25,10 +25,6 @@ type DraftHandler struct {
 
 func (h *DraftHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	domainID := r.URL.Query().Get("domain_id")
 	ctx := r.Context()
@@ -92,10 +88,6 @@ func (h *DraftHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *DraftHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	var req struct {
 		DomainID      string   `json:"domain_id"`
@@ -164,10 +156,6 @@ func (h *DraftHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *DraftHandler) Update(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	id := chi.URLParam(r, "id")
 
@@ -274,10 +262,6 @@ func (h *DraftHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 func (h *DraftHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	id := chi.URLParam(r, "id")
 	tag, err := h.DB.Exec(r.Context(),
@@ -298,10 +282,6 @@ func (h *DraftHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()

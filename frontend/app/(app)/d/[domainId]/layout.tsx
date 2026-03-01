@@ -14,10 +14,12 @@ import {
 } from "@dnd-kit/core";
 import { useDomains } from "@/contexts/domain-context";
 import { EmailWindowProvider, useEmailWindow } from "@/contexts/email-window-context";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
+import dynamic from "next/dynamic";
 import { DomainSidebar } from "@/components/domain-sidebar";
 import { FloatingComposeWindow } from "@/components/floating-compose-window";
-import { SettingsModal } from "@/components/settings-modal";
+import type { Tab as SettingsTab } from "@/components/settings-modal";
 import { NotificationListener } from "@/components/notification-listener";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { DragPreview } from "@/components/drag-preview";
@@ -25,6 +27,11 @@ import { Spinner } from "@/components/ui/spinner";
 import { useBroadcastSync } from "@/hooks/use-broadcast-sync";
 import { Menu } from "lucide-react";
 import type { Thread } from "@/lib/types";
+
+const SettingsModal = dynamic(
+  () => import("@/components/settings-modal").then((m) => m.SettingsModal),
+  { ssr: false }
+);
 
 function DomainLayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
@@ -39,7 +46,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
   const loading = !mounted || domainsLoading;
   const { openCompose } = useEmailWindow();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<string | undefined>(undefined);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | undefined>(undefined);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [draggedThread, setDraggedThread] = useState<Thread | null>(null);
   const [billingSuccess, setBillingSuccess] = useState(false);
@@ -95,7 +102,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
             label: targetLabel,
           });
         } catch {
-          // Move failed silently
+          toast.error("Failed to move thread(s)");
         }
       } else if (thread) {
         try {
@@ -103,7 +110,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
             label: targetLabel,
           });
         } catch {
-          // Move failed silently
+          toast.error("Failed to move thread(s)");
         }
       }
     },
@@ -143,7 +150,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
             <div className="relative z-10 h-full shadow-xl">
               <DomainSidebar
                 onCompose={handleCompose}
-                onOpenSettings={(tab?: string) => { setSettingsTab(tab); setSettingsOpen(true); }}
+                onOpenSettings={(tab?: string) => { setSettingsTab(tab as SettingsTab | undefined); setSettingsOpen(true); }}
                 onCloseSidebar={() => setSidebarOpen(false)}
               />
             </div>
@@ -152,7 +159,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
 
         {/* Desktop sidebar */}
         <div className="hidden md:flex">
-          <DomainSidebar onCompose={handleCompose} onOpenSettings={(tab?: string) => { setSettingsTab(tab); setSettingsOpen(true); }} />
+          <DomainSidebar onCompose={handleCompose} onOpenSettings={(tab?: string) => { setSettingsTab(tab as SettingsTab | undefined); setSettingsOpen(true); }} />
         </div>
 
         <main id="main-content" className="flex-1 overflow-hidden relative" tabIndex={-1}>
@@ -172,7 +179,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
           {children}
         </main>
         <FloatingComposeWindow />
-        <SettingsModal open={settingsOpen} onOpenChange={(v) => { setSettingsOpen(v); if (!v) setSettingsTab(undefined); }} defaultTab={settingsTab as any} />
+        <SettingsModal open={settingsOpen} onOpenChange={(v) => { setSettingsOpen(v); if (!v) setSettingsTab(undefined); }} defaultTab={settingsTab} />
         <NotificationListener />
         <KeyboardShortcuts onCompose={handleCompose} />
       </div>

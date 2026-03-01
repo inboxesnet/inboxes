@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,6 +42,35 @@ func marshalOrFail(w http.ResponseWriter, v interface{}, userMsg string) ([]byte
 		return nil, false
 	}
 	return b, true
+}
+
+// setIfNotNil sets m[key] = *v if v is non-nil.
+func setIfNotNil[T any](m map[string]any, key string, v *T) {
+	if v != nil {
+		m[key] = *v
+	}
+}
+
+// threadDomainID looks up the domain_id for a thread. Used for event payloads.
+func threadDomainID(ctx context.Context, db *pgxpool.Pool, threadID, orgID string) string {
+	var domainID string
+	warnIfErr(db.QueryRow(ctx,
+		"SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2",
+		threadID, orgID,
+	).Scan(&domainID), "threads: domain_id lookup", "thread_id", threadID)
+	return domainID
+}
+
+// scanMaps collects all rows into []map[string]any using pgx.RowToMap.
+func scanMaps(rows pgx.Rows) ([]map[string]any, error) {
+	result, err := pgx.CollectRows(rows, pgx.RowToMap)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []map[string]any{}
+	}
+	return result, nil
 }
 
 // warnIfErr logs a warning if err is non-nil. Use for non-critical lookups that have a fallback.

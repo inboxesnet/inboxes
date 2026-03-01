@@ -20,10 +20,6 @@ type EventHandler struct {
 // Returns 410 Gone if the sinceID points to an event older than CatchupMaxAge.
 func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	sinceID, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -82,12 +78,8 @@ func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 			"event":      eventType,
 			"created_at": createdAt,
 		}
-		if domainID != nil {
-			evt["domain_id"] = *domainID
-		}
-		if threadID != nil {
-			evt["thread_id"] = *threadID
-		}
+		setIfNotNil(evt, "domain_id", domainID)
+		setIfNotNil(evt, "thread_id", threadID)
 		if payload != nil {
 			var p map[string]interface{}
 			if json.Unmarshal(payload, &p) == nil {

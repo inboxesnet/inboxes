@@ -40,7 +40,7 @@ func loadAttachmentsForResend(ctx context.Context, db *pgxpool.Pool, ids []strin
 			})
 		}
 	}
-	return attachments, nil
+	return attachments, rows.Err()
 }
 
 type EmailHandler struct {
@@ -67,10 +67,6 @@ type sendRequest struct {
 
 func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	var req sendRequest
 	if err := readJSON(r, &req); err != nil {
@@ -307,10 +303,6 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	q := r.URL.Query().Get("q")
 	domainID := r.URL.Query().Get("domain_id")
@@ -385,9 +377,7 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 			"snippet":            snippet,
 			"created_at":         createdAt,
 		}
-		if originalTo != nil {
-			t["original_to"] = *originalTo
-		}
+		setIfNotNil(t, "original_to", originalTo)
 		results = append(results, t)
 		threadIDs = append(threadIDs, id)
 	}
@@ -413,10 +403,6 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 func (h *EmailHandler) AdminJobs(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	ctx := r.Context()
 	rows, err := h.DB.Query(ctx,
@@ -447,15 +433,9 @@ func (h *EmailHandler) AdminJobs(w http.ResponseWriter, r *http.Request) {
 				"created_at": createdAt,
 				"updated_at": updatedAt,
 			}
-			if emailID != nil {
-				job["email_id"] = *emailID
-			}
-			if threadID != nil {
-				job["thread_id"] = *threadID
-			}
-			if errorMsg != nil {
-				job["error_message"] = *errorMsg
-			}
+			setIfNotNil(job, "email_id", emailID)
+			setIfNotNil(job, "thread_id", threadID)
+			setIfNotNil(job, "error_message", errorMsg)
 			jobs = append(jobs, job)
 		}
 	}

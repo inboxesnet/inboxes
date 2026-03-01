@@ -4,9 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+)
+
+// In-memory fallback caches used when Redis is unavailable.
+// These are package-level so all TokenBlacklist instances share them.
+var (
+	revokedTokens sync.Map // JTI → true
+	revokedUsers  sync.Map // userID → int64 (unix timestamp)
 )
 
 // TokenBlacklist provides JWT revocation via Redis.
@@ -30,6 +38,14 @@ func (b *TokenBlacklist) RevokeToken(ctx context.Context, jti string, expiresAt 
 	if remaining <= 0 {
 		return nil // already expired
 	}
+
+	// Always write to in-memory cache as fallback
+	revokedTokens.Store(jti, true)
+	go func() {
+		time.Sleep(remaining)
+		revokedTokens.Delete(jti)
+	}()
+
 	if err := b.rdb.Set(ctx, "token:bl:"+jti, "1", remaining).Err(); err != nil {
 		slog.Error("token_blacklist: failed to revoke token", "jti", jti, "error", err)
 		return err
@@ -45,7 +61,20 @@ func (b *TokenBlacklist) RevokeAllForUser(ctx context.Context, userID string) er
 	if b == nil || b.rdb == nil {
 		return fmt.Errorf("redis client not available")
 	}
-	if err := b.rdb.Set(ctx, "token:rv:"+userID, time.Now().Unix(), 7*24*time.Hour).Err(); err != nil {
+
+	now := time.Now().Unix()
+
+	// Always write to in-memory cache as fallback
+	revokedUsers.Store(userID, now)
+	go func() {
+		time.Sleep(7 * 24 * time.Hour)
+		// Only clean up if the value hasn't been updated since
+		if val, ok := revokedUsers.Load(userID); ok && val.(int64) == now {
+			revokedUsers.Delete(userID)
+		}
+	}()
+
+	if err := b.rdb.Set(ctx, "token:rv:"+userID, now, 7*24*time.Hour).Err(); err != nil {
 		slog.Error("token_blacklist: failed to revoke all for user", "user_id", userID, "error", err)
 		return err
 	}
@@ -56,18 +85,34 @@ func (b *TokenBlacklist) RevokeAllForUser(ctx context.Context, userID string) er
 	return nil
 }
 
+// checkMemoryRevocation checks the in-memory fallback caches for revocation status.
+func checkMemoryRevocation(jti, userID string, issuedAt time.Time) bool {
+	// Check individual token revocation
+	if jti != "" {
+		if _, ok := revokedTokens.Load(jti); ok {
+			return true
+		}
+	}
+	// Check user-wide revocation
+	if val, ok := revokedUsers.Load(userID); ok {
+		revokedAt := time.Unix(val.(int64), 0)
+		return issuedAt.Before(revokedAt)
+	}
+	return false
+}
+
 // IsRevoked checks whether a token has been revoked, either individually or
-// via a user-wide revocation. Fails open: if Redis is unavailable, returns false.
+// via a user-wide revocation. Falls back to in-memory caches if Redis is unavailable.
 func (b *TokenBlacklist) IsRevoked(ctx context.Context, jti, userID string, issuedAt time.Time) bool {
 	if b == nil || b.rdb == nil {
-		return false
+		return checkMemoryRevocation(jti, userID, issuedAt)
 	}
 	// Check individual token revocation
 	if jti != "" {
 		exists, err := b.rdb.Exists(ctx, "token:bl:"+jti).Result()
 		if err != nil {
-			slog.Error("token_blacklist: redis error on jti check, failing open", "error", err)
-			return false
+			slog.Error("token_blacklist: redis error on jti check, falling back to memory", "error", err)
+			return checkMemoryRevocation(jti, userID, issuedAt)
 		}
 		if exists > 0 {
 			return true
@@ -77,8 +122,13 @@ func (b *TokenBlacklist) IsRevoked(ctx context.Context, jti, userID string, issu
 	// Check user-wide revocation
 	val, err := b.rdb.Get(ctx, "token:rv:"+userID).Int64()
 	if err != nil {
-		// Key doesn't exist or Redis error — not revoked
-		return false
+		if err == redis.Nil {
+			// Key doesn't exist — not revoked
+			return false
+		}
+		// Actual Redis error — fall back to memory
+		slog.Error("token_blacklist: redis error on user revocation check, falling back to memory", "error", err)
+		return checkMemoryRevocation(jti, userID, issuedAt)
 	}
 	revokedAt := time.Unix(val, 0)
 	return issuedAt.Before(revokedAt)

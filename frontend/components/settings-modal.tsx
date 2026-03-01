@@ -23,7 +23,7 @@ import { cn, validatePassword } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
 import { Check, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
 
-type Tab = "profile" | "domains" | "team" | "aliases" | "labels" | "organization" | "billing" | "system" | "jobs";
+export type Tab = "profile" | "domains" | "team" | "aliases" | "labels" | "organization" | "billing" | "system" | "jobs";
 
 interface SettingsModalProps {
   open: boolean;

@@ -32,22 +32,10 @@ func (h *AliasHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list aliases")
 		return
 	}
-	defer rows.Close()
-
-	var aliases []map[string]interface{}
-	for rows.Next() {
-		var id, address, name, dID string
-		var createdAt interface{}
-		if rows.Scan(&id, &address, &name, &dID, &createdAt) == nil {
-			aliases = append(aliases, map[string]interface{}{
-				"id": id, "address": address, "name": name,
-				"domain_id": dID, "created_at": createdAt,
-			})
-		}
-	}
-
-	if aliases == nil {
-		aliases = []map[string]interface{}{}
+	aliases, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list aliases")
+		return
 	}
 
 	// Fetch alias_users with user info
@@ -92,10 +80,6 @@ func (h *AliasHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *AliasHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	var req struct {
 		Address  string `json:"address"`
@@ -140,10 +124,6 @@ func (h *AliasHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *AliasHandler) Update(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	aliasID := chi.URLParam(r, "id")
 	var req struct {
@@ -171,10 +151,6 @@ func (h *AliasHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 func (h *AliasHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	aliasID := chi.URLParam(r, "id")
 	tag, err := h.DB.Exec(r.Context(),
@@ -190,10 +166,6 @@ func (h *AliasHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *AliasHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	aliasID := chi.URLParam(r, "id")
 	var req struct {
@@ -238,10 +210,6 @@ func (h *AliasHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 
 func (h *AliasHandler) RemoveUser(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin required")
-		return
-	}
 
 	aliasID := chi.URLParam(r, "id")
 	userID := chi.URLParam(r, "userId")
@@ -309,38 +277,20 @@ func (h *AliasHandler) DiscoveredAddresses(w http.ResponseWriter, r *http.Reques
 	claims := middleware.GetCurrentUser(r.Context())
 
 	rows, err := h.DB.Query(r.Context(),
-		`SELECT da.id, da.domain_id, da.address, da.local_part, da.type,
-		        (SELECT COUNT(*) FROM emails e
-		         WHERE e.domain_id = da.domain_id
-		           AND (e.from_address = da.address
-		                OR e.to_addresses @> to_jsonb(da.address)
-		                OR e.cc_addresses @> to_jsonb(da.address))
-		        ) as email_count
+		`SELECT da.id, da.domain_id, da.address, da.local_part, da.type, da.email_count
 		 FROM discovered_addresses da
 		 JOIN domains d ON d.id = da.domain_id
 		 WHERE d.org_id = $1 AND da.type = 'unclaimed'
-		 ORDER BY email_count DESC`,
+		 ORDER BY da.email_count DESC`,
 		claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch addresses")
 		return
 	}
-	defer rows.Close()
-
-	var addresses []map[string]interface{}
-	for rows.Next() {
-		var id, domainID, address, localPart, addrType string
-		var emailCount int
-		if rows.Scan(&id, &domainID, &address, &localPart, &addrType, &emailCount) == nil {
-			addresses = append(addresses, map[string]interface{}{
-				"id": id, "domain_id": domainID, "address": address,
-				"local_part": localPart, "type": addrType, "email_count": emailCount,
-			})
-		}
-	}
-
-	if addresses == nil {
-		addresses = []map[string]interface{}{}
+	addresses, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch addresses")
+		return
 	}
 	writeJSON(w, http.StatusOK, addresses)
 }

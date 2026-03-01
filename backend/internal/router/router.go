@@ -142,7 +142,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 		// Org settings
 		r.Get("/api/orgs/settings", orgs.GetSettings)
-		r.Patch("/api/orgs/settings", orgs.UpdateSettings)
+		r.With(middleware.RequireAdmin).Patch("/api/orgs/settings", orgs.UpdateSettings)
 
 		// User profile
 		r.Get("/api/users/me", users.Me)
@@ -155,8 +155,8 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 		// Billing
 		r.Get("/api/billing", billing.GetBilling)
-		r.Post("/api/billing/checkout", billing.Checkout)
-		r.Post("/api/billing/portal", billing.Portal)
+		r.With(middleware.RequireAdmin).Post("/api/billing/checkout", billing.Checkout)
+		r.With(middleware.RequireAdmin).Post("/api/billing/portal", billing.Portal)
 
 		// System settings (self-hosted owner only)
 		if stripeKey == "" {
@@ -168,7 +168,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		}
 
 		// Sync jobs
-		r.Post("/api/sync", syncH.StartSync)
+		r.With(middleware.RequireAdmin).Post("/api/sync", syncH.StartSync)
 		r.Get("/api/sync/{id}", syncH.GetSync)
 
 		// Events catchup (for WS reconnection)
@@ -211,7 +211,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Delete("/api/threads/{id}", threads.Delete)
 
 			// Emails
-			r.Post("/api/emails/send", emails.Send)
+			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/emails/send", emails.Send)
 			r.Get("/api/emails/search", emails.Search)
 
 			// Domains
@@ -219,19 +219,19 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Get("/api/domains/all", domains.ListAll)
 			r.Post("/api/domains", domains.Create)
 			r.Post("/api/domains/{id}/verify", domains.Verify)
-			r.Post("/api/domains/{id}/webhook", domains.ReregisterWebhook)
-			r.Delete("/api/domains/{id}", domains.Delete)
+			r.With(middleware.RequireAdmin).Post("/api/domains/{id}/webhook", domains.ReregisterWebhook)
+			r.With(middleware.RequireAdmin).Delete("/api/domains/{id}", domains.Delete)
 			r.Patch("/api/domains/reorder", domains.Reorder)
-			r.Patch("/api/domains/visibility", domains.UpdateVisibility)
+			r.With(middleware.RequireAdmin).Patch("/api/domains/visibility", domains.UpdateVisibility)
 			r.Get("/api/domains/unread-counts", domains.UnreadCounts)
 			r.Post("/api/domains/sync", domains.Sync)
 
-			r.Get("/api/users", users.List)
-			r.Post("/api/users/invite", users.Invite)
-			r.Post("/api/users/{id}/reinvite", users.Reinvite)
-			r.Patch("/api/users/{id}/disable", users.Disable)
-			r.Patch("/api/users/{id}/role", users.ChangeRole)
-			r.Patch("/api/users/{id}/enable", users.Enable)
+			r.With(middleware.RequireAdmin).Get("/api/users", users.List)
+			r.With(middleware.RequireAdmin).Post("/api/users/invite", users.Invite)
+			r.With(middleware.RequireAdmin).Post("/api/users/{id}/reinvite", users.Reinvite)
+			r.With(middleware.RequireAdmin).Patch("/api/users/{id}/disable", users.Disable)
+			r.With(middleware.RequireAdmin).Patch("/api/users/{id}/role", users.ChangeRole)
+			r.With(middleware.RequireAdmin).Patch("/api/users/{id}/enable", users.Enable)
 			r.Get("/api/users/me/aliases", users.MyAliases)
 
 			// Org delete
@@ -240,11 +240,11 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 			// Aliases
 			r.Get("/api/aliases", aliases.List)
-			r.Post("/api/aliases", aliases.Create)
-			r.Patch("/api/aliases/{id}", aliases.Update)
-			r.Delete("/api/aliases/{id}", aliases.Delete)
-			r.Post("/api/aliases/{id}/users", aliases.AddUser)
-			r.Delete("/api/aliases/{id}/users/{userId}", aliases.RemoveUser)
+			r.With(middleware.RequireAdmin).Post("/api/aliases", aliases.Create)
+			r.With(middleware.RequireAdmin).Patch("/api/aliases/{id}", aliases.Update)
+			r.With(middleware.RequireAdmin).Delete("/api/aliases/{id}", aliases.Delete)
+			r.With(middleware.RequireAdmin).Post("/api/aliases/{id}/users", aliases.AddUser)
+			r.With(middleware.RequireAdmin).Delete("/api/aliases/{id}/users/{userId}", aliases.RemoveUser)
 			r.Patch("/api/aliases/{id}/default", aliases.SetDefault)
 			r.Get("/api/aliases/discovered", aliases.DiscoveredAddresses)
 
@@ -253,7 +253,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Post("/api/drafts", drafts.Create)
 			r.Patch("/api/drafts/{id}", drafts.Update)
 			r.Delete("/api/drafts/{id}", drafts.Delete)
-			r.Post("/api/drafts/{id}/send", drafts.Send)
+			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/drafts/{id}/send", drafts.Send)
 
 			// Labels
 			r.Get("/api/labels", labels.List)

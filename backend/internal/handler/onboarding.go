@@ -44,10 +44,6 @@ type resendDomainList struct {
 // This lets the frontend resume where it left off after a page close.
 func (h *OnboardingHandler) Status(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	ctx := r.Context()
 
@@ -130,10 +126,6 @@ func (h *OnboardingHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 func (h *OnboardingHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	var req connectRequest
 	if err := readJSON(r, &req); err != nil {
@@ -229,10 +221,6 @@ func (h *OnboardingHandler) Connect(w http.ResponseWriter, r *http.Request) {
 
 func (h *OnboardingHandler) SelectDomains(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	var req struct {
 		DomainIDs []string `json:"domain_ids"`
@@ -283,10 +271,6 @@ func (h *OnboardingHandler) SelectDomains(w http.ResponseWriter, r *http.Request
 
 func (h *OnboardingHandler) SetupWebhook(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	ctx := r.Context()
 
@@ -360,10 +344,6 @@ func (h *OnboardingHandler) SetupWebhook(w http.ResponseWriter, r *http.Request)
 
 func (h *OnboardingHandler) GetAddresses(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	ctx := r.Context()
 	rows, err := h.DB.Query(ctx,
@@ -385,25 +365,11 @@ func (h *OnboardingHandler) GetAddresses(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to fetch addresses")
 		return
 	}
-	defer rows.Close()
-
-	addresses := make([]map[string]interface{}, 0, 500)
-	for rows.Next() {
-		var id, address, localPart, addrType string
-		var emailCount int
-		if err := rows.Scan(&id, &address, &localPart, &addrType, &emailCount); err != nil {
-			slog.Error("onboarding: scan discovered address failed", "error", err)
-			continue
-		}
-		addresses = append(addresses, map[string]interface{}{
-			"id":          id,
-			"address":     address,
-			"local_part":  localPart,
-			"type":        addrType,
-			"email_count": emailCount,
-		})
+	addresses, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to fetch addresses")
+		return
 	}
-
 	writeJSON(w, http.StatusOK, addresses)
 }
 
@@ -419,10 +385,6 @@ type setupAddressesRequest struct {
 
 func (h *OnboardingHandler) SetupAddresses(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	var req setupAddressesRequest
 	if err := readJSON(r, &req); err != nil {
@@ -541,10 +503,6 @@ func (h *OnboardingHandler) setupOneAddress(ctx context.Context, orgID string, a
 
 func (h *OnboardingHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
 	ctx := r.Context()
 	_, err := h.DB.Exec(ctx,

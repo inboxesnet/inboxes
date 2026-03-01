@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/middleware"
@@ -21,6 +22,11 @@ var systemLabels = map[string]bool{
 	"starred": true, "archive": true, "drafts": true,
 }
 
+// isReservedLabel returns true for system labels and internal "alias:" prefixed labels.
+func isReservedLabel(label string) bool {
+	return systemLabels[label] || strings.HasPrefix(label, "alias:")
+}
+
 func (h *LabelHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
@@ -31,21 +37,10 @@ func (h *LabelHandler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list labels")
 		return
 	}
-	defer rows.Close()
-
-	var labels []map[string]interface{}
-	for rows.Next() {
-		var id, name string
-		var createdAt interface{}
-		if rows.Scan(&id, &name, &createdAt) == nil {
-			labels = append(labels, map[string]interface{}{
-				"id": id, "name": name, "created_at": createdAt,
-			})
-		}
-	}
-
-	if labels == nil {
-		labels = []map[string]interface{}{}
+	labels, err := scanMaps(rows)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list labels")
+		return
 	}
 	writeJSON(w, http.StatusOK, labels)
 }
@@ -64,7 +59,7 @@ func (h *LabelHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if systemLabels[req.Name] {
+	if isReservedLabel(req.Name) {
 		writeError(w, http.StatusBadRequest, "cannot use system label name")
 		return
 	}
@@ -97,7 +92,7 @@ func (h *LabelHandler) Rename(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if systemLabels[req.Name] {
+	if isReservedLabel(req.Name) {
 		writeError(w, http.StatusBadRequest, "cannot use system label name")
 		return
 	}
