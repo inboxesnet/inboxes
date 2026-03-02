@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useEffect, useState, useCallback, useRef } from "react";
 import DOMPurify from "dompurify";
+import { sanitizeLinkNode } from "@/lib/sanitize-links";
 import {
   EmojiSuggestion,
   type EmojiSuggestionState,
@@ -34,6 +35,8 @@ interface TipTapEditorProps {
   toolbarRight?: React.ReactNode;
   /** Quoted text shown as read-only preview below editor content */
   quotedHtml?: string;
+  /** Whether to strip tracking parameters from links (default true) */
+  stripTracking?: boolean;
 }
 
 export function TipTapEditor({
@@ -45,6 +48,7 @@ export function TipTapEditor({
   toolbarLeft,
   toolbarRight,
   quotedHtml,
+  stripTracking = true,
 }: TipTapEditorProps) {
   const [emojiState, setEmojiState] = useState<EmojiSuggestionState>({
     active: false,
@@ -196,10 +200,15 @@ export function TipTapEditor({
           <div
             className="text-xs text-muted-foreground border-l-2 border-muted pl-3 mx-3 mb-2 max-h-[200px] overflow-y-auto"
             dangerouslySetInnerHTML={{
-              __html: DOMPurify.sanitize(quotedHtml, {
-                ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
-                ALLOWED_ATTR: ["href"],
-              }),
+              __html: (() => {
+                DOMPurify.addHook("afterSanitizeAttributes", (node) => { sanitizeLinkNode(node, stripTracking); });
+                const clean = DOMPurify.sanitize(quotedHtml, {
+                  ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
+                  ALLOWED_ATTR: ["href", "target", "rel"],
+                });
+                DOMPurify.removeAllHooks();
+                return clean;
+              })(),
             }}
           />
         )}

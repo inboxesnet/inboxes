@@ -19,6 +19,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { useAppConfig } from "@/contexts/app-config-context";
 import { useDomains } from "@/contexts/domain-context";
+import { usePreferences } from "@/contexts/preferences-context";
 import { cn, validatePassword } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
 import { Check, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
@@ -228,6 +229,33 @@ function NotificationsCard() {
             <p className="text-yellow-500">Note: if you&apos;re in an incognito window, notifications may not work - try a regular browser window instead.</p>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PrivacyCard() {
+  const { stripTrackingParams, updatePreference } = usePreferences();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Privacy</CardTitle>
+        <CardDescription>Control how links in emails are handled</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border"
+            checked={stripTrackingParams}
+            onChange={(e) => updatePreference("stripTrackingParams", e.target.checked)}
+          />
+          <div>
+            <p className="text-sm font-medium">Strip tracking parameters from links</p>
+            <p className="text-xs text-muted-foreground">Remove utm_source, fbclid, and other tracking parameters when you click links in emails</p>
+          </div>
+        </label>
       </CardContent>
     </Card>
   );
@@ -1142,6 +1170,9 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
 
                     {/* Notifications */}
                     <NotificationsCard />
+
+                    {/* Privacy */}
+                    <PrivacyCard />
 
                     {/* Sync */}
                     <Card>

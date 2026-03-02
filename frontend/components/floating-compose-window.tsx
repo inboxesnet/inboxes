@@ -3,8 +3,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
+import { sanitizeLinkNode } from "@/lib/sanitize-links";
 import { useEmailWindow } from "@/contexts/email-window-context";
 import { useDomains } from "@/contexts/domain-context";
+import { usePreferences } from "@/contexts/preferences-context";
 import { api, uploadFile } from "@/lib/api";
 import { TipTapEditor } from "@/components/tiptap-editor";
 import { RecipientInput } from "@/components/recipient-input";
@@ -40,6 +42,7 @@ export function FloatingComposeWindow() {
   const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose } =
     useEmailWindow();
   const { activeDomain } = useDomains();
+  const { stripTrackingParams } = usePreferences();
 
   const [fromAddress, setFromAddress] = useState("");
   const [to, setTo] = useState<string[]>([]);
@@ -560,15 +563,21 @@ export function FloatingComposeWindow() {
             }}
             autofocus
             className="border-0 rounded-none"
+            stripTracking={stripTrackingParams}
           />
           {composeData?.quotedHtml && (
             <div
               className="text-xs text-muted-foreground border-l-2 border-muted pl-3 mx-3 mt-2 max-h-[200px] overflow-y-auto prose prose-xs max-w-none"
               dangerouslySetInnerHTML={{
-                __html: DOMPurify.sanitize(composeData.quotedHtml, {
-                  ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
-                  ALLOWED_ATTR: ["href"],
-                }),
+                __html: (() => {
+                  DOMPurify.addHook("afterSanitizeAttributes", (node) => { sanitizeLinkNode(node, stripTrackingParams); });
+                  const clean = DOMPurify.sanitize(composeData.quotedHtml, {
+                    ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
+                    ALLOWED_ATTR: ["href", "target", "rel"],
+                  });
+                  DOMPurify.removeAllHooks();
+                  return clean;
+                })(),
               }}
             />
           )}
@@ -709,6 +718,7 @@ export function FloatingComposeWindow() {
             autofocus
             className="border-0 rounded-none flex-1"
             quotedHtml={composeData?.quotedHtml}
+            stripTracking={stripTrackingParams}
             toolbarLeft={
               <Button type="submit" size="sm" disabled={sending} className="mx-1 shrink-0">
                 {sending ? <Spinner className="mr-1 h-3 w-3" /> : <Send className="mr-1 h-3 w-3" />}

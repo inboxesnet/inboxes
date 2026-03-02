@@ -2,11 +2,13 @@
 
 import { useState, useEffect, useRef } from "react";
 import DOMPurify from "dompurify";
+import { sanitizeLinkNode } from "@/lib/sanitize-links";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/utils";
 import { useDomains } from "@/contexts/domain-context";
 import { useEmailWindow } from "@/contexts/email-window-context";
+import { usePreferences } from "@/contexts/preferences-context";
 import { useThread, useStarThread, useMuteThread, useThreadAction } from "@/hooks/use-threads";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
@@ -73,6 +75,7 @@ export function ThreadView({
   const { data: thread, isLoading } = useThread(threadId);
   const { activeDomain } = useDomains();
   const { openCompose } = useEmailWindow();
+  const { stripTrackingParams } = usePreferences();
   const qc = useQueryClient();
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const markedReadRef = useRef<string | null>(null);
@@ -333,6 +336,7 @@ export function ThreadView({
                 email={email}
                 defaultExpanded={isLast}
                 onReply={(em, mode) => handleReply(em, mode)}
+                stripTracking={stripTrackingParams}
               />
             </div>
           );
@@ -389,7 +393,7 @@ const ALLOWED_CSS_PROPERTIES = new Set([
   'table-layout', 'border-collapse', 'border-spacing',
 ]);
 
-function sanitizeEmailHtml(html: string, showImages: boolean) {
+function sanitizeEmailHtml(html: string, showImages: boolean, stripTracking = true) {
   let hasBlockedImages = false;
 
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -405,6 +409,9 @@ function sanitizeEmailHtml(html: string, showImages: boolean) {
         }
       }
     }
+
+    // Open links in new tab + optionally strip tracking params
+    sanitizeLinkNode(node, stripTracking);
 
     // PRD-014: Sanitize CSS against allowlist
     if (node.hasAttribute('style')) {
@@ -435,7 +442,7 @@ function sanitizeEmailHtml(html: string, showImages: boolean) {
       "div", "span",
     ],
     ALLOWED_ATTR: [
-      "href", "src", "alt", "style", "class", "target", "width", "height",
+      "href", "src", "alt", "style", "class", "target", "rel", "width", "height",
       "data-original-src", "dir",
     ],
   });
@@ -450,16 +457,18 @@ function EmailMessage({
   email,
   defaultExpanded = true,
   onReply,
+  stripTracking = true,
 }: {
   email: Email;
   defaultExpanded?: boolean;
   onReply?: (email: Email, mode: "reply" | "replyAll" | "forward") => void;
+  stripTracking?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showImages, setShowImages] = useState(false);
 
   const sanitized = email.body_html
-    ? sanitizeEmailHtml(email.body_html, showImages)
+    ? sanitizeEmailHtml(email.body_html, showImages, stripTracking)
     : null;
 
   if (!expanded) {
