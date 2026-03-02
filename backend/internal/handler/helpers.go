@@ -62,6 +62,8 @@ func threadDomainID(ctx context.Context, db *pgxpool.Pool, threadID, orgID strin
 }
 
 // scanMaps collects all rows into []map[string]any using pgx.RowToMap.
+// Post-processes UUID values: pgx returns [16]byte for uuid columns which
+// JSON-marshals as a number array. This converts them to proper UUID strings.
 func scanMaps(rows pgx.Rows) ([]map[string]any, error) {
 	result, err := pgx.CollectRows(rows, pgx.RowToMap)
 	if err != nil {
@@ -69,6 +71,13 @@ func scanMaps(rows pgx.Rows) ([]map[string]any, error) {
 	}
 	if result == nil {
 		result = []map[string]any{}
+	}
+	for _, m := range result {
+		for k, v := range m {
+			if b, ok := v.([16]byte); ok {
+				m[k] = fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+			}
+		}
 	}
 	return result, nil
 }

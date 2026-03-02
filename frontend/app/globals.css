@@ -85,3 +85,14 @@
   background: hsl(var(--muted-foreground) / 0.5);
 }
 
+/* Hidden scrollbar — content still scrollable via scroll/swipe */
+@layer utilities {
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+

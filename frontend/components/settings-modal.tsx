@@ -170,6 +170,69 @@ function JobsPanel() {
   );
 }
 
+function NotificationsCard() {
+  const notifSupported = typeof Notification !== "undefined";
+  const [permission, setPermission] = useState(
+    () => notifSupported ? Notification.permission : "denied"
+  );
+  const enabled = permission === "granted";
+  const denied = permission === "denied" && notifSupported;
+  const isIncognito = !notifSupported;
+
+  async function handleToggle(checked: boolean) {
+    if (checked) {
+      if (!notifSupported) return;
+      const result = await Notification.requestPermission();
+      setPermission(result);
+      const granted = result === "granted";
+      await api.patch("/api/users/me/preferences", { desktop_notifications: granted }).catch(() => {
+        toast.error("Failed to save");
+      });
+    } else {
+      await api.patch("/api/users/me/preferences", { desktop_notifications: false }).catch(() => {
+        toast.error("Failed to save");
+      });
+      setPermission("default");
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Notifications</CardTitle>
+        <CardDescription>Manage notification preferences</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border"
+            checked={enabled}
+            disabled={isIncognito}
+            onChange={(e) => handleToggle(e.target.checked)}
+          />
+          <div>
+            <p className="text-sm font-medium">Desktop notifications</p>
+            <p className="text-xs text-muted-foreground">Receive browser notifications for new emails</p>
+          </div>
+        </label>
+        {isIncognito && (
+          <p className="text-xs text-muted-foreground bg-muted rounded-md p-2">
+            Desktop notifications are not available in incognito/private browsing mode. Open Inboxes in a regular browser window to enable them.
+          </p>
+        )}
+        {denied && (
+          <div className="text-xs text-muted-foreground bg-muted rounded-md p-2 space-y-1">
+            <p className="font-medium text-foreground">Notifications are blocked by your browser</p>
+            <p>Click the lock icon (or tune icon) in your browser&apos;s address bar, find &quot;Notifications&quot;, and change it to &quot;Allow&quot;. Then reload the page.</p>
+            <p className="text-yellow-500">Note: if you&apos;re in an incognito window, notifications may not work - try a regular browser window instead.</p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalProps) {
   const { commercial } = useAppConfig();
   const { refreshDomains } = useDomains();
@@ -1078,34 +1141,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                     </Card>
 
                     {/* Notifications */}
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Notifications</CardTitle>
-                        <CardDescription>Manage notification preferences</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <label className="flex items-center gap-3 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border"
-                            defaultChecked={typeof Notification !== "undefined" && Notification.permission === "granted"}
-                            onChange={async (e) => {
-                              if (e.target.checked) {
-                                const result = await Notification.requestPermission();
-                                e.target.checked = result === "granted";
-                              }
-                              await api.patch("/api/users/me/preferences", {
-                                desktop_notifications: e.target.checked,
-                              }).catch(() => { toast.error("Failed to save"); });
-                            }}
-                          />
-                          <div>
-                            <p className="text-sm font-medium">Desktop notifications</p>
-                            <p className="text-xs text-muted-foreground">Receive browser notifications for new emails</p>
-                          </div>
-                        </label>
-                      </CardContent>
-                    </Card>
+                    <NotificationsCard />
 
                     {/* Sync */}
                     <Card>

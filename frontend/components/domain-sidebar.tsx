@@ -1,14 +1,21 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import type { DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useDroppable } from "@dnd-kit/core";
 import { useTheme } from "next-themes";
+import { useQueryClient } from "@tanstack/react-query";
 import { useDomains } from "@/contexts/domain-context";
 import { useNotifications } from "@/contexts/notification-context";
 import { DomainIcon } from "@/components/domain-icon";
 import { cn } from "@/lib/utils";
+import { queryKeys } from "@/lib/query-keys";
+import type { Domain } from "@/lib/types";
 import {
   Inbox,
   Send,
@@ -27,6 +34,7 @@ import {
   Tag,
   WifiOff,
   Keyboard,
+  Info,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -92,6 +100,79 @@ function DroppableLabelButton({
   );
 }
 
+function OfflineBanner({ className }: { className?: string }) {
+  const [showInfo, setShowInfo] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showInfo) return;
+    function onClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setShowInfo(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [showInfo]);
+
+  return (
+    <div ref={ref} className={cn("relative mx-2 flex items-center gap-2 rounded-md bg-yellow-100 dark:bg-yellow-900/30 px-3 py-1.5 text-xs text-yellow-800 dark:text-yellow-300 shrink-0", className)}>
+      <WifiOff className="h-3.5 w-3.5 shrink-0" />
+      <span className="flex-1">Offline</span>
+      <button
+        onClick={() => setShowInfo((v) => !v)}
+        className="h-4 w-4 rounded-full bg-yellow-300/60 dark:bg-yellow-700/60 flex items-center justify-center hover:bg-yellow-400/60 dark:hover:bg-yellow-600/60 transition-colors"
+        aria-label="More info"
+      >
+        <Info className="h-3 w-3" />
+      </button>
+      {showInfo && (
+        <div className="absolute bottom-full right-0 mb-1.5 w-56 rounded-md border bg-card p-2.5 text-xs text-card-foreground shadow-lg z-10">
+          Connection to the server has been lost. If you&apos;re running locally, make sure the backend is still running.
+        </div>
+      )}
+    </div>
+  );
+}
+
+const restrictToYAxis: import("@dnd-kit/core").Modifier = ({ transform }) => ({
+  ...transform,
+  x: 0,
+});
+
+function SortableDomainIcon({
+  id,
+  domain,
+  active,
+  hasUnread,
+  onClick,
+}: {
+  id: string;
+  domain: string;
+  active: boolean;
+  hasUnread: boolean;
+  onClick: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({
+    id,
+    transition: null,
+  });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    opacity: isDragging ? 0.5 : undefined,
+    zIndex: isDragging ? 10 : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      <DomainIcon
+        domain={domain}
+        active={active}
+        hasUnread={hasUnread}
+        onClick={onClick}
+      />
+    </div>
+  );
+}
+
 export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: DomainSidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -99,6 +180,35 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
   const { domains, activeDomain, setActiveDomainId, unreadCounts } =
     useDomains();
   const { connected } = useNotifications();
+  const qc = useQueryClient();
+
+  const reorderSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
+  const handleReorderDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = domains.findIndex((d) => d.id === active.id);
+      const newIndex = domains.findIndex((d) => d.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const reordered = arrayMove(domains, oldIndex, newIndex);
+
+      // Optimistically update the cache
+      qc.setQueryData<Domain[]>(queryKeys.domains.list(), reordered);
+
+      // Fire API call in background
+      const order = reordered.map((d, i) => ({ id: d.id, order: i }));
+      api.patch("/api/domains/reorder", { order }).catch(() => {
+        toast.error("Failed to save domain order");
+        qc.invalidateQueries({ queryKey: queryKeys.domains.list() });
+      });
+    },
+    [domains, qc]
+  );
 
   // Show disconnected banner only after 3s of disconnection
   const [showDisconnected, setShowDisconnected] = useState(false);
@@ -183,7 +293,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
         </div>
 
         {/* Domain icons — horizontal scroll */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b overflow-x-auto shrink-0">
+        <div className="flex items-center gap-2 px-4 py-3 border-b overflow-x-auto scrollbar-hide shrink-0">
           {domains.map((d) => (
             <DomainIcon
               key={d.id}
@@ -214,7 +324,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
         </div>
 
         {/* Folders */}
-        <nav className="flex-1 px-2 space-y-px overflow-y-auto">
+        <nav className="flex-1 px-2 space-y-px overflow-y-auto scrollbar-hide">
           {labelList}
           {customLabels.length > 0 && (
             <>
@@ -235,12 +345,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
         </nav>
 
         {/* Disconnected banner */}
-        {showDisconnected && (
-          <div className="mx-2 mb-1 flex items-center gap-2 rounded-md bg-yellow-100 dark:bg-yellow-900/30 px-3 py-1.5 text-xs text-yellow-800 dark:text-yellow-300 shrink-0">
-            <WifiOff className="h-3.5 w-3.5" />
-            Reconnecting...
-          </div>
-        )}
+        {showDisconnected && <OfflineBanner className="mb-1" />}
 
         {/* Theme toggle + Settings + Logout */}
         <div className="border-t p-2 shrink-0 space-y-px">
@@ -278,16 +383,26 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
       {/* ── Desktop layout (unchanged) ── */}
       <div className="hidden md:flex h-screen">
         {/* Left strip: domain icons */}
-        <div className="flex flex-col items-center w-[72px] bg-muted/50 py-3 gap-2 border-r overflow-y-auto overflow-x-hidden">
-          {domains.map((d) => (
-            <DomainIcon
-              key={d.id}
-              domain={d.domain}
-              active={activeDomain?.id === d.id}
-              hasUnread={(unreadCounts[d.id] || 0) > 0}
-              onClick={() => navigateToDomain(d.id)}
-            />
-          ))}
+        <div className="flex flex-col items-center w-[72px] bg-muted/50 py-3 gap-2 border-r overflow-y-auto scrollbar-hide overflow-x-hidden">
+          <DndContext
+            sensors={reorderSensors}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToYAxis]}
+            onDragEnd={handleReorderDragEnd}
+          >
+            <SortableContext items={domains.map((d) => d.id)} strategy={verticalListSortingStrategy}>
+              {domains.map((d) => (
+                <SortableDomainIcon
+                  key={d.id}
+                  id={d.id}
+                  domain={d.domain}
+                  active={activeDomain?.id === d.id}
+                  hasUnread={(unreadCounts[d.id] || 0) > 0}
+                  onClick={() => navigateToDomain(d.id)}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
 
           {/* Separator */}
           <div className="w-8 h-px bg-border my-1" />
@@ -299,45 +414,6 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
             title="Add domain"
           >
             <Plus className="h-5 w-5" />
-          </button>
-
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* Theme toggle */}
-          <button
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-accent transition-all duration-200"
-            title={theme === "dark" ? "Light mode" : "Dark mode"}
-          >
-            {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-          </button>
-
-          {/* Keyboard shortcuts */}
-          <button
-            onClick={() => window.dispatchEvent(new CustomEvent("open-shortcuts-dialog"))}
-            className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-accent transition-all duration-200"
-            title="Keyboard shortcuts (?)"
-          >
-            <Keyboard className="h-5 w-5" />
-          </button>
-
-          {/* Settings */}
-          <button
-            onClick={() => onOpenSettings()}
-            className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-accent transition-all duration-200"
-            title="Settings"
-          >
-            <Settings className="h-5 w-5" />
-          </button>
-
-          {/* Logout */}
-          <button
-            onClick={handleLogout}
-            className="flex items-center justify-center h-12 w-12 rounded-[24px] hover:rounded-2xl bg-muted text-muted-foreground hover:bg-destructive hover:text-destructive-foreground transition-all duration-200"
-            title="Log out"
-          >
-            <LogOut className="h-5 w-5" />
           </button>
         </div>
 
@@ -362,7 +438,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
           </div>
 
           {/* Label list */}
-          <nav className="flex-1 px-2 space-y-px overflow-y-auto">
+          <nav className="flex-1 px-2 space-y-px overflow-y-auto scrollbar-hide">
             {labelList}
             {customLabels.length > 0 && (
               <>
@@ -381,12 +457,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
               </>
             )}
           </nav>
-          {showDisconnected && (
-            <div className="mx-2 mb-2 flex items-center gap-2 rounded-md bg-yellow-100 dark:bg-yellow-900/30 px-3 py-1.5 text-xs text-yellow-800 dark:text-yellow-300 shrink-0">
-              <WifiOff className="h-3.5 w-3.5 shrink-0" />
-              Reconnecting...
-            </div>
-          )}
+          {showDisconnected && <OfflineBanner className="mb-2" />}
         </div>
       </div>
     </>

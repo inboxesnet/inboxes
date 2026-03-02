@@ -236,10 +236,13 @@ export default function OnboardingPage() {
     setError("");
     setLoading(true);
     try {
-      const assignments = Object.entries(addressAssignments).map(
-        ([id, type]) => ({ address_id: id, type })
-      );
-      await api.post("/api/onboarding/addresses", { assignments });
+      const addresses = Object.entries(addressAssignments).map(
+        ([id, type]) => {
+          const addr = discoveredAddresses.find((a) => a.id === id);
+          return { address: addr?.address || "", type, name: "" };
+        }
+      ).filter((a) => a.address);
+      await api.post("/api/onboarding/addresses", { addresses });
       const res = await api.post<{ first_domain_id: string }>(
         "/api/onboarding/complete"
       );
@@ -312,16 +315,11 @@ export default function OnboardingPage() {
                   Webhook not registered
                 </p>
                 <p className="text-sm text-yellow-700 dark:text-yellow-400">
-                  {webhookWarning}
+                  {webhookWarning}{" "}
+                  Everything else works — you can send emails, sync history, and use the full app.
+                  To receive live inbound email, set PUBLIC_URL in your .env to a publicly reachable URL
+                  (e.g. an ngrok or Cloudflare Tunnel) and restart.
                 </p>
-                <a
-                  href="https://github.com/headswim/inboxes/blob/main/docs/self-hosted.md"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-block text-sm font-medium text-yellow-800 dark:text-yellow-300 underline underline-offset-2 hover:text-yellow-900 dark:hover:text-yellow-200 mt-1"
-                >
-                  Setup guide &rarr;
-                </a>
               </div>
             </div>
           </div>

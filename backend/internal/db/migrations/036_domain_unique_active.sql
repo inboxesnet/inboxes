@@ -5,6 +5,10 @@
 -- This allows re-adding a domain that was previously soft-deleted.
 -- Must drop the existing constraint first (outside transaction for CONCURRENTLY).
 
+-- Step 0: Ensure 'deleted' exists in the domain_status enum
+-- (migration 025 was a no-op — it assumed TEXT but the column is an enum)
+ALTER TYPE domain_status ADD VALUE IF NOT EXISTS 'deleted';
+
 -- Step 1: Drop the global unique constraint
 ALTER TABLE domains DROP CONSTRAINT IF EXISTS domains_domain_key;
 

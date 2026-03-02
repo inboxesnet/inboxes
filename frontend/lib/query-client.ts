@@ -39,7 +39,8 @@ if (typeof window !== "undefined") {
         const state = dehydrate(queryClient, {
           shouldDehydrateQuery: (q) =>
             q.state.status === "success" &&
-            PERSIST_PREFIXES.includes(q.queryKey[0] as string),
+            PERSIST_PREFIXES.includes(q.queryKey[0] as string) &&
+            q.queryKey[1] !== "unreadCounts",
         });
         localStorage.setItem(CACHE_KEY, JSON.stringify(state));
       } catch {

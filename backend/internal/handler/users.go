@@ -373,10 +373,14 @@ func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
 
 	var id, email, name, role, status string
 	var createdAt time.Time
-	var isOwner bool
+	var isOwner, hasWebhook bool
 	err := h.DB.QueryRow(r.Context(),
-		`SELECT id, email, name, role, status, created_at, is_owner FROM users WHERE id = $1`,
-		claims.UserID).Scan(&id, &email, &name, &role, &status, &createdAt, &isOwner)
+		`SELECT u.id, u.email, u.name, u.role, u.status, u.created_at, u.is_owner,
+		        (o.resend_webhook_id IS NOT NULL AND o.resend_webhook_id != '') AS has_webhook
+		 FROM users u
+		 JOIN orgs o ON o.id = u.org_id
+		 WHERE u.id = $1`,
+		claims.UserID).Scan(&id, &email, &name, &role, &status, &createdAt, &isOwner, &hasWebhook)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
@@ -385,6 +389,7 @@ func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"id": id, "email": email, "name": name, "role": role,
 		"status": status, "created_at": createdAt, "is_owner": isOwner,
+		"has_webhook": hasWebhook,
 	})
 }
 

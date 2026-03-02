@@ -102,7 +102,11 @@ func (h *AliasHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var aliasID string
 	err := h.DB.QueryRow(r.Context(),
 		`INSERT INTO aliases (org_id, domain_id, address, name)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (org_id, address) DO UPDATE
+		   SET deleted_at = NULL, name = EXCLUDED.name
+		   WHERE aliases.deleted_at IS NOT NULL
+		 RETURNING id`,
 		claims.OrgID, req.DomainID, req.Address, req.Name,
 	).Scan(&aliasID)
 	if err != nil {
@@ -154,7 +158,7 @@ func (h *AliasHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	aliasID := chi.URLParam(r, "id")
 	tag, err := h.DB.Exec(r.Context(),
-		`DELETE FROM aliases WHERE id = $1 AND org_id = $2`,
+		`UPDATE aliases SET deleted_at = now() WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
 		aliasID, claims.OrgID)
 	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "alias not found")

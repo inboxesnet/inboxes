@@ -62,24 +62,33 @@ export function getInitials(domain: string): string {
   return domain.charAt(0).toUpperCase();
 }
 
-export function getDomainColor(domain: string): string {
+const DOMAIN_COLORS = [
+  { bg: "bg-blue-500", text: "text-blue-500" },
+  { bg: "bg-green-500", text: "text-green-500" },
+  { bg: "bg-purple-500", text: "text-purple-500" },
+  { bg: "bg-orange-500", text: "text-orange-500" },
+  { bg: "bg-pink-500", text: "text-pink-500" },
+  { bg: "bg-teal-500", text: "text-teal-500" },
+  { bg: "bg-indigo-500", text: "text-indigo-500" },
+  { bg: "bg-rose-500", text: "text-rose-500" },
+  { bg: "bg-cyan-500", text: "text-cyan-500" },
+  { bg: "bg-amber-500", text: "text-amber-500" },
+];
+
+function domainColorIndex(domain: string): number {
   let hash = 0;
   for (let i = 0; i < domain.length; i++) {
     hash = domain.charCodeAt(i) + ((hash << 5) - hash);
   }
-  const colors = [
-    "bg-blue-500",
-    "bg-green-500",
-    "bg-purple-500",
-    "bg-orange-500",
-    "bg-pink-500",
-    "bg-teal-500",
-    "bg-indigo-500",
-    "bg-rose-500",
-    "bg-cyan-500",
-    "bg-amber-500",
-  ];
-  return colors[Math.abs(hash) % colors.length];
+  return Math.abs(hash) % DOMAIN_COLORS.length;
+}
+
+export function getDomainColor(domain: string): string {
+  return DOMAIN_COLORS[domainColorIndex(domain)].bg;
+}
+
+export function getDomainTextColor(domain: string): string {
+  return DOMAIN_COLORS[domainColorIndex(domain)].text;
 }
 
 /**

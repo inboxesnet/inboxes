@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { LogIn } from "lucide-react";
 
 export function SessionExpiredModal() {
@@ -19,8 +18,8 @@ export function SessionExpiredModal() {
   if (!open) return null;
 
   return (
-    <Dialog open={open} onOpenChange={() => {}}>
-      <DialogContent className="sm:max-w-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
+      <div className="w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
         <div className="flex flex-col items-center gap-4 py-4 text-center">
           <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
             <LogIn className="h-6 w-6 text-primary" />
@@ -36,7 +35,7 @@ export function SessionExpiredModal() {
             Log in
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }

@@ -71,7 +71,7 @@ Core email threading logic. 066, 067, 068 all modify the same threading algorith
 
 ## Phase 5: Entity Lifecycle
 
-Domain/user/org deletion cascade. 072 creates the pattern. Everything else builds on it. 077 (GDPR) is last because it needs all the cleanup handlers in place first.
+Domain/user/org deletion cascade. 072 creates the pattern. Everything else builds on it.
 
 | Order | PRD | Title | Why Here |
 |-------|-----|-------|----------|
@@ -79,7 +79,6 @@ Domain/user/org deletion cascade. 072 creates the pattern. Everything else build
 | 29 | **073** | Deleted Domains Still Receive | Webhook entry point guard. Depends on 072. |
 | 30 | **076** | Disabled Users' Aliases | Alias cleanup on user disable. |
 | 31 | **078** | Webhook Cleanup for Deleted Orgs | Unregister Resend webhooks on org deletion. |
-| 32 | **077** | GDPR Hard Delete | Hard-delete capability. Depends on 072, 076, 121. |
 
 ---
 

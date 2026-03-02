@@ -250,14 +250,14 @@ func (h *OrgHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	slog.Info("org: soft-deleted", "org_id", claims.OrgID, "by", claims.UserID)
+	slog.Info("org: deleted", "org_id", claims.OrgID, "by", claims.UserID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	// Only the owner can hard-delete
+	// Only the owner can delete
 	var isOwner bool
 	err := h.DB.QueryRow(r.Context(),
 		`SELECT is_owner FROM users WHERE id = $1 AND org_id = $2`,
@@ -298,7 +298,7 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 		).Scan(&stripeSubID); err == nil && stripeSubID != nil && *stripeSubID != "" {
 			stripe.Key = h.StripeKey
 			if _, err := subscription.Cancel(*stripeSubID, nil); err != nil {
-				slog.Error("org: hard-delete: failed to cancel Stripe subscription", "org_id", claims.OrgID, "error", err)
+				slog.Error("org: delete: failed to cancel Stripe subscription", "org_id", claims.OrgID, "error", err)
 			}
 		}
 	}
@@ -309,7 +309,7 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 		"SELECT resend_webhook_id FROM orgs WHERE id = $1", claims.OrgID,
 	).Scan(&webhookID); err == nil && webhookID != nil && *webhookID != "" {
 		if _, err := h.ResendSvc.Fetch(ctx, claims.OrgID, "DELETE", "/webhooks/"+*webhookID, nil); err != nil {
-			slog.Error("org: hard-delete: failed to unregister webhook", "org_id", claims.OrgID, "error", err)
+			slog.Error("org: delete: failed to unregister webhook", "org_id", claims.OrgID, "error", err)
 		}
 	}
 
@@ -331,76 +331,16 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	// Hard-delete all org data in a transaction
-	tx, err := h.DB.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	orgID := claims.OrgID
-
-	// Delete in dependency order (children first)
-	// attachments reference emails (no cascade)
-	if _, err := tx.Exec(ctx, `DELETE FROM attachments WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: attachments", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM email_jobs WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: email_jobs", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM sync_jobs WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: sync_jobs", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM events WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: events", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM drafts WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: drafts", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM thread_labels WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: thread_labels", "error", err)
-	}
-	// emails cascade from threads, but delete explicitly for safety
-	if _, err := tx.Exec(ctx, `DELETE FROM emails WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: emails", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM threads WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: threads", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM discovered_addresses WHERE domain_id IN (SELECT id FROM domains WHERE org_id = $1)`, orgID); err != nil {
-		slog.Error("org: hard-delete: discovered_addresses", "error", err)
-	}
-	// alias_users cascade from aliases, but delete explicitly
-	if _, err := tx.Exec(ctx, `DELETE FROM alias_users WHERE alias_id IN (SELECT id FROM aliases WHERE org_id = $1)`, orgID); err != nil {
-		slog.Error("org: hard-delete: alias_users", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM aliases WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: aliases", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM user_reassignments WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: user_reassignments", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM org_labels WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: org_labels", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM domains WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: domains", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE org_id = $1`, orgID); err != nil {
-		slog.Error("org: hard-delete: users", "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM orgs WHERE id = $1`, orgID); err != nil {
+	// Soft-delete the org
+	tag, err := h.DB.Exec(ctx,
+		`UPDATE orgs SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`,
+		claims.OrgID)
+	if err != nil || tag.RowsAffected() == 0 {
 		writeError(w, http.StatusInternalServerError, "failed to delete organization")
 		return
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit hard-delete")
-		return
-	}
-
-	slog.Info("org: hard-deleted (GDPR)", "org_id", orgID, "by", claims.UserID)
+	slog.Info("org: deleted", "org_id", claims.OrgID, "by", claims.UserID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -34,14 +34,16 @@ A self-hostable email client powered by [Resend](https://resend.com). Connect yo
 curl -fsSL https://raw.githubusercontent.com/headswim/inboxes/main/scripts/setup.sh | bash
 ```
 
-This installs everything you need (Homebrew, Go, Node, PostgreSQL, Redis), creates the database, and generates your config. Then:
+This installs everything you need (Homebrew, Go, Node, PostgreSQL, Redis), creates the database, and generates your config. You'll be prompted to choose between a quick install (default credentials) or a custom install (recommended — set your own database credentials and webhook URL). Then:
 
 ```bash
 cd ~/inboxes
 ./scripts/dev.sh
 ```
 
-Open **http://localhost:3000** and follow the onboarding.
+Open **http://localhost:3000** to get started. You'll sign up, enter your Resend API key, select your domains and aliases, and import your existing emails - all in one guided flow.
+
+> **Note:** Inbound email (receiving via webhook) won't work on localhost because Resend can't reach your machine. Outbound sending and email sync work fine. For inbound, use [ngrok](https://ngrok.com) or a similar tunnel and set `PUBLIC_URL` in `.env` to the tunnel URL.
 
 ### Already have the code?
 
@@ -92,7 +94,7 @@ See [Deployment Guide](docs/deployment.md) for Coolify setup, env var details, a
 
 - **Backend:** Go + Chi router + pgx + Redis
 - **Frontend:** Next.js 15, React 19, Tailwind CSS, shadcn/ui
-- **Database:** PostgreSQL 16 (31 auto-managed migrations via goose)
+- **Database:** PostgreSQL 16 (40 auto-managed migrations via goose)
 - **Cache/PubSub:** Redis 7
 - **Reverse Proxy:** Caddy 2 (auto-HTTPS, production only)
 - **Background Workers:** 6 workers — email sync, send queue, trash collector, domain heartbeat, event pruner, status recovery

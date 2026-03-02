@@ -27,6 +27,8 @@ import (
 
 func main() {
 	// Load .env file if present (ignored in production)
+	// Try root .env first (where setup.sh creates it), then CWD
+	_ = godotenv.Load("../.env")
 	_ = godotenv.Load()
 
 	cfg, err := config.Load()

@@ -15,8 +15,12 @@ import {
   Quote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import DOMPurify from "dompurify";
+import {
+  EmojiSuggestion,
+  type EmojiSuggestionState,
+} from "./emoji-extension";
 
 interface TipTapEditorProps {
   content?: string;
@@ -42,6 +46,34 @@ export function TipTapEditor({
   toolbarRight,
   quotedHtml,
 }: TipTapEditorProps) {
+  const [emojiState, setEmojiState] = useState<EmojiSuggestionState>({
+    active: false,
+    query: "",
+    from: 0,
+    to: 0,
+    items: [],
+  });
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const editorWrapperRef = useRef<HTMLDivElement>(null);
+  const prevEmojiRef = useRef({ active: false, query: "", from: 0 });
+
+  const onEmojiStateChange = useCallback(
+    (state: EmojiSuggestionState) => {
+      const prev = prevEmojiRef.current;
+      if (
+        prev.active === state.active &&
+        prev.query === state.query &&
+        prev.from === state.from
+      ) {
+        return;
+      }
+      prevEmojiRef.current = { active: state.active, query: state.query, from: state.from };
+      setEmojiState(state);
+      setSelectedIndex(0);
+    },
+    []
+  );
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -54,6 +86,9 @@ export function TipTapEditor({
         HTMLAttributes: { class: "text-primary underline" },
       }),
       Placeholder.configure({ placeholder }),
+      EmojiSuggestion.configure({
+        onStateChange: onEmojiStateChange,
+      }),
     ],
     content: content || "",
     autofocus,
@@ -74,13 +109,89 @@ export function TipTapEditor({
     }
   }, [content]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const insertEmoji = useCallback(
+    (emoji: string, from: number, to: number) => {
+      editor
+        ?.chain()
+        .focus()
+        .deleteRange({ from, to })
+        .insertContent(emoji)
+        .run();
+    },
+    [editor]
+  );
+
+  const popupActive = emojiState.active && emojiState.items.length > 0;
+
+  // Compute popup position relative to editor wrapper
+  const getPopupStyle = (): React.CSSProperties => {
+    if (!popupActive || !editor || !editorWrapperRef.current) return { display: "none" };
+    try {
+      const coords = editor.view.coordsAtPos(emojiState.from);
+      const wrapperRect = editorWrapperRef.current.getBoundingClientRect();
+      return {
+        position: "absolute",
+        left: coords.left - wrapperRect.left,
+        top: coords.bottom - wrapperRect.top + 4,
+        zIndex: 50,
+      };
+    } catch {
+      return { display: "none" };
+    }
+  };
+
   if (!editor) return null;
 
   return (
-    <div className={cn("border rounded-md overflow-hidden flex flex-col", className)}>
+    <div
+      className={cn("border rounded-md overflow-hidden flex flex-col", className)}
+      onKeyDownCapture={(e) => {
+        if (!popupActive) return;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSelectedIndex((i) => Math.min(i + 1, emojiState.items.length - 1));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSelectedIndex((i) => Math.max(i - 1, 0));
+        } else if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          const item = emojiState.items[selectedIndex];
+          if (item) insertEmoji(item.emoji, emojiState.from, emojiState.to);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setEmojiState((s) => ({ ...s, active: false }));
+        }
+      }}
+    >
       {/* Editor + quoted text share scrollable area */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="flex-1 overflow-y-auto min-h-0 relative" ref={editorWrapperRef}>
         <EditorContent editor={editor} />
+
+        {/* Emoji autocomplete popup */}
+        {popupActive && (
+          <div
+            className="bg-popover border rounded-md shadow-md py-1 w-56"
+            style={getPopupStyle()}
+          >
+            {emojiState.items.map((item, i) => (
+              <div
+                key={item.shortcode}
+                className={cn(
+                  "flex items-center gap-2 px-2 py-1 text-sm cursor-pointer",
+                  i === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+                )}
+                onMouseEnter={() => setSelectedIndex(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertEmoji(item.emoji, emojiState.from, emojiState.to);
+                }}
+              >
+                <span className="text-base">{item.emoji}</span>
+                <span className="text-muted-foreground">:{item.shortcode}:</span>
+              </div>
+            ))}
+          </div>
+        )}
         {quotedHtml && (
           <div
             className="text-xs text-muted-foreground border-l-2 border-muted pl-3 mx-3 mb-2 max-h-[200px] overflow-y-auto"

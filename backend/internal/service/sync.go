@@ -322,7 +322,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 		err := s.pool.QueryRow(ctx,
 			`INSERT INTO aliases (org_id, domain_id, address, name)
 			 VALUES ($1, $2, $3, $4)
-			 ON CONFLICT (address) DO UPDATE SET name = EXCLUDED.name
+			 ON CONFLICT (org_id, address) DO UPDATE SET name = EXCLUDED.name
 			 WHERE aliases.name = split_part(aliases.address, '@', 1)
 			 RETURNING id`,
 			orgID, info.domainID, addr, info.displayName,

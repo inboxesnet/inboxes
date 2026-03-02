@@ -105,8 +105,15 @@ export function ThreadView({
         queryKeys.threads.detail(threadId),
         (old) => (old ? { ...old, unread_count: 0 } : old)
       );
-      qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
-      api.patch(`/api/threads/${threadId}/read`).catch(() => toast.error("Failed to mark as read"));
+      // Optimistic: decrement domain unread count immediately
+      qc.setQueryData<Record<string, number>>(queryKeys.domains.unreadCounts(), (old) => {
+        if (!old) return old;
+        const current = old[domainId] || 0;
+        return { ...old, [domainId]: Math.max(0, current - 1) };
+      });
+      api.patch(`/api/threads/${threadId}/read`)
+        .then(() => qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() }))
+        .catch(() => toast.error("Failed to mark as read"));
     }
   }, [thread, threadId, qc]);
 
@@ -204,13 +211,13 @@ export function ThreadView({
         destructive
       />
       {/* Header */}
-      <div className="flex items-center gap-2 md:gap-3 pl-14 pr-4 md:px-6 py-3 border-b shrink-0">
+      <div className="h-14 flex items-center gap-2 md:gap-3 pl-14 pr-4 md:px-6 border-b shrink-0 relative z-[25] bg-background">
         {onBack && (
           <button onClick={onBack} className="text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-5 w-5" />
           </button>
         )}
-        <h2 className="flex-1 font-semibold text-lg truncate">
+        <h2 className="flex-1 font-semibold text-sm truncate">
           {thread.subject}
         </h2>
         <div className="flex items-center gap-1">
@@ -521,6 +528,7 @@ function EmailMessage({
           {parseAddresses(email.cc_addresses).length > 0 && (
             <p>Cc: {parseAddresses(email.cc_addresses).join(", ")}</p>
           )}
+          <BccLine email={email} />
         </div>
         {sanitized?.html ? (
           <>
@@ -535,7 +543,7 @@ function EmailMessage({
             <div style={{ position: 'relative', overflow: 'hidden' }}>
               <div
                 dir="auto"
-                className="max-w-2xl text-[13px] leading-relaxed dark:bg-white dark:text-black dark:rounded-md dark:p-3 dark:-mx-3 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-muted [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_pre]:text-xs [&_pre]:overflow-x-auto"
+                className="max-w-2xl text-[13px] leading-relaxed dark:bg-white dark:text-black dark:rounded-md dark:p-3 dark:-mx-3 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_blockquote]:border-l-2 [&_blockquote]:border-muted [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary dark:[&_a]:text-blue-600 [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_pre]:bg-muted [&_pre]:p-2 [&_pre]:rounded [&_pre]:text-xs [&_pre]:overflow-x-auto"
                 dangerouslySetInnerHTML={{ __html: sanitized.html }}
               />
             </div>
@@ -617,6 +625,37 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+// ─── BCC Display ────────────────────────────────────────────────────────
+
+function BccLine({ email }: { email: Email }) {
+  const bccAddresses = parseAddresses(email.bcc_addresses);
+  if (bccAddresses.length === 0) return null;
+
+  // Outbound: you sent it — show full BCC list
+  if (email.direction === "outbound") {
+    return <p>Bcc: {bccAddresses.join(", ")}</p>;
+  }
+
+  // Inbound: check if you were BCC'd (your address is in BCC but not in TO/CC)
+  const toAddresses = parseAddresses(email.to_addresses);
+  const ccAddresses = parseAddresses(email.cc_addresses);
+  const { activeDomain } = useDomains();
+  const domainName = activeDomain?.domain || "";
+
+  const isBccRecipient = bccAddresses.some(
+    (a) =>
+      a.endsWith(`@${domainName}`) &&
+      !toAddresses.includes(a) &&
+      !ccAddresses.includes(a)
+  );
+
+  if (isBccRecipient) {
+    return <p>Bcc: you</p>;
+  }
+
+  return null;
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 function parseAddresses(raw: string[] | string): string[] {
@@ -634,11 +673,15 @@ function getReplyFromAddress(emails: Email[], domainName: string): string {
       return emails[i].from_address;
     }
   }
-  // No outbound emails yet — use the address the last inbound was sent to
+  // No outbound emails yet — use the address the last inbound was sent to (check TO, CC, BCC)
   for (let i = emails.length - 1; i >= 0; i--) {
     if (emails[i].direction === "inbound") {
-      const toAddrs = parseAddresses(emails[i].to_addresses);
-      const match = toAddrs.find((a) => a.endsWith(`@${domainName}`));
+      const allAddrs = [
+        ...parseAddresses(emails[i].to_addresses),
+        ...parseAddresses(emails[i].cc_addresses),
+        ...parseAddresses(emails[i].bcc_addresses),
+      ];
+      const match = allAddrs.find((a) => a.endsWith(`@${domainName}`));
       if (match) return match;
     }
   }
@@ -656,6 +699,20 @@ function getReplyRecipients(
 
   const toAddresses = parseAddresses(lastEmail.to_addresses);
   const ccAddresses = parseAddresses(lastEmail.cc_addresses);
+  const bccAddresses = parseAddresses(lastEmail.bcc_addresses);
+
+  // If I was BCC'd, reply only to sender — never expose other recipients
+  const isBccRecipient =
+    lastEmail.direction === "inbound" &&
+    bccAddresses.includes(myAddress);
+
+  if (isBccRecipient) {
+    const replyTarget =
+      lastEmail.reply_to_addresses?.length
+        ? lastEmail.reply_to_addresses[0]
+        : lastEmail.from_address;
+    return { defaultTo: [replyTarget], defaultCc: [] };
+  }
 
   if (lastEmail.direction === "outbound") {
     // Replying to our own sent email — keep same recipients

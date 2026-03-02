@@ -144,9 +144,9 @@ In your setup both should be `https://mail.yourdomain.com`. They exist as separa
 3. **Onboarding** — enter your Resend API key
    - This encrypts and stores the key per-org in the database
    - Automatically registers the Resend webhook pointing at `PUBLIC_URL/api/webhooks/resend/{orgId}`
-4. **Verify Resend domain configuration**
+4. **Onboarding imports emails automatically** — after selecting domains and aliases, the sync runs as part of onboarding. No separate sync step needed.
+5. **Verify Resend domain configuration**
    - Resend dashboard → Domains → ensure MX, SPF, DKIM records are set for each domain you want to receive email on
-5. **Sync emails** — Settings → Domains → Email Sync to pull historical emails from Resend
 
 ---
 

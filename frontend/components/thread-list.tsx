@@ -95,18 +95,19 @@ function ThreadRow({
         !isActive && !isSelected && !isUnread && "hover:bg-muted/50 text-muted-foreground dark:text-muted-foreground"
       )}
     >
-      {/* Checkbox — hidden on mobile */}
-      <input
-        type="checkbox"
-        checked={isSelected}
-        onChange={(e) => {
-          e.stopPropagation();
-          onToggleSelect(thread.id);
-        }}
+      {/* Checkbox — expanded click radius via label pseudo-element */}
+      <label
+        className="relative flex items-center justify-center cursor-pointer before:absolute before:inset-[-8px] before:content-['']"
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
-        className="h-3.5 w-3.5 rounded border-muted-foreground/40 cursor-pointer accent-primary"
-      />
+      >
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={() => onToggleSelect(thread.id)}
+          className="h-3.5 w-3.5 rounded border-muted-foreground/40 cursor-pointer accent-primary"
+        />
+      </label>
 
       {/* Star */}
       <button

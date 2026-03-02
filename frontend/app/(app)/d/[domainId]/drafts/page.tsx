@@ -38,11 +38,14 @@ export default function DraftsPage() {
       if (currentDraftId === draftId) {
         closeCompose();
       }
+      // Optimistically remove from list immediately
+      qc.setQueryData<{ drafts: Draft[] }>(["drafts", domainId], (old) =>
+        old ? { drafts: old.drafts.filter((d) => d.id !== draftId) } : old
+      );
       try {
         await api.delete(`/api/drafts/${draftId}`);
-        qc.invalidateQueries({ queryKey: ["drafts", domainId] });
       } catch {
-        toast.error("Failed to delete draft");
+        // 404 = already deleted (e.g. discarded from compose window) — ignore
       }
     },
     [currentDraftId, closeCompose, qc, domainId]

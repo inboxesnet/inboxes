@@ -25,7 +25,8 @@ import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { DragPreview } from "@/components/drag-preview";
 import { Spinner } from "@/components/ui/spinner";
 import { useBroadcastSync } from "@/hooks/use-broadcast-sync";
-import { Menu } from "lucide-react";
+import { useTheme } from "next-themes";
+import { Menu, Settings, Keyboard, Sun, Moon, LogOut } from "lucide-react";
 import type { Thread } from "@/lib/types";
 
 const SettingsModal = dynamic(
@@ -50,7 +51,13 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [draggedThread, setDraggedThread] = useState<Thread | null>(null);
   const [billingSuccess, setBillingSuccess] = useState(false);
+  const { theme, setTheme } = useTheme();
   useBroadcastSync();
+
+  async function handleLogout() {
+    try { await api.post("/api/auth/logout"); } catch { /* redirect regardless */ }
+    window.location.href = "/login";
+  }
 
   // Handle Stripe checkout success redirect
   useEffect(() => {
@@ -171,6 +178,38 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
           >
             <Menu className="h-5 w-5" />
           </button>
+
+          {/* Top-right toolbar (desktop only) */}
+          <div className="hidden md:flex absolute top-0 right-0 z-20 h-14 items-center gap-1 pr-3">
+            <button
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title={theme === "dark" ? "Light mode" : "Dark mode"}
+            >
+              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent("open-shortcuts-dialog"))}
+              className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title="Keyboard shortcuts (?)"
+            >
+              <Keyboard className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => { setSettingsTab(undefined); setSettingsOpen(true); }}
+              className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              title="Settings"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleLogout}
+              className="p-2 rounded-md text-muted-foreground hover:text-destructive hover:bg-muted transition-colors"
+              title="Log out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
           {billingSuccess && (
             <div className="bg-green-500/10 text-green-700 dark:text-green-400 text-sm text-center py-2 px-4 border-b border-green-500/20">
               Subscription activated! You now have full access.
@@ -183,7 +222,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
         <NotificationListener />
         <KeyboardShortcuts onCompose={handleCompose} />
       </div>
-      <DragOverlay>
+      <DragOverlay dropAnimation={null}>
         {draggedThread && <DragPreview thread={draggedThread} />}
       </DragOverlay>
     </DndContext>

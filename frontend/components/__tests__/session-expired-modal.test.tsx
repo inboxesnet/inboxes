@@ -8,21 +8,6 @@ vi.mock("lucide-react", () => ({
   LogIn: () => <span data-testid="login-icon">LogIn</span>,
 }));
 
-// Mock radix dialog to render inline
-vi.mock("@/components/ui/dialog", () => ({
-  Dialog: ({
-    children,
-    open,
-  }: {
-    children: React.ReactNode;
-    open: boolean;
-    onOpenChange: () => void;
-  }) => (open ? <div data-testid="dialog">{children}</div> : null),
-  DialogContent: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="dialog-content">{children}</div>
-  ),
-}));
-
 // Mock Button
 vi.mock("@/components/ui/button", () => ({
   Button: ({
@@ -50,13 +35,13 @@ describe("SessionExpiredModal", () => {
 
   it("is not rendered initially", () => {
     render(<SessionExpiredModal />);
-    expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText("Session Expired")).not.toBeInTheDocument();
   });
 
   it("renders on session-expired event", () => {
     render(<SessionExpiredModal />);
     fireEvent(window, new Event("session-expired"));
-    expect(screen.getByTestId("dialog")).toBeInTheDocument();
+    expect(screen.getByText("Session Expired")).toBeInTheDocument();
   });
 
   it("shows Session Expired heading", () => {
@@ -96,11 +81,11 @@ describe("SessionExpiredModal", () => {
     locationSpy.mockRestore();
   });
 
-  it("is non-dismissible (onOpenChange is noop)", () => {
+  it("is non-dismissible (stays open after clicking backdrop)", () => {
     render(<SessionExpiredModal />);
     fireEvent(window, new Event("session-expired"));
-    // The dialog should still be open — our mock Dialog passes open directly
-    expect(screen.getByTestId("dialog")).toBeInTheDocument();
+    // Modal should still be visible — there's no dismiss mechanism
+    expect(screen.getByText("Session Expired")).toBeInTheDocument();
   });
 
   it("cleans up event listener on unmount", () => {

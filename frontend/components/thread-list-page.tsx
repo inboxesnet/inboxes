@@ -5,14 +5,18 @@ import { useParams } from "next/navigation";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useThreadList, useStarThread, useThreadAction, useBulkAction } from "@/hooks/use-threads";
 import { useThreadSelection } from "@/hooks/use-thread-selection";
+import { useNotifications } from "@/contexts/notification-context";
+import { useSyncJob } from "@/hooks/use-sync-job";
 import { ThreadList } from "@/components/thread-list";
 import { ThreadToolbar } from "@/components/thread-toolbar";
 import { ThreadView } from "@/components/thread-view";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { ThreadListProvider } from "@/contexts/thread-list-context";
+import { useUnreadBadge } from "@/hooks/use-unread-badge";
 import { queryKeys } from "@/lib/query-keys";
 import { api } from "@/lib/api";
+import { toast } from "sonner";
 import { Search, X } from "lucide-react";
 import type { Label, Thread } from "@/lib/types";
 
@@ -85,10 +89,17 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
   const actionMutation = useThreadAction();
   const bulkMutation = useBulkAction();
 
-  // Update page title
-  useEffect(() => {
-    document.title = `${title} - Inboxes`;
-  }, [title]);
+  const { connected: wsConnected } = useNotifications();
+  const { startSync, isRunning: syncRunning, isComplete: syncComplete, result: syncResult } = useSyncJob();
+  const { data: meData } = useQuery({
+    queryKey: ["users", "me"],
+    queryFn: () => api.get<{ has_webhook: boolean }>("/api/users/me"),
+    staleTime: Infinity,
+  });
+  const hasWebhook = meData?.has_webhook ?? false;
+
+  // Update page title + favicon badge
+  useUnreadBadge(title, domainId);
 
   // Reset selection, focus, and reading pane when domain/label changes
   useEffect(() => {
@@ -115,13 +126,31 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
     return () => window.removeEventListener("focus-search", handleFocusSearch);
   }, []);
 
-  const handleRefresh = useCallback(() => {
+  const invalidateCaches = useCallback(() => {
     qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
     qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
     if (isSearching) {
       qc.invalidateQueries({ queryKey: queryKeys.search.all });
     }
   }, [qc, isSearching]);
+
+  const handleRefresh = useCallback(() => {
+    if (hasWebhook && wsConnected) {
+      invalidateCaches();
+    } else {
+      startSync();
+    }
+  }, [hasWebhook, wsConnected, invalidateCaches, startSync]);
+
+  // Invalidate caches and toast when sync completes
+  const prevSyncComplete = useRef(false);
+  useEffect(() => {
+    if (syncComplete && !prevSyncComplete.current) {
+      invalidateCaches();
+      toast.success("Sync complete");
+    }
+    prevSyncComplete.current = syncComplete;
+  }, [syncComplete, invalidateCaches]);
 
   const handlePageChange = useCallback(
     (newPage: number) => {
@@ -289,7 +318,7 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
         total={isSearching ? searchResults.length : total}
         limit={isSearching ? searchResults.length : LIMIT}
         onPageChange={handlePageChange}
-        loading={isSearching ? searchFetching : refreshing}
+        loading={isSearching ? searchFetching : (refreshing || syncRunning)}
         isPending={bulkMutation.isPending}
       />
 

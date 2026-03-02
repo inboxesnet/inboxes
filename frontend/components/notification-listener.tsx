@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useCallback, useState } from "react";
+import { toast } from "sonner";
 import { useNotifications } from "@/contexts/notification-context";
+import { api } from "@/lib/api";
 import { Bell, X } from "lucide-react";
 import type { WSMessage } from "@/lib/types";
+
+const MAX_TOASTS = 3;
 
 interface ToastNotification {
   id: string;
@@ -26,9 +30,14 @@ function NotificationPrompt() {
   if (!show) return null;
 
   function handleEnable() {
-    Notification.requestPermission().then(() => {
+    Notification.requestPermission().then((result) => {
       setShow(false);
       localStorage.setItem(PROMPT_DISMISSED_KEY, "1");
+      if (result === "granted") {
+        api.patch("/api/users/me/preferences", { desktop_notifications: true }).catch(() => {});
+      } else if (result === "denied") {
+        toast("Notifications blocked - if you're in an incognito window, try a regular browser window. Otherwise, check your browser's site settings.", { duration: 6000 });
+      }
     });
   }
 
@@ -89,11 +98,23 @@ export function NotificationListener() {
       // Skip empty notifications (e.g. during bulk sync — no from/subject in payload)
       if (!payload?.from && !payload?.subject) return;
 
+      const from = payload?.from ?? "";
+      const subject = payload?.subject ?? "";
+
+      // Desktop notification (visible when tab is backgrounded)
+      if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        new Notification(from || "New email", {
+          body: subject,
+          tag: `email-${Date.now()}`,
+        });
+      }
+
+      // In-app toast (cap at MAX_TOASTS)
       const id = Date.now().toString();
-      setToasts((prev) => [
-        ...prev,
-        { id, from: payload?.from ?? "", subject: payload?.subject ?? "" },
-      ]);
+      setToasts((prev) => {
+        const next = [...prev, { id, from, subject }];
+        return next.length > MAX_TOASTS ? next.slice(-MAX_TOASTS) : next;
+      });
 
       // Auto-dismiss after 5s
       setTimeout(() => {

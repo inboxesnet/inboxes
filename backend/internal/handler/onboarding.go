@@ -191,7 +191,7 @@ func (h *OnboardingHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		err := tx.QueryRow(dbCtx,
 			`INSERT INTO domains (org_id, domain, resend_domain_id, status, dns_records, display_order)
 			 VALUES ($1, $2, $3, $4, $5, $6)
-			 ON CONFLICT (domain) DO UPDATE SET resend_domain_id = $3, status = $4, dns_records = $5, updated_at = now()
+			 ON CONFLICT (domain) WHERE status NOT IN ('deleted') DO UPDATE SET resend_domain_id = $3, status = $4, dns_records = $5, updated_at = now()
 			 RETURNING id`,
 			claims.OrgID, d.Name, d.ID, status, d.Records, i,
 		).Scan(&domainID)
@@ -249,6 +249,7 @@ func (h *OnboardingHandler) SelectDomains(w http.ResponseWriter, r *http.Request
 		claims.OrgID,
 	)
 	if err != nil {
+		slog.Error("onboarding: hide domains failed", "org_id", claims.OrgID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to update domains")
 		return
 	}
@@ -257,6 +258,7 @@ func (h *OnboardingHandler) SelectDomains(w http.ResponseWriter, r *http.Request
 		claims.OrgID, req.DomainIDs,
 	)
 	if err != nil {
+		slog.Error("onboarding: unhide domains failed", "org_id", claims.OrgID, "domain_ids", req.DomainIDs, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to update domains")
 		return
 	}
@@ -282,7 +284,7 @@ func (h *OnboardingHandler) SetupWebhook(w http.ResponseWriter, r *http.Request)
 			"org_id", claims.OrgID, "public_url", h.PublicURL)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"webhook_skipped": true,
-			"reason":          "PUBLIC_URL points to localhost — Resend cannot deliver webhooks here. Set up a tunnel (ngrok, Cloudflare Tunnel) and update PUBLIC_URL to receive incoming emails in real time.",
+			"reason":          "PUBLIC_URL points to localhost — Resend cannot deliver webhooks here. New emails won't appear automatically; use the sync button to check for new mail. Set up a tunnel (ngrok, Cloudflare Tunnel) and update PUBLIC_URL to receive emails in real time.",
 		})
 		return
 	}
@@ -394,7 +396,7 @@ func (h *OnboardingHandler) SetupAddresses(w http.ResponseWriter, r *http.Reques
 
 	ctx := r.Context()
 	for _, addr := range req.Addresses {
-		if err := h.setupOneAddress(ctx, claims.OrgID, addr); err != nil {
+		if err := h.setupOneAddress(ctx, claims.OrgID, claims.UserID, addr); err != nil {
 			slog.Error("onboarding: setup address failed", "address", addr.Address, "error", err)
 			// Continue to next address — partial success is acceptable
 		}
@@ -404,7 +406,7 @@ func (h *OnboardingHandler) SetupAddresses(w http.ResponseWriter, r *http.Reques
 }
 
 // setupOneAddress processes a single address within its own transaction.
-func (h *OnboardingHandler) setupOneAddress(ctx context.Context, orgID string, addr addressSetup) error {
+func (h *OnboardingHandler) setupOneAddress(ctx context.Context, orgID string, userID string, addr addressSetup) error {
 	parts := strings.Split(addr.Address, "@")
 	if len(parts) != 2 {
 		return nil
@@ -474,11 +476,19 @@ func (h *OnboardingHandler) setupOneAddress(ctx context.Context, orgID string, a
 		if err := tx.QueryRow(dbCtx,
 			`INSERT INTO aliases (org_id, domain_id, address, name)
 			 VALUES ($1, $2, $3, $4)
-			 ON CONFLICT (address) DO UPDATE SET name = EXCLUDED.name
+			 ON CONFLICT (org_id, address) DO UPDATE SET name = EXCLUDED.name
 			 RETURNING id`,
 			orgID, domainID, addr.Address, name,
 		).Scan(&aliasID); err != nil {
 			return fmt.Errorf("upsert alias: %w", err)
+		}
+		if _, err := tx.Exec(dbCtx,
+			`INSERT INTO alias_users (alias_id, user_id, can_send_as)
+			 VALUES ($1, $2, true)
+			 ON CONFLICT (alias_id, user_id) DO NOTHING`,
+			aliasID, userID,
+		); err != nil {
+			return fmt.Errorf("assign alias to user: %w", err)
 		}
 		if _, err := tx.Exec(dbCtx,
 			`UPDATE discovered_addresses SET type = 'alias', alias_id = $1

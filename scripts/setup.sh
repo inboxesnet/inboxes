@@ -174,6 +174,7 @@ ENV_FILE="$PROJECT_DIR/.env"
 DB_NAME="${DB_NAME:-inboxes}"
 DB_USER="${DB_USER:-inboxes}"
 DB_PASS="${DB_PASS:-inboxes}"
+PUBLIC_URL="${PUBLIC_URL:-http://localhost:8080}"
 
 if [[ -f "$ENV_FILE" ]]; then
   info ".env already exists (not overwriting)"
@@ -185,6 +186,95 @@ if [[ -f "$ENV_FILE" ]]; then
     DB_PASS="$(echo "$_DB_URL" | sed -E 's|.*://[^:]+:([^@]+)@.*|\1|')"
   fi
 else
+  # ─── Install mode chooser ─────────────────────────────────────────────
+  # When piped via curl, stdin isn't a terminal — skip prompts and use quick install
+  INSTALL_MODE="quick"
+  if [[ -t 0 ]]; then
+    # Interactive arrow-key selector
+    local_selected=0
+    local_options=("Quick install" "Custom install (recommended)")
+    local_descs=(
+      "Default credentials, secrets generated automatically."
+      "Set your own credentials for a more secure setup."
+    )
+
+    # Hide cursor
+    printf '\033[?25l'
+
+    # Draw menu
+    draw_menu() {
+      # Move cursor up to redraw (skip on first draw)
+      if [[ "${1:-}" == "redraw" ]]; then
+        printf '\033[6A'
+      fi
+      echo "  How would you like to set up?"
+      echo ""
+      for i in 0 1; do
+        if [[ $local_selected -eq $i ]]; then
+          echo -e "  ${GREEN}▸ ${local_options[$i]}${NC}"
+          echo -e "    ${local_descs[$i]}"
+        else
+          echo -e "    ${local_options[$i]}"
+          echo -e "    ${local_descs[$i]}"
+        fi
+      done
+    }
+
+    draw_menu
+
+    # Read arrow keys
+    while true; do
+      read -rsn1 key </dev/tty
+      if [[ "$key" == $'\x1b' ]]; then
+        read -rsn2 rest </dev/tty
+        key+="$rest"
+      fi
+      case "$key" in
+        $'\x1b[A'|k) # Up
+          if [[ $local_selected -gt 0 ]]; then
+            local_selected=$((local_selected - 1))
+            draw_menu redraw
+          fi
+          ;;
+        $'\x1b[B'|j) # Down
+          if [[ $local_selected -lt 1 ]]; then
+            local_selected=$((local_selected + 1))
+            draw_menu redraw
+          fi
+          ;;
+        "") # Enter
+          break
+          ;;
+      esac
+    done
+
+    # Show cursor
+    printf '\033[?25h'
+    echo ""
+
+    if [[ $local_selected -eq 1 ]]; then
+      INSTALL_MODE="custom"
+    fi
+  fi
+
+  if [[ "$INSTALL_MODE" == "custom" ]]; then
+    printf "  PostgreSQL database name [inboxes]: "
+    read -r _input </dev/tty; [[ -n "$_input" ]] && DB_NAME="$_input"
+
+    printf "  PostgreSQL user [inboxes]: "
+    read -r _input </dev/tty; [[ -n "$_input" ]] && DB_USER="$_input"
+
+    printf "  PostgreSQL password [inboxes]: "
+    read -r _input </dev/tty; [[ -n "$_input" ]] && DB_PASS="$_input"
+
+    echo ""
+    echo "  Without a public URL, everything works except live inbound email."
+    echo "  You can always update PUBLIC_URL in .env later."
+    printf "  Public URL for webhooks [http://localhost:8080]: "
+    read -r _input </dev/tty; [[ -n "$_input" ]] && PUBLIC_URL="$_input"
+    echo ""
+  fi
+
   warn "Generating .env...                        "
   SESSION_SECRET="$(openssl rand -hex 32)"
   ENCRYPTION_KEY="$(openssl rand -base64 32)"
@@ -193,7 +283,7 @@ DATABASE_URL=postgres://${DB_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?sslmode=
 REDIS_URL=redis://localhost:6379
 SESSION_SECRET="${SESSION_SECRET}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY}"
-PUBLIC_URL=http://localhost:8080
+PUBLIC_URL=${PUBLIC_URL}
 NEXT_PUBLIC_API_URL=http://localhost:8080
 EOF
   ok ".env created"

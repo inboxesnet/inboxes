@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { cn, getInitials, getDomainColor } from "@/lib/utils";
+import { cn, getInitials, getDomainColor, getDomainTextColor } from "@/lib/utils";
 import { useDomains } from "@/contexts/domain-context";
 import {
   Archive,
@@ -309,13 +309,12 @@ export function ThreadToolbar({
 
       {/* Label title — mobile only, centered */}
       {title && !hasSelection && (
-        <span className="flex items-center gap-1.5 text-sm font-semibold md:hidden">
+        <span className="flex items-center gap-1 text-sm md:hidden">
           {activeDomain && (
-            <span className={cn("inline-flex items-center justify-center h-5 w-5 rounded text-[10px] font-semibold text-white", getDomainColor(activeDomain.domain))}>
-              {getInitials(activeDomain.domain)}
-            </span>
+            <span className={cn("font-normal opacity-60", getDomainTextColor(activeDomain.domain))}>{activeDomain.domain}</span>
           )}
-          <span>
+          {activeDomain && <span className="text-muted-foreground/50">/</span>}
+          <span className="font-semibold">
             {title}
             {subtitle && (
               <span className="block text-xs font-normal text-muted-foreground">{subtitle}</span>

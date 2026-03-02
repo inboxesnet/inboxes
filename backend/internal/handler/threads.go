@@ -296,7 +296,7 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch emails
 	emailRows, err := h.DB.Query(ctx,
-		`SELECT id, direction, from_address, to_addresses, cc_addresses, reply_to_addresses, subject,
+		`SELECT id, direction, from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses, subject,
 		 body_html, body_plain, status, attachments, message_id, in_reply_to, references_header,
 		 delivered_via_alias, sent_as_alias, is_read, created_at
 		 FROM emails WHERE thread_id = $1 AND org_id = $2 ORDER BY created_at ASC`, threadID, claims.OrgID,
@@ -310,14 +310,14 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var emails []map[string]interface{}
 	for emailRows.Next() {
 		var eID, dir, from, eSubject, eStatus string
-		var eTo, eCC, eReplyTo json.RawMessage
+		var eTo, eCC, eBCC, eReplyTo json.RawMessage
 		var bodyHTML, bodyPlain, messageID, inReplyTo *string
 		var deliveredViaAlias, sentAsAlias *string
 		var attachments, refsHeader json.RawMessage
 		var isRead bool
 		var eCreatedAt time.Time
 
-		emailRows.Scan(&eID, &dir, &from, &eTo, &eCC, &eReplyTo, &eSubject,
+		emailRows.Scan(&eID, &dir, &from, &eTo, &eCC, &eBCC, &eReplyTo, &eSubject,
 			&bodyHTML, &bodyPlain, &eStatus, &attachments, &messageID, &inReplyTo, &refsHeader,
 			&deliveredViaAlias, &sentAsAlias, &isRead, &eCreatedAt)
 
@@ -327,6 +327,7 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 			"from_address":       from,
 			"to_addresses":       eTo,
 			"cc_addresses":       eCC,
+			"bcc_addresses":      eBCC,
 			"reply_to_addresses": eReplyTo,
 			"subject":            eSubject,
 			"status":             eStatus,
