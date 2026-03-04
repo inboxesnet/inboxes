@@ -1,41 +1,77 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useNotifications } from "@/contexts/notification-context";
 import { api } from "@/lib/api";
-import type { SyncJob } from "@/lib/types";
+import type { SyncJob, WSMessage } from "@/lib/types";
 
-const POLL_INTERVAL = 2000;
+/** Progress polls at 5s (was 2s). WS delivers completion instantly. */
+const PROGRESS_INTERVAL = 5000;
 
 export function useSyncJob() {
+  const { subscribe } = useNotifications();
   const [job, setJob] = useState<SyncJob | null>(null);
   const [error, setError] = useState<string>("");
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeJobId = useRef<string | null>(null);
 
-  const stopPolling = useCallback(() => {
+  const stopTracking = useCallback(() => {
     if (timerRef.current) {
-      clearInterval(timerRef.current);
+      clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+    activeJobId.current = null;
   }, []);
 
-  const pollJob = useCallback(
+  // WS: instant completion — no need to wait for next poll cycle
+  useEffect(() => {
+    const unsub = subscribe("sync.completed", (msg: WSMessage) => {
+      if (!activeJobId.current) return;
+      stopTracking();
+      setJob((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          status: "completed" as const,
+          phase: "done",
+          sent_count:
+            (msg.payload?.sent_count as number) ?? prev.sent_count,
+          received_count:
+            (msg.payload?.received_count as number) ?? prev.received_count,
+          thread_count:
+            (msg.payload?.thread_count as number) ?? prev.thread_count,
+        };
+      });
+    });
+    return unsub;
+  }, [subscribe, stopTracking]);
+
+  const pollProgress = useCallback(
     (jobId: string) => {
-      stopPolling();
-      timerRef.current = setInterval(async () => {
+      timerRef.current = setTimeout(async () => {
         try {
           const data = await api.get<SyncJob>(`/api/sync/${jobId}`);
           setJob(data);
           if (data.status === "completed" || data.status === "failed") {
-            stopPolling();
+            stopTracking();
             if (data.status === "failed" && data.error_message) {
               setError(data.error_message);
             }
+            return;
           }
         } catch {
-          setError("Failed to check sync status");
-          stopPolling();
+          // Silently continue — WS may still deliver completion
         }
-      }, POLL_INTERVAL);
+        if (activeJobId.current) pollProgress(jobId);
+      }, PROGRESS_INTERVAL);
     },
-    [stopPolling]
+    [stopTracking]
+  );
+
+  const startTracking = useCallback(
+    (jobId: string) => {
+      activeJobId.current = jobId;
+      pollProgress(jobId);
+    },
+    [pollProgress]
   );
 
   const startSync = useCallback(async () => {
@@ -44,35 +80,36 @@ export function useSyncJob() {
     try {
       const data = await api.post<SyncJob>("/api/sync");
       setJob(data);
-      pollJob(data.id);
+      if (data.status !== "completed" && data.status !== "failed") {
+        startTracking(data.id);
+      }
       return data;
     } catch {
       setError("Failed to start sync");
       return null;
     }
-  }, [pollJob]);
+  }, [startTracking]);
 
   const resumeJob = useCallback(
     (jobId: string) => {
       setError("");
-      // Fetch once immediately, then start polling
       api
         .get<SyncJob>(`/api/sync/${jobId}`)
         .then((data) => {
           setJob(data);
           if (data.status !== "completed" && data.status !== "failed") {
-            pollJob(jobId);
+            startTracking(jobId);
           }
         })
         .catch(() => setError("Failed to resume sync"));
     },
-    [pollJob]
+    [startTracking]
   );
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => stopPolling();
-  }, [stopPolling]);
+    return () => stopTracking();
+  }, [stopTracking]);
 
   const aliasesReady = !!(
     job &&

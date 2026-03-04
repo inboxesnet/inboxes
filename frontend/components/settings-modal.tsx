@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { useAppConfig } from "@/contexts/app-config-context";
 import { useDomains } from "@/contexts/domain-context";
 import { usePreferences } from "@/contexts/preferences-context";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn, validatePassword } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
 import { Check, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
@@ -88,7 +89,7 @@ function JobsPanel() {
     setLoading(true);
     api
       .get<{ jobs: EmailJob[] }>("/api/admin/jobs")
-      .then((data) => setJobs(data.jobs))
+      .then((data) => setJobs(data.jobs || []))
       .catch(() => setError("Failed to load jobs"))
       .finally(() => setLoading(false));
   }, []);
@@ -261,6 +262,33 @@ function PrivacyCard() {
   );
 }
 
+function ComposeCard() {
+  const { warnNoSubject, updatePreference } = usePreferences();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Compose</CardTitle>
+        <CardDescription>Control send behavior when composing emails</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border"
+            checked={warnNoSubject}
+            onChange={(e) => updatePreference("warnNoSubject", e.target.checked)}
+          />
+          <div>
+            <p className="text-sm font-medium">Warn when sending without a subject</p>
+            <p className="text-xs text-muted-foreground">Ask for confirmation before sending an email with no subject line</p>
+          </div>
+        </label>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalProps) {
   const { commercial } = useAppConfig();
   const { refreshDomains } = useDomains();
@@ -287,6 +315,9 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
   const [savingDomains, setSavingDomains] = useState(false);
   const [refreshingDomains, setRefreshingDomains] = useState(false);
+
+  // Discovered domains (from Resend but not added yet)
+  const [discoveredDomains, setDiscoveredDomains] = useState<{ id: string; domain: string; first_seen_at: string }[]>([]);
 
   // Add domain state
   const [newDomainName, setNewDomainName] = useState("");
@@ -347,6 +378,18 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   const [savingOrg, setSavingOrg] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [autoPollEnabled, setAutoPollEnabled] = useState(false);
+  const [autoPollMinutes, setAutoPollMinutes] = useState(5);
+  const [savingAutoPoll, setSavingAutoPoll] = useState(false);
+
+  // Generic confirm dialog state
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    destructive: boolean;
+    onConfirm: () => void;
+  } | null>(null);
 
   // System email state
   const [systemFromAddress, setSystemFromAddress] = useState("");
@@ -363,14 +406,16 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     setSuccess("");
     async function load() {
       try {
-        const [userData, domainData] = await Promise.all([
+        const [userData, domainData, discoveredData] = await Promise.all([
           api.get<User>("/api/users/me"),
           api.get<Domain[]>("/api/domains/all"),
+          api.get<{ id: string; domain: string; first_seen_at: string }[]>("/api/domains/discovered").catch(() => []),
         ]);
         setUser(userData);
         setName(userData.name);
         setAllDomains(domainData);
         setVisibleIds(new Set(domainData.filter((d) => !d.hidden).map((d) => d.id)));
+        setDiscoveredDomains(discoveredData);
       } catch {
         // handled
       } finally {
@@ -513,23 +558,39 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     }
   }
 
-  async function handleReregisterWebhook() {
-    if (!confirm("Re-register the webhook endpoint with Resend? This will create a new webhook.")) return;
-    setError("");
-    setSuccess("");
-    setReregisteringWebhook(true);
-    try {
-      await api.post(`/api/domains/${allDomains[0]?.id}/webhook`);
-      setSuccess("Webhook re-registered successfully");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to re-register webhook");
-    } finally {
-      setReregisteringWebhook(false);
-    }
+  function handleReregisterWebhook() {
+    setConfirmAction({
+      title: "Re-register webhook",
+      description: "Re-register the webhook endpoint with Resend? This will create a new webhook.",
+      confirmLabel: "Re-register",
+      destructive: false,
+      onConfirm: async () => {
+        setError("");
+        setSuccess("");
+        setReregisteringWebhook(true);
+        try {
+          await api.post(`/api/domains/${allDomains[0]?.id}/webhook`);
+          setSuccess("Webhook re-registered successfully");
+        } catch (err) {
+          setError(err instanceof ApiError ? err.message : "Failed to re-register webhook");
+        } finally {
+          setReregisteringWebhook(false);
+        }
+      },
+    });
   }
 
-  async function handleDeleteDomain(domainId: string) {
-    if (!confirm("Remove this domain? Emails and aliases will be preserved but the domain will be hidden.")) return;
+  function handleDeleteDomain(domainId: string) {
+    setConfirmAction({
+      title: "Remove domain",
+      description: "Remove this domain? Emails and aliases will be preserved but the domain will be hidden.",
+      confirmLabel: "Remove",
+      destructive: true,
+      onConfirm: () => doDeleteDomain(domainId),
+    });
+  }
+
+  async function doDeleteDomain(domainId: string) {
     setError("");
     setSuccess("");
     setDeletingDomain(domainId);
@@ -645,17 +706,24 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     }
   }
 
-  async function handleDisableUser(userId: string) {
-    if (!confirm("Are you sure you want to disable this user?")) return;
-    setError("");
-    setSuccess("");
-    try {
-      await api.patch(`/api/users/${userId}/disable`);
-      setSuccess("User disabled");
-      loadTeam();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to disable user");
-    }
+  function handleDisableUser(userId: string) {
+    setConfirmAction({
+      title: "Disable user",
+      description: "Are you sure you want to disable this user?",
+      confirmLabel: "Disable",
+      destructive: true,
+      onConfirm: async () => {
+        setError("");
+        setSuccess("");
+        try {
+          await api.patch(`/api/users/${userId}/disable`);
+          setSuccess("User disabled");
+          loadTeam();
+        } catch (err) {
+          setError(err instanceof ApiError ? err.message : "Failed to disable user");
+        }
+      },
+    });
   }
 
   async function handleEnableUser(userId: string) {
@@ -738,8 +806,17 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     }
   }
 
-  async function handleDeleteAlias(aliasId: string) {
-    if (!confirm("Delete this alias? Emails will no longer be routed to it.")) return;
+  function handleDeleteAlias(aliasId: string) {
+    setConfirmAction({
+      title: "Delete alias",
+      description: "Delete this alias? Emails will no longer be routed to it.",
+      confirmLabel: "Delete",
+      destructive: true,
+      onConfirm: () => doDeleteAlias(aliasId),
+    });
+  }
+
+  async function doDeleteAlias(aliasId: string) {
     setError("");
     setSuccess("");
     try {
@@ -912,15 +989,22 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     }
   }
 
-  async function handleDeleteLabel(labelId: string) {
-    if (!confirm("Delete this label? It will be removed from all threads.")) return;
-    setError("");
-    try {
-      await api.delete(`/api/labels/${labelId}`);
-      loadLabels();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to delete label");
-    }
+  function handleDeleteLabel(labelId: string) {
+    setConfirmAction({
+      title: "Delete label",
+      description: "Delete this label? It will be removed from all threads.",
+      confirmLabel: "Delete",
+      destructive: true,
+      onConfirm: async () => {
+        setError("");
+        try {
+          await api.delete(`/api/labels/${labelId}`);
+          loadLabels();
+        } catch (err) {
+          setError(err instanceof ApiError ? err.message : "Failed to delete label");
+        }
+      },
+    });
   }
 
   // ─── My Aliases (non-admin) ───────────────────────────────────────────
@@ -942,10 +1026,12 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   async function loadOrgSettings() {
     setOrgLoading(true);
     try {
-      const data = await api.get<{ name: string; has_api_key: boolean; resend_rps: number }>("/api/orgs/settings");
+      const data = await api.get<{ name: string; has_api_key: boolean; resend_rps: number; auto_poll_enabled?: boolean; auto_poll_interval?: number }>("/api/orgs/settings");
       setOrgName(data.name || "");
       setOrgResendKey(data.has_api_key ? "********" : "");
       setOrgResendRPS(data.resend_rps || 2);
+      if (data.auto_poll_enabled !== undefined) setAutoPollEnabled(data.auto_poll_enabled);
+      if (data.auto_poll_interval !== undefined) setAutoPollMinutes(Math.round(data.auto_poll_interval / 60));
     } catch {
       // handled
     } finally {
@@ -975,6 +1061,31 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       setError(err instanceof ApiError ? err.message : "Failed to update");
     } finally {
       setSavingOrg(false);
+    }
+  }
+
+  async function handleSaveAutoPoll(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+
+    const intervalSeconds = autoPollMinutes * 60;
+    if (autoPollEnabled && (intervalSeconds < 120 || intervalSeconds > 3600)) {
+      setError("Poll interval must be between 2 and 60 minutes");
+      return;
+    }
+
+    setSavingAutoPoll(true);
+    try {
+      await api.patch("/api/orgs/settings", {
+        auto_poll_enabled: autoPollEnabled,
+        auto_poll_interval: intervalSeconds,
+      });
+      toast.success("Auto-sync settings updated");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to update");
+    } finally {
+      setSavingAutoPoll(false);
     }
   }
 
@@ -1017,6 +1128,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   const visibleTabs = TABS.filter((t) => !t.adminOnly || isAdmin);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="max-w-3xl p-0 overflow-hidden h-[min(600px,80vh)]"
@@ -1173,6 +1285,9 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
 
                     {/* Privacy */}
                     <PrivacyCard />
+
+                    {/* Compose */}
+                    <ComposeCard />
 
                     {/* Sync */}
                     <Card>
@@ -1343,6 +1458,38 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                             </div>
                           </CardContent>
                         </form>
+                      </Card>
+                    )}
+
+                    {/* Discovered domains from Resend */}
+                    {discoveredDomains.length > 0 && (
+                      <Card className="border-amber-500/50 bg-amber-500/5">
+                        <CardHeader>
+                          <CardTitle className="text-sm">Found in Resend</CardTitle>
+                          <CardDescription>
+                            These domains exist in your Resend account but haven&apos;t been added yet.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                          {discoveredDomains.map((dd) => (
+                            <div key={dd.id} className="flex items-center justify-between rounded-lg border border-amber-500/30 p-2">
+                              <span className="text-sm font-medium">{dd.domain}</span>
+                              <div className="flex gap-1">
+                                <Button size="sm" variant="outline" className="h-7 text-xs"
+                                  onClick={() => { setNewDomainName(dd.domain); }}>
+                                  Add
+                                </Button>
+                                <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground"
+                                  onClick={async () => {
+                                    await api.post(`/api/domains/discovered/${dd.id}/dismiss`);
+                                    setDiscoveredDomains((prev) => prev.filter((d) => d.id !== dd.id));
+                                  }}>
+                                  Dismiss
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </CardContent>
                       </Card>
                     )}
 
@@ -2150,6 +2297,59 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                       )}
                     </Card>
 
+                    {/* Auto-Sync (self-hosted only) */}
+                    {!commercial && (
+                      <Card>
+                        <form onSubmit={handleSaveAutoPoll}>
+                          <CardHeader>
+                            <CardTitle>Auto-Sync</CardTitle>
+                            <CardDescription>
+                              Automatically check for new emails when webhooks aren&apos;t available (e.g. localhost development)
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="space-y-4">
+                            <label className="flex items-center gap-3 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border"
+                                checked={autoPollEnabled}
+                                onChange={(e) => setAutoPollEnabled(e.target.checked)}
+                              />
+                              <div>
+                                <p className="text-sm font-medium">Enable automatic email polling</p>
+                                <p className="text-xs text-muted-foreground">Periodically fetch new emails from Resend</p>
+                              </div>
+                            </label>
+                            {autoPollEnabled && (
+                              <div className="space-y-2">
+                                <label className="text-sm font-medium">Poll interval</label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="number"
+                                    min={2}
+                                    max={60}
+                                    value={autoPollMinutes}
+                                    onChange={(e) => setAutoPollMinutes(parseInt(e.target.value) || 5)}
+                                    className="w-24"
+                                  />
+                                  <span className="text-sm text-muted-foreground">minutes</span>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  How often to check for new emails (2-60 minutes)
+                                </p>
+                              </div>
+                            )}
+                          </CardContent>
+                          <CardFooter>
+                            <Button disabled={savingAutoPoll}>
+                              {savingAutoPoll ? <Spinner className="mr-2" /> : null}
+                              Save
+                            </Button>
+                          </CardFooter>
+                        </form>
+                      </Card>
+                    )}
+
                     {/* Danger zone */}
                     {user?.is_owner && (
                       <Card className="border-destructive">
@@ -2282,5 +2482,15 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
         </div>
       </DialogContent>
     </Dialog>
+    <ConfirmDialog
+      open={confirmAction !== null}
+      onOpenChange={(open) => { if (!open) setConfirmAction(null); }}
+      title={confirmAction?.title ?? ""}
+      description={confirmAction?.description}
+      confirmLabel={confirmAction?.confirmLabel ?? "Confirm"}
+      destructive={confirmAction?.destructive ?? false}
+      onConfirm={() => confirmAction?.onConfirm()}
+    />
+    </>
   );
 }

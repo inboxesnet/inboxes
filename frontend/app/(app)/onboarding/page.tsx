@@ -85,7 +85,7 @@ export default function OnboardingPage() {
     DiscoveredAddress[]
   >([]);
   const [addressAssignments, setAddressAssignments] = useState<
-    Record<string, "user" | "alias" | "skip">
+    Record<string, "individual" | "group" | "skip">
   >({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -134,9 +134,9 @@ export default function OnboardingPage() {
         if (res.step === "addresses") {
           const rows = await api.get<DiscoveredAddress[]>("/api/onboarding/addresses");
           setDiscoveredAddresses(rows || []);
-          const defaults: Record<string, "alias"> = {};
+          const defaults: Record<string, "group"> = {};
           (rows || []).forEach((a) => {
-            defaults[a.id] = "alias";
+            defaults[a.id] = "group";
           });
           setAddressAssignments(defaults);
         }
@@ -221,9 +221,9 @@ export default function OnboardingPage() {
         .get<DiscoveredAddress[]>("/api/onboarding/addresses")
         .then((rows) => {
           setDiscoveredAddresses(rows || []);
-          const defaults: Record<string, "alias"> = {};
+          const defaults: Record<string, "group"> = {};
           (rows || []).forEach((a) => {
-            defaults[a.id] = "alias";
+            defaults[a.id] = "group";
           });
           setAddressAssignments(defaults);
           setStep("addresses");
@@ -315,10 +315,7 @@ export default function OnboardingPage() {
                   Webhook not registered
                 </p>
                 <p className="text-sm text-yellow-700 dark:text-yellow-400">
-                  {webhookWarning}{" "}
-                  Everything else works — you can send emails, sync history, and use the full app.
-                  To receive live inbound email, set PUBLIC_URL in your .env to a publicly reachable URL
-                  (e.g. an ngrok or Cloudflare Tunnel) and restart.
+                  {webhookWarning}
                 </p>
               </div>
             </div>
@@ -588,7 +585,7 @@ export default function OnboardingPage() {
             <CardHeader>
               <CardTitle>Set up addresses</CardTitle>
               <CardDescription>
-                Categorize each discovered address as a person, alias, or skip.
+                Categorize each discovered address as individual, group, or skip.
               </CardDescription>
             </CardHeader>
             {syncRunning && syncProgress && (
@@ -622,7 +619,7 @@ export default function OnboardingPage() {
                         </p>
                       </div>
                       <div className="flex gap-1">
-                        {(["user", "alias", "skip"] as const).map((type) => (
+                        {(["individual", "group", "skip"] as const).map((type) => (
                           <button
                             key={type}
                             onClick={() =>
@@ -637,10 +634,10 @@ export default function OnboardingPage() {
                                 : "hover:bg-muted"
                             }`}
                           >
-                            {type === "user"
-                              ? "Person"
-                              : type === "alias"
-                                ? "Alias"
+                            {type === "individual"
+                              ? "Individual"
+                              : type === "group"
+                                ? "Group"
                                 : "Skip"}
                           </button>
                         ))}

@@ -8,14 +8,14 @@ import (
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/service"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/redis/go-redis/v9"
 	"github.com/stripe/stripe-go/v82"
 	"github.com/stripe/stripe-go/v82/subscription"
 )
 
 type OrgHandler struct {
-	DB         *pgxpool.Pool
+	Store      store.Store
 	RDB        *redis.Client
 	EncSvc     *service.EncryptionService
 	ResendSvc  *service.ResendService
@@ -27,41 +27,59 @@ type OrgHandler struct {
 func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	var name string
-	var onboardingCompleted bool
-	var hasAPIKey bool
-	var resendRPS int
-
-	err := h.DB.QueryRow(r.Context(),
-		`SELECT name, onboarding_completed, (resend_api_key_encrypted IS NOT NULL) as has_key, resend_rps
-		 FROM orgs WHERE id = $1`, claims.OrgID,
-	).Scan(&name, &onboardingCompleted, &hasAPIKey, &resendRPS)
+	settings, err := h.Store.GetOrgSettings(r.Context(), claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "org not found")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"id":                   claims.OrgID,
-		"name":                 name,
-		"onboarding_completed": onboardingCompleted,
-		"has_api_key":          hasAPIKey,
+		"name":                 settings["name"],
+		"onboarding_completed": settings["onboarding_completed"],
+		"has_api_key":          settings["has_api_key"],
 		"billing_enabled":      h.StripeKey != "",
-		"resend_rps":           resendRPS,
-	})
+		"resend_rps":           settings["resend_rps"],
+	}
+	if h.StripeKey == "" {
+		resp["auto_poll_enabled"] = settings["auto_poll_enabled"]
+		resp["auto_poll_interval"] = settings["auto_poll_interval"]
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	var req struct {
-		Name      string `json:"name"`
-		APIKey    string `json:"api_key"`
-		ResendRPS *int   `json:"resend_rps"`
+		Name             string `json:"name"`
+		APIKey           string `json:"api_key"`
+		ResendRPS        *int   `json:"resend_rps"`
+		AutoPollEnabled  *bool  `json:"auto_poll_enabled"`
+		AutoPollInterval *int   `json:"auto_poll_interval"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+
+	// Auto-poll settings (self-hosted only)
+	if h.StripeKey == "" && req.AutoPollEnabled != nil {
+		if err := h.Store.UpdateOrgAutoPoll(r.Context(), claims.OrgID, *req.AutoPollEnabled); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update auto-poll setting")
+			return
+		}
+	}
+	if h.StripeKey == "" && req.AutoPollInterval != nil {
+		interval := *req.AutoPollInterval
+		if interval < 120 || interval > 3600 {
+			writeError(w, http.StatusBadRequest, "auto_poll_interval must be between 120 and 3600 seconds")
+			return
+		}
+		if err := h.Store.UpdateOrgAutoPollInterval(r.Context(), claims.OrgID, interval); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update auto-poll interval")
+			return
+		}
 	}
 
 	if req.ResendRPS != nil {
@@ -70,9 +88,7 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "resend_rps must be between 1 and 100")
 			return
 		}
-		if _, err := h.DB.Exec(r.Context(),
-			`UPDATE orgs SET resend_rps = $1, updated_at = now() WHERE id = $2`,
-			rps, claims.OrgID); err != nil {
+		if err := h.Store.UpdateOrgRPS(r.Context(), claims.OrgID, rps); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update rate limit")
 			return
 		}
@@ -86,9 +102,7 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if _, err := h.DB.Exec(r.Context(),
-			`UPDATE orgs SET name = $1, updated_at = now() WHERE id = $2`,
-			req.Name, claims.OrgID); err != nil {
+		if err := h.Store.UpdateOrgName(r.Context(), claims.OrgID, req.Name); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update org name")
 			return
 		}
@@ -100,9 +114,7 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to encrypt API key")
 			return
 		}
-		if _, err := h.DB.Exec(r.Context(),
-			`UPDATE orgs SET resend_api_key_encrypted = $1, resend_api_key_iv = $2, resend_api_key_tag = $3, updated_at = now() WHERE id = $4`,
-			ciphertext, iv, tag, claims.OrgID); err != nil {
+		if err := h.Store.UpdateOrgAPIKey(r.Context(), claims.OrgID, ciphertext, iv, tag); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update API key")
 			return
 		}
@@ -116,10 +128,7 @@ func (h *OrgHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	// Only the owner can delete the org
-	var isOwner bool
-	err := h.DB.QueryRow(r.Context(),
-		`SELECT is_owner FROM users WHERE id = $1 AND org_id = $2`,
-		claims.UserID, claims.OrgID).Scan(&isOwner)
+	isOwner, err := h.Store.IsOrgOwner(r.Context(), claims.UserID, claims.OrgID)
 	if err != nil || !isOwner {
 		writeError(w, http.StatusForbidden, "only the organization owner can delete it")
 		return
@@ -129,10 +138,8 @@ func (h *OrgHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	// Cancel Stripe subscription if in commercial mode
 	if h.StripeKey != "" {
-		var stripeSubID *string
-		if err := h.DB.QueryRow(ctx,
-			`SELECT stripe_subscription_id FROM orgs WHERE id = $1`, claims.OrgID,
-		).Scan(&stripeSubID); err == nil && stripeSubID != nil && *stripeSubID != "" {
+		stripeSubID, _ := h.Store.GetStripeSubscriptionID(ctx, claims.OrgID)
+		if stripeSubID != nil && *stripeSubID != "" {
 			stripe.Key = h.StripeKey
 			if _, err := subscription.Cancel(*stripeSubID, nil); err != nil {
 				slog.Error("org: failed to cancel Stripe subscription", "org_id", claims.OrgID, "sub_id", *stripeSubID, "error", err)
@@ -144,10 +151,8 @@ func (h *OrgHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Unregister Resend webhook (best-effort — don't block deletion on failure)
-	var webhookID *string
-	if err := h.DB.QueryRow(ctx,
-		"SELECT resend_webhook_id FROM orgs WHERE id = $1", claims.OrgID,
-	).Scan(&webhookID); err == nil && webhookID != nil && *webhookID != "" {
+	webhookID, _ := h.Store.GetWebhookID(ctx, claims.OrgID)
+	if webhookID != nil && *webhookID != "" {
 		if _, err := h.ResendSvc.Fetch(ctx, claims.OrgID, "DELETE", "/webhooks/"+*webhookID, nil); err != nil {
 			slog.Error("org: failed to unregister Resend webhook", "org_id", claims.OrgID, "webhook_id", *webhookID, "error", err)
 		} else {
@@ -156,97 +161,33 @@ func (h *OrgHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Soft-delete: cascade to all child entities in a transaction
-	tx, err := h.DB.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete organization")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE orgs SET deleted_at = now(), stripe_subscription_id = NULL,
-		 resend_webhook_id = NULL, resend_webhook_secret = NULL,
-		 resend_webhook_secret_encrypted = NULL, resend_webhook_secret_iv = NULL, resend_webhook_secret_tag = NULL,
-		 updated_at = now() WHERE id = $1`,
-		claims.OrgID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete organization")
-		return
-	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE users SET status = 'disabled', updated_at = now() WHERE org_id = $1`,
-		claims.OrgID); err != nil {
-		slog.Error("orgs: failed to disable users on delete", "error", err, "org_id", claims.OrgID)
-	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE domains SET status = 'deleted', hidden = true, updated_at = now() WHERE org_id = $1`,
-		claims.OrgID); err != nil {
-		slog.Error("orgs: failed to mark domains deleted", "error", err, "org_id", claims.OrgID)
-	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE aliases SET deleted_at = now() WHERE org_id = $1 AND deleted_at IS NULL`,
-		claims.OrgID); err != nil {
-		slog.Error("orgs: failed to soft-delete aliases", "error", err, "org_id", claims.OrgID)
-	}
-
-	if _, err := tx.Exec(ctx,
-		`UPDATE threads SET deleted_at = now(), updated_at = now() WHERE org_id = $1 AND deleted_at IS NULL`,
-		claims.OrgID); err != nil {
-		slog.Error("orgs: failed to soft-delete threads", "error", err, "org_id", claims.OrgID)
-	}
-
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM discovered_addresses WHERE domain_id IN (SELECT id FROM domains WHERE org_id = $1)`,
-		claims.OrgID); err != nil {
-		slog.Error("orgs: failed to delete discovered_addresses", "error", err, "org_id", claims.OrgID)
-	}
-
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM thread_labels WHERE org_id = $1`,
-		claims.OrgID); err != nil {
-		slog.Error("orgs: failed to delete thread_labels", "error", err, "org_id", claims.OrgID)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
+	if err := h.Store.WithTx(ctx, func(tx store.Store) error {
+		return tx.SoftDeleteOrg(ctx, claims.OrgID)
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete organization")
 		return
 	}
 
 	// Revoke all tokens for every user in the org and clear status caches
-	rows, err := h.DB.Query(ctx, `SELECT id FROM users WHERE org_id = $1`, claims.OrgID)
+	userIDs, err := h.Store.ListOrgUserIDs(ctx, claims.OrgID)
 	if err == nil {
-		defer rows.Close()
 		orgBlacklist := service.NewTokenBlacklist(h.RDB)
-		for rows.Next() {
-			var uid string
-			if rows.Scan(&uid) == nil {
-				if err := orgBlacklist.RevokeAllForUser(ctx, uid); err != nil {
-					slog.Error("orgs: session revocation failed on org delete", "user_id", uid, "error", err)
-				}
-				orgBlacklist.ClearSessions(ctx, uid)
-				if h.RDB != nil {
-					h.RDB.Del(ctx, "user:status:"+uid)
-				}
+		for _, uid := range userIDs {
+			if err := orgBlacklist.RevokeAllForUser(ctx, uid); err != nil {
+				slog.Error("orgs: session revocation failed on org delete", "user_id", uid, "error", err)
+			}
+			orgBlacklist.ClearSessions(ctx, uid)
+			if h.RDB != nil {
+				h.RDB.Del(ctx, "user:status:"+uid)
 			}
 		}
 	}
 
 	// Cancel all pending/running email jobs and remove from Redis queue
-	jobRows, jobErr := h.DB.Query(ctx,
-		`UPDATE email_jobs SET status='cancelled', error_message='org deleted', updated_at=now()
-		 WHERE org_id = $1 AND status IN ('pending', 'running')
-		 RETURNING id`,
-		claims.OrgID,
-	)
+	jobIDs, jobErr := h.Store.CancelOrgJobs(ctx, claims.OrgID)
 	if jobErr == nil {
-		defer jobRows.Close()
-		for jobRows.Next() {
-			var jobID string
-			if jobRows.Scan(&jobID) == nil {
-				h.RDB.LRem(ctx, "email:jobs", 0, jobID)
-			}
+		for _, jobID := range jobIDs {
+			h.RDB.LRem(ctx, "email:jobs", 0, jobID)
 		}
 	}
 
@@ -258,10 +199,7 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	// Only the owner can delete
-	var isOwner bool
-	err := h.DB.QueryRow(r.Context(),
-		`SELECT is_owner FROM users WHERE id = $1 AND org_id = $2`,
-		claims.UserID, claims.OrgID).Scan(&isOwner)
+	isOwner, err := h.Store.IsOrgOwner(r.Context(), claims.UserID, claims.OrgID)
 	if err != nil || !isOwner {
 		writeError(w, http.StatusForbidden, "only the organization owner can permanently delete it")
 		return
@@ -276,10 +214,8 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify confirmation matches org name
-	var orgName string
-	if err := h.DB.QueryRow(r.Context(),
-		`SELECT name FROM orgs WHERE id = $1`, claims.OrgID,
-	).Scan(&orgName); err != nil {
+	orgName, err := h.Store.GetOrgNameByID(r.Context(), claims.OrgID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "org not found")
 		return
 	}
@@ -292,10 +228,8 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 
 	// Cancel Stripe subscription if active
 	if h.StripeKey != "" {
-		var stripeSubID *string
-		if err := h.DB.QueryRow(ctx,
-			`SELECT stripe_subscription_id FROM orgs WHERE id = $1`, claims.OrgID,
-		).Scan(&stripeSubID); err == nil && stripeSubID != nil && *stripeSubID != "" {
+		stripeSubID, _ := h.Store.GetStripeSubscriptionID(ctx, claims.OrgID)
+		if stripeSubID != nil && *stripeSubID != "" {
 			stripe.Key = h.StripeKey
 			if _, err := subscription.Cancel(*stripeSubID, nil); err != nil {
 				slog.Error("org: delete: failed to cancel Stripe subscription", "org_id", claims.OrgID, "error", err)
@@ -304,38 +238,29 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Unregister Resend webhook (best-effort)
-	var webhookID *string
-	if err := h.DB.QueryRow(ctx,
-		"SELECT resend_webhook_id FROM orgs WHERE id = $1", claims.OrgID,
-	).Scan(&webhookID); err == nil && webhookID != nil && *webhookID != "" {
+	webhookID, _ := h.Store.GetWebhookID(ctx, claims.OrgID)
+	if webhookID != nil && *webhookID != "" {
 		if _, err := h.ResendSvc.Fetch(ctx, claims.OrgID, "DELETE", "/webhooks/"+*webhookID, nil); err != nil {
 			slog.Error("org: delete: failed to unregister webhook", "org_id", claims.OrgID, "error", err)
 		}
 	}
 
 	// Revoke all sessions before deletion
-	rows, err := h.DB.Query(ctx, `SELECT id FROM users WHERE org_id = $1`, claims.OrgID)
+	userIDs, err := h.Store.ListOrgUserIDs(ctx, claims.OrgID)
 	if err == nil {
-		defer rows.Close()
 		bl := service.NewTokenBlacklist(h.RDB)
-		for rows.Next() {
-			var uid string
-			if rows.Scan(&uid) == nil {
-				bl.RevokeAllForUser(ctx, uid)
-				bl.ClearSessions(ctx, uid)
-				if h.RDB != nil {
-					h.RDB.Del(ctx, "user:status:"+uid)
-				}
+		for _, uid := range userIDs {
+			bl.RevokeAllForUser(ctx, uid)
+			bl.ClearSessions(ctx, uid)
+			if h.RDB != nil {
+				h.RDB.Del(ctx, "user:status:"+uid)
 			}
 		}
-		rows.Close()
 	}
 
 	// Soft-delete the org
-	tag, err := h.DB.Exec(ctx,
-		`UPDATE orgs SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`,
-		claims.OrgID)
-	if err != nil || tag.RowsAffected() == 0 {
+	rowsAffected, err := h.Store.HardDeleteOrg(ctx, claims.OrgID)
+	if err != nil || rowsAffected == 0 {
 		writeError(w, http.StatusInternalServerError, "failed to delete organization")
 		return
 	}

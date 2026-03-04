@@ -12,15 +12,14 @@ import (
 
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
-	"github.com/inboxes/backend/internal/util"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
-	DB        *pgxpool.Pool
+	Store     store.Store
 	RDB       *redis.Client
 	Secret    string
 	AppURL    string
@@ -64,11 +63,12 @@ type claimRequest struct {
 }
 
 func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	// Solo mode: block signups when at least one user exists
 	if h.StripeKey == "" {
-		ctx := r.Context()
-		var count int
-		if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err == nil && count > 0 {
+		count, err := h.Store.CountUsers(ctx)
+		if err == nil && count > 0 {
 			writeError(w, http.StatusForbidden, "registration is closed")
 			return
 		}
@@ -107,27 +107,6 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	dbCtx, dbCancel := util.DBCtx(ctx)
-	defer dbCancel()
-
-	tx, err := h.DB.Begin(dbCtx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
-	}
-	defer tx.Rollback(dbCtx)
-
-	var orgID string
-	err = tx.QueryRow(dbCtx,
-		"INSERT INTO orgs (name) VALUES ($1) RETURNING id", req.OrgName,
-	).Scan(&orgID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create org")
-		return
-	}
-
-	var userID string
 	name := req.Name
 	if name == "" {
 		name = strings.Split(req.Email, "@")[0]
@@ -138,41 +117,42 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		emailVerified = false
 	}
 
-	err = tx.QueryRow(dbCtx,
-		`INSERT INTO users (org_id, email, name, password_hash, role, status, email_verified)
-		 VALUES ($1, $2, $3, $4, 'admin', 'active', $5) RETURNING id`,
-		orgID, req.Email, name, string(hash), emailVerified,
-	).Scan(&userID)
-	if err != nil {
-		if strings.Contains(err.Error(), "unique") {
+	// In self-hosted mode, the first user (count == 0) becomes the instance owner
+	isSelfHostedOwner := h.StripeKey == ""
+
+	var orgID, userID string
+	var verificationCode string
+	txErr := h.Store.WithTx(ctx, func(tx store.Store) error {
+		var createErr error
+		orgID, userID, createErr = tx.CreateOrgAndAdmin(ctx, req.OrgName, req.Email, name, string(hash), emailVerified, isSelfHostedOwner)
+		if createErr != nil {
+			return createErr
+		}
+
+		// If hosted, generate verification code within the same transaction
+		if h.StripeKey != "" {
+			verificationCode = generateVerificationCode()
+			expires := time.Now().Add(15 * time.Minute)
+			if err := tx.SetVerificationCode(ctx, userID, verificationCode, expires); err != nil {
+				return fmt.Errorf("set verification code: %w", err)
+			}
+		}
+		return nil
+	})
+	if txErr != nil {
+		if strings.Contains(txErr.Error(), "email already registered") {
 			writeError(w, http.StatusConflict, "email already registered")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to create user")
+		slog.Error("auth: signup transaction failed", "error", txErr)
+		writeError(w, http.StatusInternalServerError, "failed to create account")
 		return
 	}
 
 	slog.Info("auth: signup", "email", req.Email, "org_id", orgID)
 
-	// If hosted, generate verification code and send email
+	// If hosted, send verification email and return early
 	if h.StripeKey != "" {
-		code := generateVerificationCode()
-		expires := time.Now().Add(15 * time.Minute)
-		_, err = tx.Exec(dbCtx,
-			"UPDATE users SET verification_code = $1, verification_expires_at = $2 WHERE id = $3",
-			code, expires, userID,
-		)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to set verification code")
-			return
-		}
-
-		if err := tx.Commit(dbCtx); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to commit")
-			return
-		}
-
-		// Send verification email
 		from := h.ResendSvc.GetSystemFrom(ctx)
 		if from == "" {
 			from = "noreply@inboxes.net"
@@ -182,7 +162,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 			"from":    from,
 			"to":      []string{req.Email},
 			"subject": "Verify your email",
-			"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),
+			"html":    fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", verificationCode),
 		}); err != nil {
 			slog.Error("auth: failed to send verification email", "email", req.Email, "error", err)
 		}
@@ -191,11 +171,6 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 			"requires_verification": true,
 			"email":                 req.Email,
 		})
-		return
-	}
-
-	if err := tx.Commit(dbCtx); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit")
 		return
 	}
 
@@ -238,13 +213,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	var userID, orgID, name, role, passwordHash string
-	var status string
-	var emailVerified bool
-	err := h.DB.QueryRow(ctx,
-		`SELECT id, org_id, name, role, status, password_hash, email_verified FROM users WHERE email = $1`,
-		req.Email,
-	).Scan(&userID, &orgID, &name, &role, &status, &passwordHash, &emailVerified)
+	userID, orgID, name, role, status, passwordHash, emailVerified, err := h.Store.GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		// Constant-time comparison to prevent timing attacks revealing email existence
 		bcrypt.CompareHashAndPassword(dummyHash, []byte(req.Password))
@@ -284,9 +253,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("auth: login", "email", req.Email)
 
-	var onboardingCompleted bool
-	warnIfErr(h.DB.QueryRow(ctx, "SELECT onboarding_completed FROM orgs WHERE id = $1", orgID).Scan(&onboardingCompleted),
-		"auth: failed to check onboarding status", "org_id", orgID)
+	onboardingCompleted, onbErr := h.Store.GetOnboardingCompleted(ctx, orgID)
+	warnIfErr(onbErr, "auth: failed to check onboarding status", "org_id", orgID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user": map[string]string{
@@ -343,11 +311,8 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	resetToken := hex.EncodeToString(tokenBytes)
 	expires := time.Now().Add(1 * time.Hour)
 
-	tag, err := h.DB.Exec(ctx,
-		`UPDATE users SET reset_token = $1, reset_expires_at = $2 WHERE email = $3 AND status = 'active'`,
-		resetToken, expires, req.Email,
-	)
-	if err != nil || tag.RowsAffected() == 0 {
+	rowsAffected, err := h.Store.SetResetToken(ctx, req.Email, resetToken, expires)
+	if err != nil || rowsAffected == 0 {
 		// Don't reveal whether email exists
 		writeJSON(w, http.StatusOK, map[string]string{"message": "if that email exists, a reset link has been sent"})
 		return
@@ -396,13 +361,7 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	var resetUserID string
-	err = h.DB.QueryRow(ctx,
-		`UPDATE users SET password_hash = $1, reset_token = NULL, reset_expires_at = NULL
-		 WHERE reset_token = $2 AND reset_expires_at > now()
-		 RETURNING id`,
-		string(hash), req.Token,
-	).Scan(&resetUserID)
+	resetUserID, err := h.Store.ResetPassword(ctx, string(hash), req.Token)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or expired reset token")
 		return
@@ -440,15 +399,7 @@ func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	name := req.Name
-	var userID, orgID, email, role string
-	err = h.DB.QueryRow(ctx,
-		`UPDATE users SET password_hash = $1, name = CASE WHEN $2 = '' THEN name ELSE $2 END,
-		 status = 'active', invite_token = NULL, invite_expires_at = NULL
-		 WHERE invite_token = $3 AND invite_expires_at > now() AND status IN ('placeholder', 'invited')
-		 RETURNING id, org_id, email, role`,
-		string(hash), name, req.Token,
-	).Scan(&userID, &orgID, &email, &role)
+	userID, orgID, email, role, err := h.Store.ClaimInvite(ctx, string(hash), req.Name, req.Token)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or expired invite token")
 		return
@@ -491,13 +442,7 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	var userID, orgID, name, role string
-	err := h.DB.QueryRow(ctx,
-		`UPDATE users SET email_verified = true, verification_code = NULL, verification_expires_at = NULL
-		 WHERE email = $1 AND verification_code = $2 AND verification_expires_at > now()
-		 RETURNING id, org_id, name, role`,
-		req.Email, req.Code,
-	).Scan(&userID, &orgID, &name, &role)
+	userID, orgID, name, role, err := h.Store.VerifyEmail(ctx, req.Email, req.Code)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or expired verification code")
 		return
@@ -539,12 +484,8 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 	code := generateVerificationCode()
 	expires := time.Now().Add(15 * time.Minute)
 
-	tag, err := h.DB.Exec(ctx,
-		`UPDATE users SET verification_code = $1, verification_expires_at = $2
-		 WHERE email = $3 AND email_verified = false AND status = 'active'`,
-		code, expires, req.Email,
-	)
-	if err != nil || tag.RowsAffected() == 0 {
+	rowsAffected, err := h.Store.ResendVerificationCode(ctx, req.Email, code, expires)
+	if err != nil || rowsAffected == 0 {
 		// Don't reveal whether user exists
 		writeJSON(w, http.StatusOK, map[string]string{"message": "if that email needs verification, a new code has been sent"})
 		return
@@ -583,12 +524,7 @@ func (h *AuthHandler) ValidateClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	var email, name, status string
-	err := h.DB.QueryRow(ctx,
-		`SELECT email, name, status FROM users
-		 WHERE invite_token = $1 AND invite_expires_at > now()`,
-		token,
-	).Scan(&email, &name, &status)
+	email, name, status, err := h.Store.ValidateInviteToken(ctx, token)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusBadRequest, "invalid or expired invite token")

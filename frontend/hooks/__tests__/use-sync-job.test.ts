@@ -12,6 +12,13 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+vi.mock("@/contexts/notification-context", () => ({
+  useNotifications: () => ({
+    subscribe: vi.fn(() => vi.fn()),
+    connected: true,
+  }),
+}));
+
 import { useSyncJob } from "../use-sync-job";
 
 const pendingJob: SyncJob = {
@@ -108,7 +115,7 @@ describe("useSyncJob", () => {
       await result.current.startSync();
     });
     await act(async () => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(5000);
     });
     expect(mockGet).toHaveBeenCalledWith(`/api/sync/${pendingJob.id}`);
   });
@@ -121,14 +128,14 @@ describe("useSyncJob", () => {
       await result.current.startSync();
     });
     await act(async () => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(5000);
     });
     expect(result.current.isComplete).toBe(true);
 
     // Further polling should not happen
     mockGet.mockClear();
     await act(async () => {
-      vi.advanceTimersByTime(4000);
+      vi.advanceTimersByTime(10000);
     });
     expect(mockGet).not.toHaveBeenCalled();
   });
@@ -141,7 +148,7 @@ describe("useSyncJob", () => {
       await result.current.startSync();
     });
     await act(async () => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(5000);
     });
     expect(result.current.isFailed).toBe(true);
     expect(result.current.error).toBe("API key invalid");

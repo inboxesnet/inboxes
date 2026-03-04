@@ -346,7 +346,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			}
 			// Link discovered_addresses to alias
 			if _, err := s.pool.Exec(ctx,
-				`UPDATE discovered_addresses SET type = 'alias', alias_id = $1
+				`UPDATE discovered_addresses SET type = 'group', alias_id = $1
 				 WHERE domain_id = $2 AND address = $3`,
 				aliasID, info.domainID, addr,
 			); err != nil {
@@ -1028,7 +1028,9 @@ func mapResendStatus(lastEvent string) string {
 		return "delivered"
 	case "bounced":
 		return "bounced"
-	case "complained", "failed":
+	case "complained":
+		return "complained"
+	case "failed":
 		return "failed"
 	default:
 		return "sent"

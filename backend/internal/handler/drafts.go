@@ -2,22 +2,23 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"time"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
 type DraftHandler struct {
-	DB        *pgxpool.Pool
+	Store     store.Store
 	ResendSvc *service.ResendService
 	Bus       *event.Bus
 	RDB       *redis.Client
@@ -25,63 +26,12 @@ type DraftHandler struct {
 
 func (h *DraftHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
-
 	domainID := r.URL.Query().Get("domain_id")
-	ctx := r.Context()
 
-	query := `SELECT id, domain_id, thread_id, kind, subject, from_address,
-		to_addresses, cc_addresses, bcc_addresses, body_html, body_plain,
-		created_at, updated_at, COALESCE(attachment_ids, '[]')
-		FROM drafts WHERE user_id = $1 AND org_id = $2`
-	args := []interface{}{claims.UserID, claims.OrgID}
-
-	if domainID != "" {
-		query += " AND domain_id = $3"
-		args = append(args, domainID)
-	}
-	query += " ORDER BY updated_at DESC"
-
-	rows, err := h.DB.Query(ctx, query, args...)
+	drafts, err := h.Store.ListDrafts(r.Context(), claims.UserID, claims.OrgID, domainID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list drafts")
 		return
-	}
-	defer rows.Close()
-
-	var drafts []map[string]interface{}
-	for rows.Next() {
-		var id, domID, kind, subject, fromAddr, bodyHTML, bodyPlain string
-		var threadID *string
-		var toAddr, ccAddr, bccAddr, attIDs json.RawMessage
-		var createdAt, updatedAt time.Time
-
-		err := rows.Scan(&id, &domID, &threadID, &kind, &subject, &fromAddr,
-			&toAddr, &ccAddr, &bccAddr, &bodyHTML, &bodyPlain,
-			&createdAt, &updatedAt, &attIDs)
-		if err != nil {
-			continue
-		}
-
-		draft := map[string]interface{}{
-			"id":             id,
-			"domain_id":      domID,
-			"thread_id":      threadID,
-			"kind":           kind,
-			"subject":        subject,
-			"from_address":   fromAddr,
-			"to_addresses":   json.RawMessage(toAddr),
-			"cc_addresses":   json.RawMessage(ccAddr),
-			"bcc_addresses":  json.RawMessage(bccAddr),
-			"body_html":      bodyHTML,
-			"body_plain":     bodyPlain,
-			"attachment_ids": json.RawMessage(attIDs),
-			"created_at":     createdAt,
-			"updated_at":     updatedAt,
-		}
-		drafts = append(drafts, draft)
-	}
-	if drafts == nil {
-		drafts = []map[string]interface{}{}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"drafts": drafts})
 }
@@ -136,16 +86,8 @@ func (h *DraftHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var id string
-	err := h.DB.QueryRow(r.Context(),
-		`INSERT INTO drafts (org_id, user_id, domain_id, thread_id, kind, subject, from_address,
-		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain, attachment_ids)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		 RETURNING id`,
-		claims.OrgID, claims.UserID, req.DomainID, req.ThreadID, req.Kind,
-		req.Subject, req.FromAddress, toJSON, ccJSON, bccJSON,
-		req.BodyHTML, req.BodyPlain, attJSON,
-	).Scan(&id)
+	id, err := h.Store.CreateDraft(r.Context(), claims.OrgID, claims.UserID, req.DomainID,
+		req.ThreadID, req.Kind, req.Subject, req.FromAddress, toJSON, ccJSON, bccJSON, attJSON)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create draft")
 		return
@@ -238,21 +180,12 @@ func (h *DraftHandler) Update(w http.ResponseWriter, r *http.Request) {
 		argIdx++
 	}
 
-	query := "UPDATE drafts SET "
-	for i, c := range setClauses {
-		if i > 0 {
-			query += ", "
-		}
-		query += c
-	}
-	query += " WHERE id = $1 AND user_id = $2"
-
-	tag, err := h.DB.Exec(ctx, query, args...)
+	n, err := h.Store.UpdateDraft(ctx, id, claims.UserID, setClauses, args)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update draft")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if n == 0 {
 		writeError(w, http.StatusNotFound, "draft not found")
 		return
 	}
@@ -264,15 +197,12 @@ func (h *DraftHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	id := chi.URLParam(r, "id")
-	tag, err := h.DB.Exec(r.Context(),
-		"DELETE FROM drafts WHERE id = $1 AND user_id = $2",
-		id, claims.UserID,
-	)
+	n, err := h.Store.DeleteDraft(r.Context(), id, claims.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete draft")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if n == 0 {
 		writeError(w, http.StatusNotFound, "draft not found")
 		return
 	}
@@ -287,10 +217,8 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Idempotency: reject if a send job already exists for this draft
-	var alreadySending bool
-	if err := h.DB.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM email_jobs WHERE draft_id = $1 AND job_type = 'send')`,
-		id).Scan(&alreadySending); err != nil {
+	alreadySending, err := h.Store.CheckSendJobExists(ctx, id)
+	if err != nil {
 		slog.Error("draft: idempotency check failed", "draft_id", id, "error", err)
 	}
 	if alreadySending {
@@ -299,23 +227,12 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch draft
-	var domainID, kind, subject, fromAddr, bodyHTML, bodyPlain string
-	var threadID *string
-	var toAddr, ccAddr, bccAddr json.RawMessage
-	var attachmentIDsRaw json.RawMessage
-
-	err := h.DB.QueryRow(ctx,
-		`SELECT domain_id, thread_id, kind, subject, from_address,
-		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain,
-		 COALESCE(attachment_ids, '[]')
-		 FROM drafts WHERE id = $1 AND user_id = $2`,
-		id, claims.UserID,
-	).Scan(&domainID, &threadID, &kind, &subject, &fromAddr,
-		&toAddr, &ccAddr, &bccAddr, &bodyHTML, &bodyPlain, &attachmentIDsRaw)
+	domainID, threadID, kind, subject, fromAddr, bodyHTML, bodyPlain, toAddr, ccAddr, bccAddr, attachmentIDsRaw, err := h.Store.GetDraft(ctx, id, claims.UserID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "draft not found")
 		return
 	}
+	_ = kind
 
 	var to, cc, bcc []string
 	if err := json.Unmarshal(toAddr, &to); err != nil {
@@ -339,14 +256,23 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bounce block check: reject if any recipient is on the bounce list
+	allRecipients := append(append(to, cc...), bcc...)
+	blocked, _ := h.Store.CheckBouncedRecipients(ctx, claims.OrgID, allRecipients)
+	if len(blocked) > 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Cannot send: the following addresses have bounced: %s", strings.Join(blocked, ", ")))
+		return
+	}
+
 	// Verify sender is authorized to send from this address
-	if !canSendAs(ctx, h.DB, claims.UserID, claims.OrgID, fromAddr, claims.Role) {
+	canSend, _ := h.Store.CanSendAs(ctx, claims.UserID, claims.OrgID, fromAddr, claims.Role)
+	if !canSend {
 		writeError(w, http.StatusForbidden, "you are not authorized to send from this address")
 		return
 	}
 
 	// Resolve display name for From field
-	fromDisplay := resolveFromDisplay(ctx, h.DB, claims.OrgID, fromAddr)
+	fromDisplay, _ := h.Store.ResolveFromDisplay(ctx, claims.OrgID, fromAddr)
 
 	// Build Resend payload (serialized to JSON for job storage)
 	resendPayload := map[string]interface{}{
@@ -371,7 +297,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	var attachmentIDs []string
 	warnIfErr(json.Unmarshal(attachmentIDsRaw, &attachmentIDs), "draft: failed to unmarshal attachment IDs", "draft_id", id)
 	if len(attachmentIDs) > 0 {
-		attachments, attErr := loadAttachmentsForResend(ctx, h.DB, attachmentIDs, claims.OrgID)
+		attachments, attErr := h.Store.LoadAttachmentsForResend(ctx, attachmentIDs, claims.OrgID)
 		if attErr == nil && len(attachments) > 0 {
 			resendPayload["attachments"] = attachments
 		}
@@ -385,39 +311,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	// Build snippet
 	snippet := util.TruncateRunes(bodyPlain, 200)
 
-	// Wrap thread find/create + email INSERT + thread stats + job INSERT in a transaction
-	dbCtx, dbCancel := util.DBCtx(ctx)
-	defer dbCancel()
-
-	tx, err := h.DB.Begin(dbCtx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
-	}
-	defer tx.Rollback(dbCtx)
-
-	// Find or create thread
-	var finalThreadID string
-	if threadID != nil && *threadID != "" {
-		finalThreadID = *threadID
-	} else {
-		participants, ok := marshalOrFail(w, append([]string{fromAddr}, to...), "failed to create thread")
-		if !ok {
-			return
-		}
-		if err := tx.QueryRow(dbCtx,
-			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, snippet)
-			 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			claims.OrgID, claims.UserID, domainID, subject, participants, snippet,
-		).Scan(&finalThreadID); err != nil {
-			slog.Error("draft: create thread failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to create thread")
-			return
-		}
-		addLabel(dbCtx, tx, finalThreadID, claims.OrgID, "sent")
-	}
-
-	// Store email with status='queued'
+	// Marshal JSON for transaction
 	toJSON, ok := marshalOrFail(w, to, "failed to create email")
 	if !ok {
 		return
@@ -431,43 +325,53 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var emailID string
-	if err := tx.QueryRow(dbCtx,
-		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, direction,
-		 from_address, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_plain, status)
-		 VALUES ($1, $2, $3, $4, 'outbound', $5, $6, $7, $8, $9, $10, $11, 'queued')
-		 RETURNING id`,
-		finalThreadID, claims.UserID, claims.OrgID, domainID,
-		fromAddr, toJSON, ccJSON, bccJSON, subject, bodyHTML, bodyPlain,
-	).Scan(&emailID); err != nil {
-		slog.Error("draft: insert email failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to create email")
-		return
-	}
+	// Wrap thread find/create + email INSERT + thread stats + job INSERT in a transaction
+	var finalThreadID, emailID, jobID string
+	txErr := h.Store.WithTx(ctx, func(tx store.Store) error {
+		// Find or create thread
+		if threadID != nil && *threadID != "" {
+			finalThreadID = *threadID
+		} else {
+			participants, err := json.Marshal(append([]string{fromAddr}, to...))
+			if err != nil {
+				return fmt.Errorf("failed to marshal participants: %w", err)
+			}
+			var err2 error
+			finalThreadID, err2 = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, subject, participants, snippet)
+			if err2 != nil {
+				slog.Error("draft: create thread failed", "error", err2)
+				return err2
+			}
+			if err := tx.AddLabel(ctx, finalThreadID, claims.OrgID, "sent"); err != nil {
+				slog.Error("draft: add sent label failed", "error", err)
+			}
+		}
 
-	// Update thread stats
-	if _, err := tx.Exec(dbCtx,
-		`UPDATE threads SET message_count = message_count + 1, last_message_at = now(), snippet = $2, updated_at = now()
-		 WHERE id = $1`, finalThreadID, snippet,
-	); err != nil {
-		slog.Error("draft: update thread failed", "thread_id", finalThreadID, "error", err)
-	}
+		// Store email with status='queued'
+		var err error
+		emailID, err = tx.InsertEmail(ctx, finalThreadID, claims.UserID, claims.OrgID, domainID,
+			"outbound", fromAddr, toJSON, ccJSON, bccJSON, subject, bodyHTML, bodyPlain, "queued", "", nil)
+		if err != nil {
+			slog.Error("draft: insert email failed", "error", err)
+			return err
+		}
 
-	// Create email job (draft NOT deleted here — worker deletes after successful send)
-	var jobID string
-	if err := tx.QueryRow(dbCtx,
-		`INSERT INTO email_jobs (org_id, user_id, domain_id, job_type, email_id, thread_id, resend_payload, draft_id)
-		 VALUES ($1, $2, $3, 'send', $4, $5, $6, $7)
-		 RETURNING id`,
-		claims.OrgID, claims.UserID, domainID, emailID, finalThreadID, resendPayloadJSON, id,
-	).Scan(&jobID); err != nil {
-		slog.Error("draft: create send job failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to queue email")
-		return
-	}
+		// Update thread stats
+		if err := tx.UpdateThreadStats(ctx, finalThreadID, snippet); err != nil {
+			slog.Error("draft: update thread failed", "thread_id", finalThreadID, "error", err)
+		}
 
-	if err := tx.Commit(dbCtx); err != nil {
-		slog.Error("draft: commit failed", "error", err)
+		// Create email job (draft NOT deleted here — worker deletes after successful send)
+		draftID := id
+		jobID, err = tx.CreateEmailJob(ctx, claims.OrgID, claims.UserID, domainID, "send", emailID, finalThreadID, resendPayloadJSON, &draftID)
+		if err != nil {
+			slog.Error("draft: create send job failed", "error", err)
+			return err
+		}
+
+		return nil
+	})
+	if txErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to send email")
 		return
 	}

@@ -1,78 +1,25 @@
 package handler
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/middleware"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/inboxes/backend/internal/store"
 )
 
 type AliasHandler struct {
-	DB *pgxpool.Pool
+	Store store.Store
 }
 
 func (h *AliasHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	domainID := r.URL.Query().Get("domain_id")
 
-	query := `SELECT a.id, a.address, a.name, a.domain_id, a.created_at
-	          FROM aliases a WHERE a.org_id = $1 AND a.deleted_at IS NULL`
-	args := []interface{}{claims.OrgID}
-
-	if domainID != "" {
-		query += " AND a.domain_id = $2"
-		args = append(args, domainID)
-	}
-	query += " ORDER BY a.address"
-
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	aliases, err := h.Store.ListAliases(r.Context(), claims.OrgID, domainID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list aliases")
 		return
-	}
-	aliases, err := scanMaps(rows)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list aliases")
-		return
-	}
-
-	// Fetch alias_users with user info
-	if len(aliases) > 0 {
-		aliasIDs := make([]string, len(aliases))
-		for i, a := range aliases {
-			aliasIDs[i] = a["id"].(string)
-		}
-
-		userRows, err := h.DB.Query(r.Context(),
-			`SELECT au.alias_id, au.user_id, au.can_send_as, au.is_default, u.name, u.email
-			 FROM alias_users au
-			 JOIN users u ON u.id = au.user_id
-			 WHERE au.alias_id = ANY($1)
-			 ORDER BY u.name`, aliasIDs)
-		if err == nil {
-			defer userRows.Close()
-			aliasUsers := map[string][]map[string]interface{}{}
-			for userRows.Next() {
-				var aliasID, userID, userName, userEmail string
-				var canSendAs, isDefault bool
-				if userRows.Scan(&aliasID, &userID, &canSendAs, &isDefault, &userName, &userEmail) == nil {
-					aliasUsers[aliasID] = append(aliasUsers[aliasID], map[string]interface{}{
-						"user_id": userID, "can_send_as": canSendAs,
-						"is_default": isDefault, "name": userName, "email": userEmail,
-					})
-				}
-			}
-			for _, a := range aliases {
-				id := a["id"].(string)
-				if users, ok := aliasUsers[id]; ok {
-					a["users"] = users
-				} else {
-					a["users"] = []map[string]interface{}{}
-				}
-			}
-		}
 	}
 
 	writeJSON(w, http.StatusOK, aliases)
@@ -99,26 +46,10 @@ func (h *AliasHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var aliasID string
-	err := h.DB.QueryRow(r.Context(),
-		`INSERT INTO aliases (org_id, domain_id, address, name)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (org_id, address) DO UPDATE
-		   SET deleted_at = NULL, name = EXCLUDED.name
-		   WHERE aliases.deleted_at IS NOT NULL
-		 RETURNING id`,
-		claims.OrgID, req.DomainID, req.Address, req.Name,
-	).Scan(&aliasID)
+	aliasID, err := h.Store.CreateAlias(r.Context(), claims.OrgID, req.DomainID, req.Address, req.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create alias")
 		return
-	}
-
-	// Update discovered_addresses if this address was previously discovered
-	if _, err := h.DB.Exec(r.Context(),
-		`UPDATE discovered_addresses SET type = 'alias', alias_id = $1 WHERE domain_id = $2 AND address = $3`,
-		aliasID, req.DomainID, req.Address); err != nil {
-		slog.Error("aliases: failed to update discovered address", "error", err)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{
@@ -142,10 +73,8 @@ func (h *AliasHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tag, err := h.DB.Exec(r.Context(),
-		`UPDATE aliases SET name = $1 WHERE id = $2 AND org_id = $3`,
-		req.Name, aliasID, claims.OrgID)
-	if err != nil || tag.RowsAffected() == 0 {
+	n, err := h.Store.UpdateAlias(r.Context(), aliasID, claims.OrgID, req.Name)
+	if err != nil || n == 0 {
 		writeError(w, http.StatusNotFound, "alias not found")
 		return
 	}
@@ -157,10 +86,8 @@ func (h *AliasHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	aliasID := chi.URLParam(r, "id")
-	tag, err := h.DB.Exec(r.Context(),
-		`UPDATE aliases SET deleted_at = now() WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL`,
-		aliasID, claims.OrgID)
-	if err != nil || tag.RowsAffected() == 0 {
+	n, err := h.Store.DeleteAlias(r.Context(), aliasID, claims.OrgID)
+	if err != nil || n == 0 {
 		writeError(w, http.StatusNotFound, "alias not found")
 		return
 	}
@@ -182,29 +109,20 @@ func (h *AliasHandler) AddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify alias belongs to org
-	var count int
-	h.DB.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM aliases WHERE id = $1 AND org_id = $2`,
-		aliasID, claims.OrgID).Scan(&count)
+	count, _ := h.Store.CheckAliasOrg(r.Context(), aliasID, claims.OrgID)
 	if count == 0 {
 		writeError(w, http.StatusNotFound, "alias not found")
 		return
 	}
 
 	// Verify target user belongs to the same org
-	var targetOrgID string
-	if err := h.DB.QueryRow(r.Context(),
-		"SELECT org_id FROM users WHERE id = $1", req.UserID,
-	).Scan(&targetOrgID); err != nil || targetOrgID != claims.OrgID {
+	sameOrg, err := h.Store.CheckUserOrg(r.Context(), req.UserID, claims.OrgID)
+	if err != nil || !sameOrg {
 		writeError(w, http.StatusBadRequest, "user not found in this organization")
 		return
 	}
 
-	_, err := h.DB.Exec(r.Context(),
-		`INSERT INTO alias_users (alias_id, user_id, can_send_as)
-		 VALUES ($1, $2, $3) ON CONFLICT (alias_id, user_id) DO UPDATE SET can_send_as = $3`,
-		aliasID, req.UserID, req.CanSendAs)
-	if err != nil {
+	if err := h.Store.AddAliasUser(r.Context(), aliasID, claims.OrgID, req.UserID, req.CanSendAs); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add user to alias")
 		return
 	}
@@ -219,20 +137,13 @@ func (h *AliasHandler) RemoveUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userId")
 
 	// Verify alias belongs to org
-	var count int
-	h.DB.QueryRow(r.Context(),
-		`SELECT COUNT(*) FROM aliases WHERE id = $1 AND org_id = $2`,
-		aliasID, claims.OrgID).Scan(&count)
+	count, _ := h.Store.CheckAliasOrg(r.Context(), aliasID, claims.OrgID)
 	if count == 0 {
 		writeError(w, http.StatusNotFound, "alias not found")
 		return
 	}
 
-	if _, err := h.DB.Exec(r.Context(),
-		`DELETE FROM alias_users WHERE alias_id = $1 AND user_id = $2`,
-		aliasID, userID); err != nil {
-		slog.Error("aliases: failed to remove alias user", "error", err)
-	}
+	h.Store.RemoveAliasUser(r.Context(), aliasID, userID)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -241,36 +152,13 @@ func (h *AliasHandler) SetDefault(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	aliasID := chi.URLParam(r, "id")
 
-	// Get the domain_id for this alias and verify org ownership
-	var domainID string
-	err := h.DB.QueryRow(r.Context(),
-		`SELECT a.domain_id FROM aliases a WHERE a.id = $1 AND a.org_id = $2`,
-		aliasID, claims.OrgID).Scan(&domainID)
+	err := h.Store.SetDefaultAlias(r.Context(), aliasID, claims.UserID, claims.OrgID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "alias not found")
-		return
-	}
-
-	// Clear is_default for all of this user's aliases on this domain
-	if _, err := h.DB.Exec(r.Context(),
-		`UPDATE alias_users SET is_default = false
-		 WHERE user_id = $1 AND alias_id IN (
-		   SELECT id FROM aliases WHERE domain_id = $2 AND org_id = $3
-		 )`,
-		claims.UserID, domainID, claims.OrgID); err != nil {
-		slog.Error("aliases: failed to clear default alias", "error", err)
-	}
-
-	// Set this alias as default (only if user already has access)
-	tag, err := h.DB.Exec(r.Context(),
-		`UPDATE alias_users SET is_default = true WHERE alias_id = $1 AND user_id = $2`,
-		aliasID, claims.UserID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to set default alias")
-		return
-	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusForbidden, "you do not have access to this alias")
+		if err.Error() == "user does not have access to this alias" {
+			writeError(w, http.StatusForbidden, "you do not have access to this alias")
+		} else {
+			writeError(w, http.StatusNotFound, "alias not found")
+		}
 		return
 	}
 
@@ -280,18 +168,7 @@ func (h *AliasHandler) SetDefault(w http.ResponseWriter, r *http.Request) {
 func (h *AliasHandler) DiscoveredAddresses(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	rows, err := h.DB.Query(r.Context(),
-		`SELECT da.id, da.domain_id, da.address, da.local_part, da.type, da.email_count
-		 FROM discovered_addresses da
-		 JOIN domains d ON d.id = da.domain_id
-		 WHERE d.org_id = $1 AND da.type = 'unclaimed'
-		 ORDER BY da.email_count DESC`,
-		claims.OrgID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to fetch addresses")
-		return
-	}
-	addresses, err := scanMaps(rows)
+	addresses, err := h.Store.ListDiscoveredAddresses(r.Context(), claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch addresses")
 		return

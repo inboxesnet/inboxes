@@ -35,6 +35,8 @@ const (
 	DomainDisconnected = "domain.disconnected"
 	DomainReconnected  = "domain.reconnected"
 	DomainDNSDegraded  = "domain.dns_degraded"
+	DomainNotFound     = "domain.not_found"
+	DomainDiscovered   = "domain.discovered"
 )
 
 type Event struct {
@@ -66,15 +68,18 @@ func (b *Bus) Publish(ctx context.Context, e Event) (int64, error) {
 
 	// Insert into events table (durable log for catchup)
 	var id int64
-	dbErr := b.pool.QueryRow(ctx,
-		`INSERT INTO events (event_type, org_id, user_id, domain_id, thread_id, payload)
-		 VALUES ($1, $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, $6)
-		 RETURNING id`,
-		e.EventType, e.OrgID, e.UserID, e.DomainID, e.ThreadID, payloadJSON,
-	).Scan(&id)
-	if dbErr != nil {
-		slog.Warn("event: postgres insert failed, continuing with redis",
-			"error", dbErr, "event_type", e.EventType)
+	var dbErr error
+	if b.pool != nil {
+		dbErr = b.pool.QueryRow(ctx,
+			`INSERT INTO events (event_type, org_id, user_id, domain_id, thread_id, payload)
+			 VALUES ($1, $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, $6)
+			 RETURNING id`,
+			e.EventType, e.OrgID, e.UserID, e.DomainID, e.ThreadID, payloadJSON,
+		).Scan(&id)
+		if dbErr != nil {
+			slog.Warn("event: postgres insert failed, continuing with redis",
+				"error", dbErr, "event_type", e.EventType)
+		}
 	}
 
 	// Publish to Redis for live delivery (independent of Postgres)
@@ -91,8 +96,10 @@ func (b *Bus) Publish(ctx context.Context, e Event) (int64, error) {
 		slog.Error("event: failed to marshal event for redis", "error", marshalErr, "event_type", e.EventType)
 		return id, nil
 	}
-	if err := b.rdb.Publish(ctx, "ws:events", msg).Err(); err != nil {
-		slog.Warn("event: redis publish failed", "error", err, "event_type", e.EventType)
+	if b.rdb != nil {
+		if err := b.rdb.Publish(ctx, "ws:events", msg).Err(); err != nil {
+			slog.Warn("event: redis publish failed", "error", err, "event_type", e.EventType)
+		}
 	}
 
 	return id, dbErr

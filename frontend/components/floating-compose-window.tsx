@@ -22,6 +22,7 @@ import {
   Paperclip,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 interface AttachmentMeta {
   id: string;
@@ -42,7 +43,7 @@ export function FloatingComposeWindow() {
   const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose } =
     useEmailWindow();
   const { activeDomain } = useDomains();
-  const { stripTrackingParams } = usePreferences();
+  const { stripTrackingParams, warnNoSubject } = usePreferences();
 
   const [fromAddress, setFromAddress] = useState("");
   const [to, setTo] = useState<string[]>([]);
@@ -55,11 +56,13 @@ export function FloatingComposeWindow() {
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [error, setError] = useState("");
+  const [subjectWarning, setSubjectWarning] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
   const draftIdRef = useRef<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"" | "saving" | "saved" | "error">("");
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dirtyRef = useRef(false);
@@ -108,6 +111,9 @@ export function FloatingComposeWindow() {
         (composeData.bccAddresses?.length || 0) > 0
       );
       setError("");
+      setSubjectWarning(false);
+      setSending(false);
+      sendingRef.current = false;
       setSaveStatus("");
       dirtyRef.current = false;
       // Restore attachments from draft
@@ -157,11 +163,13 @@ export function FloatingComposeWindow() {
       draftIdRef.current = null;
       setShowCcBcc(false);
       setError("");
+      setSubjectWarning(false);
       setSaveStatus("");
       setAliases([]);
       setAttachments([]);
       setUploading(false);
       dirtyRef.current = false;
+      setSending(false);
       sendingRef.current = false;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     }
@@ -267,7 +275,6 @@ export function FloatingComposeWindow() {
 
   // Discard — delete draft and close without saving
   const handleDiscard = useCallback(async () => {
-    if (!confirm("Discard this draft?")) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     if (draftId) {
       try {
@@ -309,10 +316,17 @@ export function FloatingComposeWindow() {
     e.preventDefault();
     setError("");
 
-    if (to.length === 0 || !subject) {
-      setError("To and Subject are required");
+    if (to.length === 0) {
+      setError("To is required");
       return;
     }
+
+    if (!subject && warnNoSubject && !subjectWarning) {
+      setSubjectWarning(true);
+      setError("No subject — click Send again to send anyway");
+      return;
+    }
+    setSubjectWarning(false);
 
     const totalRecipients = to.length + cc.length + bcc.length;
     if (totalRecipients > 50) {
@@ -541,7 +555,7 @@ export function FloatingComposeWindow() {
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">Subj</label>
             <Input
               value={subject}
-              onChange={(e) => { setSubject(e.target.value); scheduleSave(); }}
+              onChange={(e) => { setSubject(e.target.value); setSubjectWarning(false); scheduleSave(); }}
               placeholder="Subject"
               maxLength={500}
               className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
@@ -696,7 +710,7 @@ export function FloatingComposeWindow() {
             <label className="text-xs text-muted-foreground w-10 text-right shrink-0">Subj</label>
             <Input
               value={subject}
-              onChange={(e) => { setSubject(e.target.value); scheduleSave(); }}
+              onChange={(e) => { setSubject(e.target.value); setSubjectWarning(false); scheduleSave(); }}
               placeholder="Subject"
               maxLength={500}
               className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
@@ -738,7 +752,7 @@ export function FloatingComposeWindow() {
                 </button>
                 <button
                   type="button"
-                  onClick={handleDiscard}
+                  onClick={() => setShowDiscardConfirm(true)}
                   className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive transition-colors mx-0.5"
                   title="Discard draft"
                 >
@@ -767,6 +781,15 @@ export function FloatingComposeWindow() {
       {fileInput}
       {mobileCompose}
       {desktopCompose}
+      <ConfirmDialog
+        open={showDiscardConfirm}
+        onOpenChange={setShowDiscardConfirm}
+        title="Discard draft"
+        description="Discard this draft? This cannot be undone."
+        confirmLabel="Discard"
+        destructive
+        onConfirm={handleDiscard}
+      />
     </>
   );
 }

@@ -2,18 +2,18 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
-	"github.com/inboxes/backend/internal/util"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/inboxes/backend/internal/store"
 )
 
 type DomainHandler struct {
-	DB        *pgxpool.Pool
+	Store     store.Store
 	ResendSvc *service.ResendService
 	EncSvc    *service.EncryptionService
 	PublicURL string
@@ -22,15 +22,7 @@ type DomainHandler struct {
 func (h *DomainHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	rows, err := h.DB.Query(r.Context(),
-		`SELECT id, org_id, domain, resend_domain_id, status,
-		        display_order, dns_records, created_at
-		 FROM domains WHERE org_id = $1 AND hidden = false ORDER BY display_order, created_at`, claims.OrgID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list domains")
-		return
-	}
-	domains, err := scanMaps(rows)
+	domains, err := h.Store.ListDomains(r.Context(), claims.OrgID, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list domains")
 		return
@@ -41,15 +33,7 @@ func (h *DomainHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *DomainHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	rows, err := h.DB.Query(r.Context(),
-		`SELECT id, org_id, domain, resend_domain_id, status,
-		        display_order, dns_records, hidden, created_at
-		 FROM domains WHERE org_id = $1 ORDER BY display_order, created_at`, claims.OrgID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list domains")
-		return
-	}
-	domains, err := scanMaps(rows)
+	domains, err := h.Store.ListDomains(r.Context(), claims.OrgID, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list domains")
 		return
@@ -96,12 +80,7 @@ func (h *DomainHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var domainID string
-	err = h.DB.QueryRow(r.Context(),
-		`INSERT INTO domains (org_id, domain, resend_domain_id, status, dns_records)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		claims.OrgID, req.Domain, resendDomain.ID, "pending", resendDomain.Records,
-	).Scan(&domainID)
+	domainID, err := h.Store.InsertDomain(r.Context(), claims.OrgID, req.Domain, resendDomain.ID, "pending", resendDomain.Records)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save domain")
 		return
@@ -122,10 +101,7 @@ func (h *DomainHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	domainID := chi.URLParam(r, "id")
 
-	var resendDomainID string
-	err := h.DB.QueryRow(r.Context(),
-		`SELECT resend_domain_id FROM domains WHERE id = $1 AND org_id = $2`,
-		domainID, claims.OrgID).Scan(&resendDomainID)
+	resendDomainID, err := h.Store.GetResendDomainID(r.Context(), domainID, claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "domain not found")
 		return
@@ -149,9 +125,7 @@ func (h *DomainHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update local record
-	if _, err := h.DB.Exec(r.Context(),
-		`UPDATE domains SET status = $1, dns_records = $2, updated_at = now() WHERE id = $3`,
-		result.Status, result.Records, domainID); err != nil {
+	if err := h.Store.UpdateDomainStatus(r.Context(), domainID, result.Status, result.Records); err != nil {
 		slog.Error("domain: update after verify failed", "domain_id", domainID, "error", err)
 	}
 
@@ -177,25 +151,12 @@ func (h *DomainHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbCtx, dbCancel := util.DBCtx(r.Context())
-	defer dbCancel()
-
-	tx, err := h.DB.Begin(dbCtx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
-	}
-	defer tx.Rollback(dbCtx)
-
-	for _, item := range req.Order {
-		if _, err := tx.Exec(dbCtx,
-			`UPDATE domains SET display_order = $1, updated_at = now() WHERE id = $2 AND org_id = $3`,
-			item.Order, item.ID, claims.OrgID); err != nil {
-			slog.Error("domain: reorder update failed", "domain_id", item.ID, "error", err)
-		}
+	order := make([]store.DomainOrder, len(req.Order))
+	for i, item := range req.Order {
+		order[i] = store.DomainOrder{ID: item.ID, Order: item.Order}
 	}
 
-	if err := tx.Commit(dbCtx); err != nil {
+	if err := h.Store.ReorderDomains(r.Context(), claims.OrgID, order); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save order")
 		return
 	}
@@ -206,27 +167,10 @@ func (h *DomainHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 func (h *DomainHandler) UnreadCounts(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	rows, err := h.DB.Query(r.Context(),
-		`SELECT t.domain_id, COALESCE(SUM(t.unread_count), 0)
-		 FROM threads t
-		 JOIN thread_labels tl ON tl.thread_id = t.id
-		 JOIN domains d ON d.id = t.domain_id
-		 WHERE d.org_id = $1 AND t.user_id = $2 AND tl.label = 'inbox' AND t.deleted_at IS NULL
-		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))
-		 GROUP BY t.domain_id`, claims.OrgID, claims.UserID)
+	counts, err := h.Store.GetUnreadCounts(r.Context(), claims.OrgID, claims.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get unread counts")
 		return
-	}
-	defer rows.Close()
-
-	counts := map[string]int{}
-	for rows.Next() {
-		var domainID string
-		var count int
-		if rows.Scan(&domainID, &count) == nil {
-			counts[domainID] = count
-		}
 	}
 
 	writeJSON(w, http.StatusOK, counts)
@@ -247,35 +191,8 @@ func (h *DomainHandler) UpdateVisibility(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	dbCtxV, dbCancelV := util.DBCtx(r.Context())
-	defer dbCancelV()
-
-	tx, err := h.DB.Begin(dbCtxV)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
-	}
-	defer tx.Rollback(dbCtxV)
-
-	_, err = tx.Exec(dbCtxV,
-		`UPDATE domains SET hidden = true, updated_at = now() WHERE org_id = $1`, claims.OrgID)
-	if err != nil {
+	if err := h.Store.UpdateDomainVisibility(r.Context(), claims.OrgID, req.Visible); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update domains")
-		return
-	}
-
-	if len(req.Visible) > 0 {
-		_, err = tx.Exec(dbCtxV,
-			`UPDATE domains SET hidden = false, updated_at = now() WHERE org_id = $1 AND id = ANY($2)`,
-			claims.OrgID, req.Visible)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to update domains")
-			return
-		}
-	}
-
-	if err := tx.Commit(dbCtxV); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save visibility")
 		return
 	}
 
@@ -305,50 +222,18 @@ func (h *DomainHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build set of Resend domain names for disconnect detection
-	resendDomainNames := make(map[string]bool, len(resendResp.Data))
-	for _, rd := range resendResp.Data {
-		resendDomainNames[rd.Name] = true
-		if _, err := h.DB.Exec(r.Context(),
-			`INSERT INTO domains (org_id, domain, resend_domain_id, status, hidden)
-			 VALUES ($1, $2, $3, $4, true)
-			 ON CONFLICT (domain) WHERE status NOT IN ('deleted') DO UPDATE SET status = EXCLUDED.status, updated_at = now()`,
-			claims.OrgID, rd.Name, rd.ID, rd.Status); err != nil {
-			slog.Error("domain: sync upsert failed", "domain", rd.Name, "error", err)
-		}
+	// Build store-compatible domain info slice
+	resendDomains := make([]store.ResendDomainInfo, len(resendResp.Data))
+	for i, rd := range resendResp.Data {
+		resendDomains[i] = store.ResendDomainInfo{ID: rd.ID, Name: rd.Name, Status: rd.Status}
 	}
 
-	// Mark local domains not in Resend response as disconnected
-	localRows, err := h.DB.Query(r.Context(),
-		`SELECT id, domain, status FROM domains WHERE org_id = $1`, claims.OrgID)
-	if err == nil {
-		defer localRows.Close()
-		for localRows.Next() {
-			var localID, localDomain, localStatus string
-			if localRows.Scan(&localID, &localDomain, &localStatus) == nil {
-				if !resendDomainNames[localDomain] && localStatus != "disconnected" {
-					if _, err := h.DB.Exec(r.Context(),
-						`UPDATE domains SET status = 'disconnected', updated_at = now() WHERE id = $1`,
-						localID); err != nil {
-						slog.Error("domain: disconnect update failed", "domain_id", localID, "error", err)
-					}
-					slog.Info("domain: marked as disconnected", "domain_id", localID, "domain", localDomain)
-				}
-			}
-		}
-		localRows.Close()
+	if err := h.Store.SyncDomains(r.Context(), claims.OrgID, resendDomains); err != nil {
+		slog.Error("domain: sync failed", "org_id", claims.OrgID, "error", err)
 	}
 
 	// Return full domain list (including hidden) so frontend can update without a second fetch
-	rows, err := h.DB.Query(r.Context(),
-		`SELECT id, org_id, domain, resend_domain_id, status,
-		        display_order, dns_records, hidden, created_at
-		 FROM domains WHERE org_id = $1 ORDER BY display_order, created_at`, claims.OrgID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list domains after sync")
-		return
-	}
-	domains, err := scanMaps(rows)
+	domains, err := h.Store.ListDomains(r.Context(), claims.OrgID, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list domains after sync")
 		return
@@ -362,41 +247,43 @@ func (h *DomainHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	domainID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	tx, err := h.DB.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete domain")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	tag, err := tx.Exec(ctx,
-		`UPDATE domains SET status = 'deleted', hidden = true, updated_at = now() WHERE id = $1 AND org_id = $2`,
-		domainID, claims.OrgID)
-	if err != nil || tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "domain not found")
-		return
-	}
-
-	// Cascade soft-delete to child entities
-	if _, err := tx.Exec(ctx, `UPDATE aliases SET deleted_at = now() WHERE domain_id = $1 AND deleted_at IS NULL`, domainID); err != nil {
-		slog.Error("domain: cascade delete aliases failed", "domain_id", domainID, "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM alias_users WHERE alias_id IN (SELECT id FROM aliases WHERE domain_id = $1)`, domainID); err != nil {
-		slog.Error("domain: cascade delete alias_users failed", "domain_id", domainID, "error", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE threads SET deleted_at = now(), updated_at = now() WHERE domain_id = $1 AND deleted_at IS NULL`, domainID); err != nil {
-		slog.Error("domain: cascade delete threads failed", "domain_id", domainID, "error", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM discovered_addresses WHERE domain_id = $1`, domainID); err != nil {
-		slog.Error("domain: cascade delete discovered_addresses failed", "domain_id", domainID, "error", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete domain")
+	txErr := h.Store.WithTx(ctx, func(tx store.Store) error {
+		rows, err := tx.SoftDeleteDomain(ctx, domainID, claims.OrgID)
+		if err != nil || rows == 0 {
+			return fmt.Errorf("domain not found")
+		}
+		return tx.CascadeDeleteDomain(ctx, domainID)
+	})
+	if txErr != nil {
+		if txErr.Error() == "domain not found" {
+			writeError(w, http.StatusNotFound, "domain not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to delete domain")
+		}
 		return
 	}
 
 	slog.Info("domain: soft-deleted with cascade", "domain_id", domainID, "admin", claims.UserID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *DomainHandler) DiscoveredDomains(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	domains, err := h.Store.ListDiscoveredDomains(r.Context(), claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list discovered domains")
+		return
+	}
+	writeJSON(w, http.StatusOK, domains)
+}
+
+func (h *DomainHandler) DismissDiscoveredDomain(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	id := chi.URLParam(r, "id")
+	if err := h.Store.DismissDiscoveredDomain(r.Context(), id, claims.OrgID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to dismiss")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -437,14 +324,7 @@ func (h *DomainHandler) ReregisterWebhook(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	_, err = h.DB.Exec(ctx,
-		`UPDATE orgs SET resend_webhook_id = $1,
-		 resend_webhook_secret = NULL,
-		 resend_webhook_secret_encrypted = $2, resend_webhook_secret_iv = $3, resend_webhook_secret_tag = $4,
-		 updated_at = now() WHERE id = $5`,
-		webhookResp.ID, encSecret, encIV, encTag, claims.OrgID,
-	)
-	if err != nil {
+	if err := h.Store.UpdateWebhookConfig(ctx, claims.OrgID, webhookResp.ID, encSecret, encIV, encTag); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store webhook config")
 		return
 	}

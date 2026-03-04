@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { RecipientInput } from "../recipient-input";
 
 // Mock the api module
@@ -107,5 +107,81 @@ describe("RecipientInput", () => {
     // The component calls setInputValue("") after adding
     // We verify the input value is cleared
     expect(input.value).toBe("");
+  });
+
+  it("fetches autocomplete suggestions after 2 chars", async () => {
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.get).mockResolvedValue([
+      { email: "alice@test.com", name: "Alice", count: 5 },
+    ]);
+
+    vi.useFakeTimers();
+    render(<RecipientInput value={[]} onChange={onChange} />);
+    const input = screen.getByRole("combobox");
+
+    // Type 1 char — should NOT fetch
+    fireEvent.change(input, { target: { value: "a" } });
+    await act(async () => { vi.advanceTimersByTime(250); });
+    expect(api.get).not.toHaveBeenCalled();
+
+    // Type 2 chars — should fetch after debounce
+    fireEvent.change(input, { target: { value: "al" } });
+    await act(async () => { vi.advanceTimersByTime(250); });
+    expect(api.get).toHaveBeenCalledWith(
+      expect.stringContaining("/api/contacts/suggest?q=al")
+    );
+
+    vi.useRealTimers();
+  });
+
+  it("navigates suggestions with arrow keys and selects with Enter", async () => {
+    const { api } = await import("@/lib/api");
+    vi.mocked(api.get).mockResolvedValue([
+      { email: "alice@test.com", name: "Alice", count: 5 },
+      { email: "alex@test.com", name: "Alex", count: 3 },
+    ]);
+
+    vi.useFakeTimers();
+    render(<RecipientInput value={[]} onChange={onChange} />);
+    const input = screen.getByRole("combobox");
+
+    // Type to trigger suggestions
+    fireEvent.change(input, { target: { value: "al" } });
+    // Advance past the 200ms debounce and flush all pending promises
+    await act(async () => { vi.advanceTimersByTime(250); });
+    // Flush microtasks so the resolved promise updates state
+    await act(async () => { vi.advanceTimersByTime(0); });
+
+    // Suggestions should be visible now
+    expect(screen.getByText("alice@test.com")).toBeInTheDocument();
+
+    // Arrow down to first suggestion (index 0)
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    // Arrow down to second suggestion (index 1)
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    // Arrow up back to first (index 0)
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    // Enter to select first suggestion
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onChange).toHaveBeenCalledWith(["alice@test.com"]);
+    vi.useRealTimers();
+  });
+
+  it("shows toast error for invalid email address", async () => {
+    const { toast } = await import("sonner");
+    render(<RecipientInput value={[]} onChange={onChange} />);
+    const input = screen.getByRole("combobox");
+
+    fireEvent.change(input, { target: { value: "not-an-email" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // Invalid email without @ should not trigger addRecipient (no @ in value)
+    // Try with @ but still invalid
+    fireEvent.change(input, { target: { value: "bad@" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("Invalid email"));
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

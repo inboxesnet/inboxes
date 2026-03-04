@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import type { Thread, Email } from "@/lib/types";
 
 // Mock all external dependencies
@@ -90,6 +90,10 @@ vi.mock("@/lib/query-keys", () => ({
       unreadCounts: () => ["domains", "unreadCounts"],
     },
   },
+}));
+
+vi.mock("@/contexts/preferences-context", () => ({
+  usePreferences: () => ({ stripTrackingParams: true }),
 }));
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -236,5 +240,93 @@ describe("ThreadView", () => {
     // "received" email status should show as badge text or similar
     // The exact rendering depends on the component, but it should not error
     expect(screen.getByText("Test Subject")).toBeInTheDocument();
+  });
+
+  it("collapsed messages expand on click", () => {
+    // Thread with 2 emails — first is collapsed, last is expanded
+    mockThreadData = {
+      ...mockThread,
+      message_count: 2,
+      emails: [
+        {
+          ...mockThread.emails[0],
+          id: "e1",
+          from_address: "alice@test.com",
+          body_plain: "First message",
+        },
+        {
+          ...mockThread.emails[0],
+          id: "e2",
+          from_address: "bob@test.com",
+          body_plain: "Second message",
+        },
+      ],
+    };
+    render(<ThreadView threadId="t1" domainId="d1" />);
+
+    // First email should be collapsed — look for the expand button
+    const expandBtn = screen.getByLabelText(/Expand email from Alice/i);
+    expect(expandBtn).toBeInTheDocument();
+    expect(expandBtn.getAttribute("aria-expanded")).toBe("false");
+
+    // Click to expand
+    fireEvent.click(expandBtn);
+
+    // After expanding, it should show aria-expanded="true" (collapse button)
+    const collapseBtn = screen.getByLabelText(/Collapse email from Alice/i);
+    expect(collapseBtn.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("BCC line shown on outbound emails only", () => {
+    mockThreadData = {
+      ...mockThread,
+      emails: [
+        {
+          ...mockThread.emails[0],
+          direction: "outbound",
+          from_address: "me@test.com",
+          bcc_addresses: ["secret@test.com"],
+          status: "sent",
+        },
+      ],
+    };
+    render(<ThreadView threadId="t1" domainId="d1" />);
+
+    // Outbound email with BCC should show the BCC line
+    expect(screen.getByText(/Bcc:/)).toBeInTheDocument();
+    expect(screen.getByText(/secret@test.com/)).toBeInTheDocument();
+  });
+
+  it("shows attachment chips when email has attachments", () => {
+    mockThreadData = {
+      ...mockThread,
+      emails: [
+        {
+          ...mockThread.emails[0],
+          attachments: [
+            {
+              id: "att1",
+              filename: "report.pdf",
+              content_type: "application/pdf",
+              size: 51200,
+              url: "https://example.com/report.pdf",
+            },
+            {
+              id: "att2",
+              filename: "photo.png",
+              content_type: "image/png",
+              size: 102400,
+              url: "https://example.com/photo.png",
+            },
+          ],
+        },
+      ],
+    };
+    render(<ThreadView threadId="t1" domainId="d1" />);
+    // The component renders attachment filename and size in KB
+    expect(screen.getByText("report.pdf")).toBeInTheDocument();
+    expect(screen.getByText("(50KB)")).toBeInTheDocument();
+    expect(screen.getByText("photo.png")).toBeInTheDocument();
+    expect(screen.getByText("(100KB)")).toBeInTheDocument();
   });
 });

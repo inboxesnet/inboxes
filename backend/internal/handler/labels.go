@@ -8,13 +8,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/middleware"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type LabelHandler struct {
-	DB *pgxpool.Pool
+	Store store.Store
 }
 
 var systemLabels = map[string]bool{
@@ -30,14 +30,7 @@ func isReservedLabel(label string) bool {
 func (h *LabelHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
-	rows, err := h.DB.Query(r.Context(),
-		`SELECT id, name, created_at FROM org_labels WHERE org_id = $1 ORDER BY name`,
-		claims.OrgID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list labels")
-		return
-	}
-	labels, err := scanMaps(rows)
+	labels, err := h.Store.ListOrgLabels(r.Context(), claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list labels")
 		return
@@ -64,11 +57,7 @@ func (h *LabelHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var id string
-	err := h.DB.QueryRow(r.Context(),
-		`INSERT INTO org_labels (org_id, name) VALUES ($1, $2)
-		 ON CONFLICT (org_id, name) DO NOTHING RETURNING id`,
-		claims.OrgID, req.Name).Scan(&id)
+	id, err := h.Store.CreateOrgLabel(r.Context(), claims.OrgID, req.Name)
 	if err != nil {
 		writeError(w, http.StatusConflict, "label already exists")
 		return
@@ -97,41 +86,16 @@ func (h *LabelHandler) Rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	tx, err := h.DB.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to rename label")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	// Lock the org_label row to prevent concurrent renames
-	var oldName string
-	if err := tx.QueryRow(ctx,
-		`SELECT name FROM org_labels WHERE id = $1 AND org_id = $2 FOR UPDATE`,
-		labelID, claims.OrgID).Scan(&oldName); err != nil {
+	var renameErr error
+	err := h.Store.WithTx(r.Context(), func(tx store.Store) error {
+		_, renameErr = tx.RenameOrgLabel(r.Context(), labelID, claims.OrgID, req.Name)
+		return renameErr
+	})
+	if renameErr != nil {
 		writeError(w, http.StatusNotFound, "label not found")
 		return
 	}
-
-	// Update org_labels
-	if _, err := tx.Exec(ctx,
-		`UPDATE org_labels SET name = $1 WHERE id = $2 AND org_id = $3`,
-		req.Name, labelID, claims.OrgID); err != nil {
-		slog.Error("labels: rename org_labels failed", "label_id", labelID, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to rename label")
-		return
-	}
-
-	// Rename in thread_labels
-	if _, err := tx.Exec(ctx,
-		`UPDATE thread_labels SET label = $1 WHERE org_id = $2 AND label = $3`,
-		req.Name, claims.OrgID, oldName); err != nil {
-		slog.Error("labels: rename thread_labels failed", "old_name", oldName, "new_name", req.Name, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to rename label")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to rename label")
 		return
 	}
@@ -143,31 +107,16 @@ func (h *LabelHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	labelID := chi.URLParam(r, "id")
 
-	ctx := r.Context()
-	tx, err := h.DB.Begin(ctx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete label")
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	var labelName string
-	if err := tx.QueryRow(ctx,
-		`DELETE FROM org_labels WHERE id = $1 AND org_id = $2 RETURNING name`,
-		labelID, claims.OrgID).Scan(&labelName); err != nil {
+	var deleteErr error
+	err := h.Store.WithTx(r.Context(), func(tx store.Store) error {
+		_, deleteErr = tx.DeleteOrgLabel(r.Context(), labelID, claims.OrgID)
+		return deleteErr
+	})
+	if deleteErr != nil {
 		writeError(w, http.StatusNotFound, "label not found")
 		return
 	}
-
-	// Remove from all threads
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM thread_labels WHERE org_id = $1 AND label = $2`,
-		claims.OrgID, labelName); err != nil {
-		slog.Error("labels: delete thread_labels failed", "label", labelName, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to delete label")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete label")
 		return
 	}

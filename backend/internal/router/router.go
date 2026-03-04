@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -25,6 +27,7 @@ type Config struct {
 	StripePriceID       string
 	StripeWebhookSecret string
 	EventCatchupMaxAge  time.Duration
+	AppCtx              context.Context
 }
 
 func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService, resendSvc *service.ResendService, bus *event.Bus, wsHub *ws.Hub, limiterMap *queue.OrgLimiterMap, cfg Config) *chi.Mux {
@@ -42,25 +45,26 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	r.Use(middleware.ValidateContentType)
 	r.Use(chiMiddleware.Compress(5))
 
-	auth := &handler.AuthHandler{DB: db, RDB: rdb, Secret: secret, AppURL: appURL, ResendSvc: resendSvc, StripeKey: stripeKey}
-	setup := &handler.SetupHandler{DB: db, EncSvc: encSvc, ResendSvc: resendSvc, Secret: secret, AppURL: appURL, StripeKey: stripeKey}
-	threads := &handler.ThreadHandler{DB: db, Bus: bus}
-	emails := &handler.EmailHandler{DB: db, ResendSvc: resendSvc, Bus: bus, RDB: rdb}
-	webhooks := &handler.WebhookHandler{DB: db, Bus: bus, ResendSvc: resendSvc, RDB: rdb, EncSvc: encSvc}
-	onboarding := &handler.OnboardingHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus, PublicURL: cfg.PublicURL}
-	users := &handler.UserHandler{DB: db, RDB: rdb, Secret: secret, ResendSvc: resendSvc, AppURL: appURL}
-	aliases := &handler.AliasHandler{DB: db}
-	domains := &handler.DomainHandler{DB: db, ResendSvc: resendSvc, EncSvc: encSvc, PublicURL: cfg.PublicURL}
-	contacts := &handler.ContactHandler{DB: db}
-	attachments := &handler.AttachmentHandler{DB: db}
-	drafts := &handler.DraftHandler{DB: db, ResendSvc: resendSvc, Bus: bus, RDB: rdb}
-	orgs := &handler.OrgHandler{DB: db, RDB: rdb, EncSvc: encSvc, ResendSvc: resendSvc, Bus: bus, StripeKey: stripeKey, LimiterMap: limiterMap}
-	labels := &handler.LabelHandler{DB: db}
-	syncH := &handler.SyncHandler{DB: db, RDB: rdb}
-	events := &handler.EventHandler{DB: db, CatchupMaxAge: cfg.EventCatchupMaxAge}
-	cron := &handler.CronHandler{DB: db, ResendSvc: resendSvc}
+	st := store.NewPgStore(db)
+	auth := &handler.AuthHandler{Store: st, RDB: rdb, Secret: secret, AppURL: appURL, ResendSvc: resendSvc, StripeKey: stripeKey}
+	setup := &handler.SetupHandler{Store: st, EncSvc: encSvc, ResendSvc: resendSvc, Secret: secret, AppURL: appURL, StripeKey: stripeKey}
+	threads := &handler.ThreadHandler{Store: st, Bus: bus}
+	emails := &handler.EmailHandler{Store: st, ResendSvc: resendSvc, Bus: bus, RDB: rdb}
+	webhooks := &handler.WebhookHandler{Store: st, Bus: bus, ResendSvc: resendSvc, RDB: rdb, EncSvc: encSvc, AppCtx: cfg.AppCtx}
+	onboarding := &handler.OnboardingHandler{Store: st, ResendSvc: resendSvc, EncSvc: encSvc, Bus: bus, PublicURL: cfg.PublicURL}
+	users := &handler.UserHandler{Store: st, RDB: rdb, Secret: secret, ResendSvc: resendSvc, AppURL: appURL}
+	aliases := &handler.AliasHandler{Store: st}
+	domains := &handler.DomainHandler{Store: st, ResendSvc: resendSvc, EncSvc: encSvc, PublicURL: cfg.PublicURL}
+	contacts := &handler.ContactHandler{Store: st}
+	attachments := &handler.AttachmentHandler{Store: st}
+	drafts := &handler.DraftHandler{Store: st, ResendSvc: resendSvc, Bus: bus, RDB: rdb}
+	orgs := &handler.OrgHandler{Store: st, RDB: rdb, EncSvc: encSvc, ResendSvc: resendSvc, Bus: bus, StripeKey: stripeKey, LimiterMap: limiterMap}
+	labels := &handler.LabelHandler{Store: st}
+	syncH := &handler.SyncHandler{Store: st, RDB: rdb}
+	events := &handler.EventHandler{Store: st, CatchupMaxAge: cfg.EventCatchupMaxAge}
+	cron := &handler.CronHandler{Store: st, ResendSvc: resendSvc}
 	billing := &handler.BillingHandler{
-		DB:                  db,
+		Store:               st,
 		Bus:                 bus,
 		StripeKey:           stripeKey,
 		StripePriceID:       cfg.StripePriceID,
@@ -225,6 +229,8 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.With(middleware.RequireAdmin).Patch("/api/domains/visibility", domains.UpdateVisibility)
 			r.Get("/api/domains/unread-counts", domains.UnreadCounts)
 			r.Post("/api/domains/sync", domains.Sync)
+			r.Get("/api/domains/discovered", domains.DiscoveredDomains)
+			r.Post("/api/domains/discovered/{id}/dismiss", domains.DismissDiscoveredDomain)
 
 			r.With(middleware.RequireAdmin).Get("/api/users", users.List)
 			r.With(middleware.RequireAdmin).Post("/api/users/invite", users.Invite)

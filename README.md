@@ -68,9 +68,9 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Caddy handles HTTPS automatically via Let's Encrypt. Visit `https://your.domain.com` to get started.
+This starts the backend, frontend, PostgreSQL, and Redis. You'll need a reverse proxy (Caddy, nginx, or a platform like Coolify) in front for HTTPS.
 
-See [Deployment Guide](docs/deployment.md) for Coolify setup, env var details, and troubleshooting.
+See [Deployment Guide](docs/deployment.md) for Coolify setup, reverse proxy options, env var details, and troubleshooting.
 
 ## Environment Variables
 
@@ -94,10 +94,10 @@ See [Deployment Guide](docs/deployment.md) for Coolify setup, env var details, a
 
 - **Backend:** Go + Chi router + pgx + Redis
 - **Frontend:** Next.js 15, React 19, Tailwind CSS, shadcn/ui
-- **Database:** PostgreSQL 16 (40 auto-managed migrations via goose)
+- **Database:** PostgreSQL 16 (auto-managed migrations via goose)
 - **Cache/PubSub:** Redis 7
 - **Reverse Proxy:** Caddy 2 (auto-HTTPS, production only)
-- **Background Workers:** 6 workers — email sync, send queue, trash collector, domain heartbeat, event pruner, status recovery
+- **Background Workers:** 9 workers — email sync, send queue, trash collector, domain heartbeat, event pruner, grace period, stripe event pruner, status recovery, inbox poller
 
 ## Self-Hosted vs Commercial
 
@@ -106,7 +106,6 @@ Inboxes runs in self-hosted mode by default. Setting `STRIPE_KEY` enables commer
 ## Documentation
 
 - [API Reference](docs/api.md) — all endpoints, auth, rate limits
-- [WebSocket Events](docs/websocket.md) — event types, payloads, filtering
 - [Self-Hosted Guide](docs/self-hosted.md) — mode differences, setup wizard
 - [Operations Guide](docs/operations.md) — workers, backup, monitoring
 - [Deployment Guide](docs/deployment.md) — Docker Compose, Coolify, env vars

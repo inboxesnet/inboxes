@@ -121,6 +121,12 @@ export function MarketingPage() {
             Inboxes
           </div>
           <div className="flex items-center gap-6 text-sm text-muted-foreground">
+            <Link href="/terms" className="hover:text-foreground transition-colors">
+              Terms
+            </Link>
+            <Link href="/privacy" className="hover:text-foreground transition-colors">
+              Privacy
+            </Link>
             <Link href="/login" className="hover:text-foreground transition-colors">
               Log in
             </Link>

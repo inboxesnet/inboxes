@@ -12,16 +12,16 @@ import { NotificationListener } from "../notification-listener";
 
 const PROMPT_DISMISSED_KEY = "notification_prompt_dismissed";
 
-// Track subscriptions
-let subscriptionCallback: ((msg: any) => void) | null = null;
+// Track subscriptions by event name
+const subscriptionCallbacks: Record<string, (msg: any) => void> = {};
 
 // Mock notification context
 vi.mock("@/contexts/notification-context", () => ({
   useNotifications: () => ({
     subscribe: vi.fn((event: string, handler: (msg: any) => void) => {
-      subscriptionCallback = handler;
+      subscriptionCallbacks[event] = handler;
       return () => {
-        subscriptionCallback = null;
+        delete subscriptionCallbacks[event];
       };
     }),
   }),
@@ -39,7 +39,7 @@ describe("NotificationListener", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     localStorage.clear();
-    subscriptionCallback = null;
+    Object.keys(subscriptionCallbacks).forEach(k => delete subscriptionCallbacks[k]);
     originalNotification = globalThis.Notification;
 
     // Mock Notification API
@@ -103,10 +103,10 @@ describe("NotificationListener", () => {
 
   it("shows toast on email.received with from and subject", () => {
     render(<NotificationListener />);
-    expect(subscriptionCallback).not.toBeNull();
+    expect(subscriptionCallbacks["email.received"]).toBeDefined();
 
     act(() => {
-      subscriptionCallback!({
+      subscriptionCallbacks["email.received"]!({
         event: "email.received",
         payload: { from: "alice@test.com", subject: "New message" },
       });
@@ -121,7 +121,7 @@ describe("NotificationListener", () => {
     render(<NotificationListener />);
 
     act(() => {
-      subscriptionCallback!({
+      subscriptionCallbacks["email.received"]!({
         event: "email.received",
         payload: { from: "bob@test.com", subject: "Hello" },
       });
@@ -141,7 +141,7 @@ describe("NotificationListener", () => {
     render(<NotificationListener />);
 
     act(() => {
-      subscriptionCallback!({
+      subscriptionCallbacks["email.received"]!({
         event: "email.received",
         payload: {},
       });
@@ -153,8 +153,55 @@ describe("NotificationListener", () => {
 
   it("cleans up subscription on unmount", () => {
     const { unmount } = render(<NotificationListener />);
-    expect(subscriptionCallback).not.toBeNull();
+    expect(subscriptionCallbacks["email.received"]).toBeDefined();
     unmount();
-    expect(subscriptionCallback).toBeNull();
+    expect(subscriptionCallbacks["email.received"]).toBeUndefined();
+  });
+
+  it("fires browser Notification when permission is granted", () => {
+    const NotificationSpy = vi.fn();
+    Object.defineProperty(globalThis, "Notification", {
+      value: Object.assign(NotificationSpy, {
+        permission: "granted",
+        requestPermission: vi.fn().mockResolvedValue("granted"),
+      }),
+      configurable: true,
+      writable: true,
+    });
+
+    render(<NotificationListener />);
+    expect(subscriptionCallbacks["email.received"]).toBeDefined();
+
+    act(() => {
+      subscriptionCallbacks["email.received"]!({
+        event: "email.received",
+        payload: { from: "charlie@test.com", subject: "Browser notif test" },
+      });
+    });
+
+    expect(NotificationSpy).toHaveBeenCalledWith("charlie@test.com", expect.objectContaining({
+      body: "Browser notif test",
+    }));
+  });
+
+  it("caps in-app toasts at 3 (MAX_TOASTS)", () => {
+    render(<NotificationListener />);
+    expect(subscriptionCallbacks["email.received"]).toBeDefined();
+
+    // Fire 4 email.received events
+    for (let i = 1; i <= 4; i++) {
+      act(() => {
+        subscriptionCallbacks["email.received"]!({
+          event: "email.received",
+          payload: { from: `user${i}@test.com`, subject: `Message ${i}` },
+        });
+      });
+    }
+
+    // Only the last 3 should be visible
+    expect(screen.queryByText("user1@test.com")).not.toBeInTheDocument();
+    expect(screen.getByText("user2@test.com")).toBeInTheDocument();
+    expect(screen.getByText("user3@test.com")).toBeInTheDocument();
+    expect(screen.getByText("user4@test.com")).toBeInTheDocument();
   });
 });

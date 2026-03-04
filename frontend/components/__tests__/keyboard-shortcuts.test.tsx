@@ -204,4 +204,31 @@ describe("KeyboardShortcuts", () => {
     fireEvent.keyDown(document, { key: "I", shiftKey: true });
     expect(mockHandleAction).toHaveBeenCalledWith("t1", "read");
   });
+
+  it("v dispatches open-move-dialog event", () => {
+    const spy = vi.fn();
+    window.addEventListener("open-move-dialog", spy);
+    render(<KeyboardShortcuts onCompose={mockOnCompose} />);
+    fireEvent.keyDown(document, { key: "v" });
+    expect(spy).toHaveBeenCalled();
+    window.removeEventListener("open-move-dialog", spy);
+  });
+
+  it("m mutes focused thread", () => {
+    render(<KeyboardShortcuts onCompose={mockOnCompose} />);
+    fireEvent.keyDown(document, { key: "m" });
+    expect(mockHandleAction).toHaveBeenCalledWith("t1", "mute");
+  });
+
+  it("Shift+U marks unread", () => {
+    render(<KeyboardShortcuts onCompose={mockOnCompose} />);
+    fireEvent.keyDown(document, { key: "U", shiftKey: true });
+    expect(mockHandleAction).toHaveBeenCalledWith("t1", "unread");
+  });
+
+  it("Cmd+1 switches to first domain", () => {
+    render(<KeyboardShortcuts onCompose={mockOnCompose} />);
+    fireEvent.keyDown(document, { key: "1", metaKey: true });
+    expect(mockRouterPush).toHaveBeenCalledWith("/d/d1/inbox");
+  });
 });

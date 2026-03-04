@@ -3,9 +3,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { DndContext, DragOverlay, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
+import { SortableContext, verticalListSortingStrategy, horizontalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useDroppable } from "@dnd-kit/core";
 import { useTheme } from "next-themes";
@@ -138,6 +138,11 @@ const restrictToYAxis: import("@dnd-kit/core").Modifier = ({ transform }) => ({
   x: 0,
 });
 
+const restrictToXAxis: import("@dnd-kit/core").Modifier = ({ transform }) => ({
+  ...transform,
+  y: 0,
+});
+
 function SortableDomainIcon({
   id,
   domain,
@@ -157,6 +162,7 @@ function SortableDomainIcon({
   });
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
+    transition: "none",
     opacity: isDragging ? 0.5 : undefined,
     zIndex: isDragging ? 10 : undefined,
   };
@@ -184,6 +190,11 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
 
   const reorderSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
+  const mobileReorderSensors = useSensors(
+    useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 5 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   );
 
   const handleReorderDragEnd = useCallback(
@@ -292,17 +303,28 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
           </button>
         </div>
 
-        {/* Domain icons — horizontal scroll */}
+        {/* Domain icons — horizontal scroll with drag-to-reorder */}
         <div className="flex items-center gap-2 px-4 py-3 border-b overflow-x-auto scrollbar-hide shrink-0">
-          {domains.map((d) => (
-            <DomainIcon
-              key={d.id}
-              domain={d.domain}
-              active={activeDomain?.id === d.id}
-              hasUnread={(unreadCounts[d.id] || 0) > 0}
-              onClick={() => navigateToDomain(d.id)}
-            />
-          ))}
+          <DndContext
+            sensors={mobileReorderSensors}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToXAxis]}
+            onDragEnd={handleReorderDragEnd}
+          >
+            <SortableContext items={domains.map((d) => d.id)} strategy={horizontalListSortingStrategy}>
+              {domains.map((d) => (
+                <SortableDomainIcon
+                  key={d.id}
+                  id={d.id}
+                  domain={d.domain}
+                  active={activeDomain?.id === d.id}
+                  hasUnread={(unreadCounts[d.id] || 0) > 0}
+                  onClick={() => navigateToDomain(d.id)}
+                />
+              ))}
+            </SortableContext>
+            <DragOverlay dropAnimation={null} />
+          </DndContext>
           <button
             onClick={() => onOpenSettings("domains")}
             className="flex items-center justify-center h-10 w-10 rounded-full bg-muted text-muted-foreground hover:bg-green-500 hover:text-white transition-colors shrink-0"

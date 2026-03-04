@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,9 +8,6 @@ import (
 	"net/mail"
 	"strings"
 	"unicode"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
@@ -51,36 +47,6 @@ func setIfNotNil[T any](m map[string]any, key string, v *T) {
 	}
 }
 
-// threadDomainID looks up the domain_id for a thread. Used for event payloads.
-func threadDomainID(ctx context.Context, db *pgxpool.Pool, threadID, orgID string) string {
-	var domainID string
-	warnIfErr(db.QueryRow(ctx,
-		"SELECT domain_id FROM threads WHERE id = $1 AND org_id = $2",
-		threadID, orgID,
-	).Scan(&domainID), "threads: domain_id lookup", "thread_id", threadID)
-	return domainID
-}
-
-// scanMaps collects all rows into []map[string]any using pgx.RowToMap.
-// Post-processes UUID values: pgx returns [16]byte for uuid columns which
-// JSON-marshals as a number array. This converts them to proper UUID strings.
-func scanMaps(rows pgx.Rows) ([]map[string]any, error) {
-	result, err := pgx.CollectRows(rows, pgx.RowToMap)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = []map[string]any{}
-	}
-	for _, m := range result {
-		for k, v := range m {
-			if b, ok := v.([16]byte); ok {
-				m[k] = fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-			}
-		}
-	}
-	return result, nil
-}
 
 // warnIfErr logs a warning if err is non-nil. Use for non-critical lookups that have a fallback.
 func warnIfErr(err error, msg string, args ...any) {
@@ -136,43 +102,6 @@ func validateLength(value, field string, max int) error {
 	return nil
 }
 
-// canSendAs checks whether a user is authorized to send email from the given address.
-// Admins can always send. Non-admins need either:
-// - alias_users.can_send_as=true for an alias matching the address, OR
-// - the address is their own user email.
-func canSendAs(ctx context.Context, db *pgxpool.Pool, userID, orgID, fromAddress, role string) bool {
-	if role == "admin" {
-		return true
-	}
-
-	// Check if sending from own email
-	var userEmail string
-	err := db.QueryRow(ctx,
-		"SELECT email FROM users WHERE id = $1 AND org_id = $2 AND status = 'active'",
-		userID, orgID,
-	).Scan(&userEmail)
-	if err == nil && strings.EqualFold(userEmail, fromAddress) {
-		return true
-	}
-
-	// Check alias_users.can_send_as
-	var allowed bool
-	if err := db.QueryRow(ctx,
-		`SELECT EXISTS(
-			SELECT 1 FROM alias_users au
-			JOIN aliases a ON a.id = au.alias_id
-			JOIN domains d ON d.id = a.domain_id
-			WHERE au.user_id = $1 AND a.org_id = $2 AND a.address = $3 AND au.can_send_as = true
-			AND d.status NOT IN ('disconnected', 'pending', 'deleted')
-		)`,
-		userID, orgID, fromAddress,
-	).Scan(&allowed); err != nil {
-		slog.Warn("canSendAs: alias check failed", "user_id", userID, "address", fromAddress, "error", err)
-		return false
-	}
-	return allowed
-}
-
 // escapeLIKE escapes LIKE/ILIKE metacharacters (%, _, \) in a search string.
 func escapeLIKE(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
@@ -181,26 +110,3 @@ func escapeLIKE(s string) string {
 	return s
 }
 
-// resolveFromDisplay looks up a display name for an email address.
-// Checks aliases table first, then users table, falls back to bare address.
-// Returns "Display Name <address>" or just "address" if no name found.
-func resolveFromDisplay(ctx context.Context, db *pgxpool.Pool, orgID, address string) string {
-	var name string
-	err := db.QueryRow(ctx,
-		"SELECT name FROM aliases WHERE org_id = $1 AND address = $2 AND name != ''",
-		orgID, address,
-	).Scan(&name)
-	if err == nil && name != "" {
-		return fmt.Sprintf("%s <%s>", name, address)
-	}
-
-	err = db.QueryRow(ctx,
-		"SELECT name FROM users WHERE org_id = $1 AND email = $2 AND name != '' AND status = 'active'",
-		orgID, address,
-	).Scan(&name)
-	if err == nil && name != "" {
-		return fmt.Sprintf("%s <%s>", name, address)
-	}
-
-	return address
-}

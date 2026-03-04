@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/inboxes/backend/internal/middleware"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/inboxes/backend/internal/store"
 )
 
 type EventHandler struct {
-	DB             *pgxpool.Pool
-	CatchupMaxAge  time.Duration
+	Store         store.Store
+	CatchupMaxAge time.Duration
 }
 
 // Since returns events after a given event ID for reconnection catchup.
@@ -36,7 +36,7 @@ func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 	// Check if sinceID is too old — return 410 Gone so client does a full refetch
 	if sinceID > 0 {
 		var eventAge time.Time
-		err := h.DB.QueryRow(ctx,
+		err := h.Store.Q().QueryRow(ctx,
 			"SELECT created_at FROM events WHERE id = $1", sinceID,
 		).Scan(&eventAge)
 		if err != nil || time.Since(eventAge) > maxAge {
@@ -47,7 +47,7 @@ func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rows, err := h.DB.Query(ctx,
+	rows, err := h.Store.Q().Query(ctx,
 		`SELECT id, event_type, domain_id, thread_id, payload, created_at
 		 FROM events
 		 WHERE org_id = $1 AND id > $2 AND created_at > $4

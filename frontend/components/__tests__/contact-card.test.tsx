@@ -67,4 +67,109 @@ describe("ContactCard", () => {
     // The popup should be gone
     expect(screen.queryByText("Copy email address")).not.toBeInTheDocument();
   });
+
+  it("shows initial letter in avatar circle", () => {
+    render(
+      <ContactCard email="mary@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    fireEvent.click(screen.getByText("trigger"));
+    // getInitials returns first char of local part uppercase: "M"
+    expect(screen.getByText("M")).toBeInTheDocument();
+  });
+
+  it("formats name with underscores (john_doe -> John Doe)", () => {
+    render(
+      <ContactCard email="john_doe@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    fireEvent.click(screen.getByText("trigger"));
+    expect(screen.getByText("John Doe")).toBeInTheDocument();
+  });
+
+  it("formats name with hyphens (jane-smith -> Jane Smith)", () => {
+    render(
+      <ContactCard email="jane-smith@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    fireEvent.click(screen.getByText("trigger"));
+    expect(screen.getByText("Jane Smith")).toBeInTheDocument();
+  });
+
+  it("toggles popup open and closed on repeated clicks", () => {
+    render(
+      <ContactCard email="toggle@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    // Open
+    fireEvent.click(screen.getByText("trigger"));
+    expect(screen.getByText("toggle@example.com")).toBeInTheDocument();
+
+    // Close
+    fireEvent.click(screen.getByText("trigger"));
+    expect(screen.queryByText("Copy email address")).not.toBeInTheDocument();
+  });
+
+  it("trigger has role=button and tabIndex=0", () => {
+    render(
+      <ContactCard email="test@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    const trigger = screen.getByRole("button", { name: "trigger" });
+    expect(trigger).toHaveAttribute("tabindex", "0");
+  });
+
+  it("opens popup on Enter key", () => {
+    render(
+      <ContactCard email="keyboard@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    const trigger = screen.getByRole("button", { name: "trigger" });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    expect(screen.getByText("keyboard@example.com")).toBeInTheDocument();
+  });
+
+  it("opens popup on Space key", () => {
+    render(
+      <ContactCard email="space@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    const trigger = screen.getByRole("button", { name: "trigger" });
+    fireEvent.keyDown(trigger, { key: " " });
+    expect(screen.getByText("space@example.com")).toBeInTheDocument();
+  });
+
+  it("closes popup on outside click", () => {
+    render(
+      <div>
+        <ContactCard email="test@example.com">
+          <span>trigger</span>
+        </ContactCard>
+        <div data-testid="outside">Outside</div>
+      </div>
+    );
+    fireEvent.click(screen.getByText("trigger"));
+    expect(screen.getByText("test@example.com")).toBeInTheDocument();
+
+    // Click outside
+    fireEvent.mouseDown(screen.getByTestId("outside"));
+    expect(screen.queryByText("Copy email address")).not.toBeInTheDocument();
+  });
+
+  it("handles single-word email local part (admin@example.com -> Admin)", () => {
+    render(
+      <ContactCard email="admin@example.com">
+        <span>trigger</span>
+      </ContactCard>
+    );
+    fireEvent.click(screen.getByText("trigger"));
+    expect(screen.getByText("Admin")).toBeInTheDocument();
+  });
 });

@@ -5,6 +5,7 @@ frontend/node_modules/
 # Build outputs
 frontend/.next/
 frontend/test-results/
+frontend/playwright-report/
 backend/bin/
 backend/api
 *.tsbuildinfo

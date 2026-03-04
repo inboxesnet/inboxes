@@ -25,3 +25,15 @@ func newChiRouteContext(key, value string) context.Context {
 	rctx.URLParams.Add(key, value)
 	return context.WithValue(context.Background(), chi.RouteCtxKey, rctx)
 }
+
+// mockRow implements pgx.Row for testing QueryRow results.
+type mockRow struct {
+	scanFn func(dest ...interface{}) error
+}
+
+func (r *mockRow) Scan(dest ...interface{}) error {
+	if r.scanFn != nil {
+		return r.scanFn(dest...)
+	}
+	return nil
+}

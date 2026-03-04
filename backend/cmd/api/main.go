@@ -20,6 +20,7 @@ import (
 	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/router"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
 	"github.com/inboxes/backend/internal/worker"
 	"github.com/inboxes/backend/internal/ws"
@@ -70,6 +71,9 @@ func main() {
 	rdb := redis.NewClient(redisOpts)
 	defer rdb.Close()
 
+	// Store
+	st := store.NewPgStore(pool)
+
 	// Services
 	encSvc, err := service.NewEncryptionService(cfg.EncryptionKey)
 	if err != nil {
@@ -91,7 +95,7 @@ func main() {
 	util.SafeGo("sync-stale-recovery", func() { syncWorker.RunStaleRecovery(ctx) })
 
 	// Email worker
-	emailWorker := queue.NewEmailWorker(pool, rdb, resendSvc, bus, orgLimiterMap, cfg.StripeKey)
+	emailWorker := queue.NewEmailWorker(st, rdb, resendSvc, bus, orgLimiterMap, cfg.StripeKey)
 	util.SafeGo("email-worker", func() { emailWorker.Run(ctx) })
 	util.SafeGo("email-stale-recovery", func() { emailWorker.RunStaleRecovery(ctx) })
 
@@ -119,8 +123,12 @@ func main() {
 	statusRecovery := worker.NewStatusRecovery(pool, resendSvc, orgLimiterMap, cfg.StatusRecoveryInterval)
 	util.SafeGo("status-recovery", func() { statusRecovery.Run(ctx) })
 
+	// Inbox poller (auto-sync for self-hosted / no-webhook environments)
+	inboxPoller := worker.NewInboxPoller(st, rdb, resendSvc, orgLimiterMap)
+	util.SafeGo("inbox-poller", func() { inboxPoller.Run(ctx) })
+
 	// WebSocket Hub
-	wsHub := ws.NewHub(rdb, pool, cfg.WSMaxConnsPerUser, cfg.WSTokenCheckInterval)
+	wsHub := ws.NewHub(rdb, st, cfg.WSMaxConnsPerUser, cfg.WSTokenCheckInterval)
 	util.SafeGo("ws-hub", func() { wsHub.Run(ctx) })
 
 	// Router
@@ -132,6 +140,7 @@ func main() {
 		StripePriceID:       cfg.StripePriceID,
 		StripeWebhookSecret: cfg.StripeWebhookSecret,
 		EventCatchupMaxAge:  cfg.EventCatchupMaxAge,
+		AppCtx:              ctx,
 	})
 
 	// Server

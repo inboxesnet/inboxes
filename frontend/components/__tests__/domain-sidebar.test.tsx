@@ -22,8 +22,10 @@ vi.mock("next-themes", () => ({
 vi.mock("@dnd-kit/core", () => ({
   useDroppable: () => ({ isOver: false, setNodeRef: vi.fn() }),
   DndContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DragOverlay: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   closestCenter: vi.fn(),
   PointerSensor: vi.fn(),
+  TouchSensor: vi.fn(),
   useSensor: vi.fn(),
   useSensors: vi.fn(() => []),
 }));
@@ -32,6 +34,7 @@ vi.mock("@dnd-kit/core", () => ({
 vi.mock("@dnd-kit/sortable", () => ({
   SortableContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   verticalListSortingStrategy: {},
+  horizontalListSortingStrategy: {},
   useSortable: () => ({
     attributes: {},
     listeners: {},
@@ -77,8 +80,9 @@ vi.mock("@/contexts/domain-context", () => ({
 }));
 
 // Mock notification context
+let mockConnected = true;
 vi.mock("@/contexts/notification-context", () => ({
-  useNotifications: () => ({ connected: true }),
+  useNotifications: () => ({ connected: mockConnected }),
 }));
 
 // Mock DomainIcon
@@ -133,6 +137,7 @@ vi.mock("lucide-react", () => {
     Tag: icon("tag"),
     WifiOff: icon("wifi-off"),
     Keyboard: icon("keyboard"),
+    Info: icon("info"),
   };
 });
 
@@ -141,6 +146,7 @@ import { DomainSidebar } from "../domain-sidebar";
 describe("DomainSidebar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConnected = true;
   });
   afterEach(() => {
     cleanup();
@@ -245,5 +251,85 @@ describe("DomainSidebar", () => {
     });
     expect(screen.getAllByTestId("domain-icon-example.com").length).toBeGreaterThan(0);
     expect(screen.getAllByTestId("domain-icon-other.com").length).toBeGreaterThan(0);
+  });
+
+  it("shows unread count badge on inbox folder", async () => {
+    await act(async () => {
+      render(
+        <DomainSidebar
+          onCompose={mockOnCompose}
+          onOpenSettings={mockOnOpenSettings}
+        />
+      );
+    });
+    // The mock provides unreadCounts: { d1: 3 } and activeDomain is d1
+    // The inbox folder should display the count badge with "3"
+    const badges = screen.getAllByText("3");
+    expect(badges.length).toBeGreaterThan(0);
+  });
+
+  it("active domain icon has data-active true", async () => {
+    await act(async () => {
+      render(
+        <DomainSidebar
+          onCompose={mockOnCompose}
+          onOpenSettings={mockOnOpenSettings}
+        />
+      );
+    });
+    // d1 (example.com) is the active domain
+    const activeIcons = screen.getAllByTestId("domain-icon-example.com");
+    const hasActive = activeIcons.some((el) => el.getAttribute("data-active") === "true");
+    expect(hasActive).toBe(true);
+    // d2 (other.com) should NOT be active
+    const otherIcons = screen.getAllByTestId("domain-icon-other.com");
+    const otherActive = otherIcons.some((el) => el.getAttribute("data-active") === "true");
+    expect(otherActive).toBe(false);
+  });
+
+  it("renders domain icons in sortable context for drag-and-drop reorder", async () => {
+    await act(async () => {
+      render(
+        <DomainSidebar
+          onCompose={mockOnCompose}
+          onOpenSettings={mockOnOpenSettings}
+        />
+      );
+    });
+    // Both domain icons should render (inside SortableContext which is a passthrough)
+    const d1Icons = screen.getAllByTestId("domain-icon-example.com");
+    const d2Icons = screen.getAllByTestId("domain-icon-other.com");
+    expect(d1Icons.length).toBeGreaterThan(0);
+    expect(d2Icons.length).toBeGreaterThan(0);
+    // The add-domain button should also render
+    const addButtons = screen.getAllByTitle("Add domain");
+    expect(addButtons.length).toBeGreaterThan(0);
+  });
+
+  it("shows offline banner after 3s of disconnection", async () => {
+    mockConnected = false;
+    vi.useFakeTimers();
+
+    await act(async () => {
+      render(
+        <DomainSidebar
+          onCompose={mockOnCompose}
+          onOpenSettings={mockOnOpenSettings}
+        />
+      );
+    });
+
+    // Banner should NOT be visible immediately
+    expect(screen.queryByText("Offline")).toBeNull();
+
+    // Advance past the 3s delay
+    await act(async () => {
+      vi.advanceTimersByTime(3100);
+    });
+
+    // Now the offline banner should be visible
+    expect(screen.getAllByText("Offline").length).toBeGreaterThan(0);
+
+    vi.useRealTimers();
   });
 });

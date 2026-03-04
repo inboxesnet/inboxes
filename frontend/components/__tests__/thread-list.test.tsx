@@ -172,4 +172,75 @@ describe("ThreadList", () => {
     );
     expect(screen.getAllByText(/Hello snippet text/).length).toBeGreaterThan(0);
   });
+
+  it("shows message count badge for multi-message threads", () => {
+    const thread = mkThread("t1", "Multi msg thread");
+    thread.message_count = 3;
+    render(
+      <ThreadList
+        {...baseProps}
+        threads={[thread]}
+      />
+    );
+    // The component renders "(3)" when message_count > 1
+    const badges = screen.getAllByText("(3)");
+    expect(badges.length).toBeGreaterThan(0);
+  });
+
+  it("shows muted indicator on muted threads", () => {
+    render(
+      <ThreadList
+        {...baseProps}
+        threads={[mkThread("t1", "Muted thread", 0, ["inbox", "muted"])]}
+      />
+    );
+    // The component renders BellOff icon when thread has "muted" label
+    const bellOffIcons = screen.getAllByTestId("icon-bell-off");
+    expect(bellOffIcons.length).toBeGreaterThan(0);
+  });
+
+  it("hover actions (archive, trash, read/unread) call onAction", () => {
+    render(
+      <ThreadList
+        {...baseProps}
+        threads={[mkThread("t1", "Hover test", 1)]}
+      />
+    );
+    // Archive button
+    const archiveBtn = screen.getByLabelText("Archive");
+    fireEvent.click(archiveBtn);
+    expect(baseProps.onAction).toHaveBeenCalledWith("t1", "archive");
+
+    // Trash button
+    const trashBtn = screen.getByLabelText("Trash");
+    fireEvent.click(trashBtn);
+    expect(baseProps.onAction).toHaveBeenCalledWith("t1", "trash");
+
+    // Read/unread button (thread is unread, so "Mark as read")
+    const readBtn = screen.getByLabelText("Mark as read");
+    fireEvent.click(readBtn);
+    expect(baseProps.onAction).toHaveBeenCalledWith("t1", "read");
+  });
+
+  it("sent folder shows recipient instead of sender", () => {
+    const thread = mkThread("t1", "Sent email", 0, ["sent"]);
+    thread.original_to = "recipient@example.com";
+    render(
+      <ThreadList
+        {...baseProps}
+        label="sent"
+        threads={[thread]}
+      />
+    );
+    // In "sent" label, the component renders "To " prefix and the recipient's local part
+    // The "To " is inside a child <span> within a parent that also has the name,
+    // so we query for the combined text content
+    const matches = screen.getAllByText((_content, element) => {
+      return element?.textContent === "To recipient" && element.tagName === "SPAN";
+    });
+    expect(matches.length).toBeGreaterThan(0);
+    // Also verify the recipient name is present (extracted from original_to)
+    const recipientNames = screen.getAllByText(/recipient/);
+    expect(recipientNames.length).toBeGreaterThan(0);
+  });
 });

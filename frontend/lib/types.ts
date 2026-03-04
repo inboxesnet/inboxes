@@ -87,7 +87,7 @@ export interface Email {
   subject: string;
   body_html: string;
   body_plain: string;
-  status: "received" | "sent" | "delivered" | "bounced" | "failed";
+  status: "received" | "sent" | "delivered" | "bounced" | "failed" | "queued" | "complained";
   attachments: Attachment[];
   in_reply_to?: string;
   references?: string[];
@@ -129,7 +129,7 @@ export interface DiscoveredAddress {
   domain_id: string;
   address: string;
   local_part: string;
-  type: "unclaimed" | "user" | "alias";
+  type: "unclaimed" | "individual" | "group";
   email_count: number;
 }
 

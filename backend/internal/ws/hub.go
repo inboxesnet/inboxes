@@ -9,18 +9,19 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
 type Hub struct {
+	ctx                context.Context
 	clients            map[string]map[*Client]bool // userID -> set of clients
 	register           chan *Client
 	unregister         chan *Client
 	mu                 sync.RWMutex
 	rdb                *redis.Client
-	pool               *pgxpool.Pool
+	store              store.Store
 	maxConnsPerUser    int
 	tokenCheckInterval time.Duration
 }
@@ -35,7 +36,7 @@ type eventMessage struct {
 	Payload  json.RawMessage `json:"payload"`
 }
 
-func NewHub(rdb *redis.Client, pool *pgxpool.Pool, maxConnsPerUser int, tokenCheckInterval time.Duration) *Hub {
+func NewHub(rdb *redis.Client, st store.Store, maxConnsPerUser int, tokenCheckInterval time.Duration) *Hub {
 	if maxConnsPerUser <= 0 {
 		maxConnsPerUser = 5
 	}
@@ -43,17 +44,19 @@ func NewHub(rdb *redis.Client, pool *pgxpool.Pool, maxConnsPerUser int, tokenChe
 		tokenCheckInterval = 1 * time.Minute
 	}
 	return &Hub{
+		ctx:                context.Background(),
 		clients:            make(map[string]map[*Client]bool),
 		register:           make(chan *Client),
 		unregister:         make(chan *Client),
 		rdb:                rdb,
-		pool:               pool,
+		store:              st,
 		maxConnsPerUser:    maxConnsPerUser,
 		tokenCheckInterval: tokenCheckInterval,
 	}
 }
 
 func (h *Hub) Run(ctx context.Context) {
+	h.ctx = ctx
 	util.SafeGo("ws-subscribe-redis", func() { h.subscribeRedis(ctx) })
 	util.SafeGo("ws-disconnect-listener", func() { h.subscribeDisconnect(ctx) })
 
@@ -180,7 +183,7 @@ func (h *Hub) sendToOrg(orgID string, message string) {
 // associated with a thread. Used to determine which users should receive
 // real-time updates for thread-specific events.
 func (h *Hub) getThreadAliasLabels(ctx context.Context, threadID string) ([]string, error) {
-	rows, err := h.pool.Query(ctx,
+	rows, err := h.store.Q().Query(ctx,
 		`SELECT label FROM thread_labels WHERE thread_id = $1 AND label LIKE 'alias:%'`,
 		threadID)
 	if err != nil {

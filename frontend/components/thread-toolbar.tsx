@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { cn, getInitials, getDomainColor, getDomainTextColor } from "@/lib/utils";
 import { useDomains } from "@/contexts/domain-context";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Archive,
   Trash2,
@@ -77,6 +78,7 @@ export function ThreadToolbar({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [labelDropdownOpen, setLabelDropdownOpen] = useState(false);
   const [customLabels, setCustomLabels] = useState<CustomLabel[]>([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -293,7 +295,7 @@ export function ThreadToolbar({
             {showDelete && (
               <button
                 title="Delete permanently"
-                onClick={() => { if (confirm("Permanently delete selected conversations?")) onBulkAction("delete"); }}
+                onClick={() => setShowDeleteConfirm(true)}
                 disabled={isPending}
                 className="p-1.5 rounded hover:bg-muted text-destructive hover:text-destructive disabled:opacity-50 disabled:pointer-events-none"
               >
@@ -370,6 +372,15 @@ export function ThreadToolbar({
         )}
       </div>
     )}
+    <ConfirmDialog
+      open={showDeleteConfirm}
+      onOpenChange={setShowDeleteConfirm}
+      title="Delete conversations"
+      description="Permanently delete selected conversations? This cannot be undone."
+      confirmLabel="Delete"
+      destructive
+      onConfirm={() => onBulkAction("delete")}
+    />
     </div>
   );
 }

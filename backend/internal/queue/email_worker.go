@@ -2,21 +2,22 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
 const emailJobsQueue = "email:jobs"
 
 type EmailWorker struct {
-	pool      *pgxpool.Pool
+	store     store.Store
 	rdb       *redis.Client
 	resendSvc *service.ResendService
 	bus       *event.Bus
@@ -24,8 +25,8 @@ type EmailWorker struct {
 	stripeKey string
 }
 
-func NewEmailWorker(pool *pgxpool.Pool, rdb *redis.Client, resendSvc *service.ResendService, bus *event.Bus, limiter *OrgLimiterMap, stripeKey string) *EmailWorker {
-	return &EmailWorker{pool: pool, rdb: rdb, resendSvc: resendSvc, bus: bus, limiter: limiter, stripeKey: stripeKey}
+func NewEmailWorker(store store.Store, rdb *redis.Client, resendSvc *service.ResendService, bus *event.Bus, limiter *OrgLimiterMap, stripeKey string) *EmailWorker {
+	return &EmailWorker{store: store, rdb: rdb, resendSvc: resendSvc, bus: bus, limiter: limiter, stripeKey: stripeKey}
 }
 
 // Run is the main BRPOP loop that processes email jobs from Redis.
@@ -69,7 +70,7 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 	defer func() {
 		if panicErr != nil {
 			// Mark the job as failed with the panic message
-			if _, err := w.pool.Exec(ctx,
+			if _, err := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET status='failed', error_message=$1, updated_at=now() WHERE id=$2`,
 				panicErr.Error(), jobID,
 			); err != nil {
@@ -80,7 +81,7 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 
 	var orgID, userID, jobType, status string
 	var retryCount, maxRetries int
-	err := w.pool.QueryRow(ctx,
+	err := w.store.Q().QueryRow(ctx,
 		`SELECT org_id, user_id, job_type, status, retry_count, max_retries
 		 FROM email_jobs WHERE id = $1`, jobID,
 	).Scan(&orgID, &userID, &jobType, &status, &retryCount, &maxRetries)
@@ -96,11 +97,11 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 
 	// Check org is not deleted
 	var orgDeletedAt *time.Time
-	if err := w.pool.QueryRow(ctx,
+	if err := w.store.Q().QueryRow(ctx,
 		"SELECT deleted_at FROM orgs WHERE id = $1", orgID,
 	).Scan(&orgDeletedAt); err != nil || orgDeletedAt != nil {
 		slog.Warn("email worker: skipping job for deleted org", "job_id", jobID, "org_id", orgID)
-		if _, err := w.pool.Exec(ctx,
+		if _, err := w.store.Q().Exec(ctx,
 			`UPDATE email_jobs SET status='cancelled', error_message='org deleted', updated_at=now() WHERE id=$1`,
 			jobID,
 		); err != nil {
@@ -113,7 +114,7 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 	if jobType == "send" && w.stripeKey != "" {
 		if !w.isPlanActive(ctx, orgID) {
 			slog.Warn("email worker: subscription inactive, failing send job", "job_id", jobID, "org_id", orgID)
-			if _, err := w.pool.Exec(ctx,
+			if _, err := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET status='failed', error_message='subscription inactive', updated_at=now() WHERE id=$1`,
 				jobID,
 			); err != nil {
@@ -121,15 +122,15 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 			}
 			// Mark the email as failed too
 			var emailID *string
-			if err := w.pool.QueryRow(ctx, `SELECT email_id FROM email_jobs WHERE id=$1`, jobID).Scan(&emailID); err == nil && emailID != nil {
-				w.pool.Exec(ctx, `UPDATE emails SET status='failed', updated_at=now() WHERE id=$1`, *emailID)
+			if err := w.store.Q().QueryRow(ctx, `SELECT email_id FROM email_jobs WHERE id=$1`, jobID).Scan(&emailID); err == nil && emailID != nil {
+				w.store.Q().Exec(ctx, `UPDATE emails SET status='failed', updated_at=now() WHERE id=$1`, *emailID)
 			}
 			return
 		}
 	}
 
 	// Mark running
-	_, err = w.pool.Exec(ctx,
+	_, err = w.store.Q().Exec(ctx,
 		`UPDATE email_jobs SET status='running', heartbeat_at=now(), updated_at=now() WHERE id=$1`,
 		jobID,
 	)
@@ -152,6 +153,8 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 		processErr = w.processSend(ctx, jobID, orgID, userID)
 	case "fetch":
 		processErr = w.processFetch(ctx, jobID, orgID, userID)
+	case "fetch_sent":
+		processErr = w.processFetchSent(ctx, jobID, orgID, userID)
 	default:
 		processErr = errors.New("unknown job type: " + jobType)
 	}
@@ -164,7 +167,7 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 		return
 	}
 
-	if _, err := w.pool.Exec(ctx,
+	if _, err := w.store.Q().Exec(ctx,
 		`UPDATE email_jobs SET status='completed', heartbeat_at=now(), updated_at=now() WHERE id=$1`,
 		jobID,
 	); err != nil {
@@ -181,7 +184,7 @@ func (w *EmailWorker) heartbeat(ctx context.Context, jobID string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := w.pool.Exec(ctx,
+			if _, err := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET heartbeat_at=now() WHERE id=$1`, jobID,
 			); err != nil {
 				slog.Error("email worker: heartbeat failed", "job_id", jobID, "error", err)
@@ -201,7 +204,7 @@ func (w *EmailWorker) failJob(ctx context.Context, jobID string, retryCount, max
 	}
 
 	if shouldPermanentlyFail(retryable, newRetry, maxRetries) || domainErr {
-		if _, execErr := w.pool.Exec(ctx,
+		if _, execErr := w.store.Q().Exec(ctx,
 			`UPDATE email_jobs SET status='failed', error_message=$1, retry_count=$2,
 			 heartbeat_at=now(), updated_at=now() WHERE id=$3`,
 			err.Error(), newRetry, jobID,
@@ -211,29 +214,44 @@ func (w *EmailWorker) failJob(ctx context.Context, jobID string, retryCount, max
 
 		// If this was a send job, mark the email as failed
 		var emailID *string
-		warnIfErr(w.pool.QueryRow(ctx,
-			`SELECT email_id FROM email_jobs WHERE id=$1`, jobID,
-		).Scan(&emailID), "email worker: email_id lookup for failed job", "job_id", jobID)
+		var draftID *string
+		warnIfErr(w.store.Q().QueryRow(ctx,
+			`SELECT email_id, draft_id FROM email_jobs WHERE id=$1`, jobID,
+		).Scan(&emailID, &draftID), "email worker: email_id lookup for failed job", "job_id", jobID)
 		if emailID != nil {
-			if _, execErr := w.pool.Exec(ctx,
+			if _, execErr := w.store.Q().Exec(ctx,
 				`UPDATE emails SET status='failed', updated_at=now() WHERE id=$1`, *emailID,
 			); execErr != nil {
 				slog.Error("email worker: failed to mark email failed", "email_id", *emailID, "error", execErr)
 			}
+
+			// Create recovery draft if this was a direct send (no existing draft)
+			if draftID == nil || *draftID == "" {
+				recoveryDraftID := w.createRecoveryDraft(ctx, *emailID)
+				if recoveryDraftID != "" {
+					draftID = &recoveryDraftID
+				}
+			}
+
 			// Publish status update event
-			var orgID, threadID, domainID string
-			warnIfErr(w.pool.QueryRow(ctx,
-				`SELECT org_id, thread_id, domain_id FROM emails WHERE id=$1`, *emailID,
-			).Scan(&orgID, &threadID, &domainID), "email worker: event data lookup for failed email", "email_id", *emailID)
+			var orgID, threadID, domainID, emailSubject string
+			warnIfErr(w.store.Q().QueryRow(ctx,
+				`SELECT org_id, thread_id, domain_id, subject FROM emails WHERE id=$1`, *emailID,
+			).Scan(&orgID, &threadID, &domainID, &emailSubject), "email worker: event data lookup for failed email", "email_id", *emailID)
+			payload := map[string]interface{}{
+				"email_id": *emailID,
+				"status":   "failed",
+				"subject":  emailSubject,
+			}
+			if draftID != nil && *draftID != "" {
+				payload["draft_id"] = *draftID
+			}
 			w.bus.Publish(ctx, event.Event{
 				EventType: event.EmailStatusUpdated,
 				OrgID:     orgID,
 				DomainID:  domainID,
 				ThreadID:  threadID,
-				Payload: map[string]interface{}{
-					"email_id": *emailID,
-					"status":   "failed",
-				},
+				Payload:   payload,
 			})
 		}
 
@@ -243,7 +261,7 @@ func (w *EmailWorker) failJob(ctx context.Context, jobID string, retryCount, max
 
 	backoff := calcBackoff(retryCount)
 
-	if _, execErr := w.pool.Exec(ctx,
+	if _, execErr := w.store.Q().Exec(ctx,
 		`UPDATE email_jobs SET status='pending', error_message=$1, retry_count=$2,
 		 heartbeat_at=now(), updated_at=now() WHERE id=$3`,
 		err.Error(), newRetry, jobID,
@@ -254,13 +272,56 @@ func (w *EmailWorker) failJob(ctx context.Context, jobID string, retryCount, max
 	// Re-enqueue after backoff
 	util.SafeGo("email-retry-enqueue", func() {
 		time.Sleep(backoff)
-		retryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		retryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if err := w.rdb.LPush(retryCtx, emailJobsQueue, jobID).Err(); err != nil {
 			slog.Error("email worker: redis lpush retry failed", "job_id", jobID, "error", err)
 		}
 		slog.Warn("email worker: job re-enqueued after backoff", "job_id", jobID, "retry", newRetry, "backoff", backoff)
 	})
+}
+
+// createRecoveryDraft creates a draft from the failed email so the user can retry.
+// Returns the new draft ID, or empty string on failure.
+func (w *EmailWorker) createRecoveryDraft(ctx context.Context, emailID string) string {
+	var orgID, userID, domainID, fromAddr, subject, bodyHTML, bodyPlain string
+	var threadID, inReplyTo *string
+	var toJSON, ccJSON, bccJSON json.RawMessage
+	var attachmentIDs json.RawMessage
+
+	err := w.store.Q().QueryRow(ctx,
+		`SELECT org_id, user_id, domain_id, from_address, to_addresses, cc_addresses, bcc_addresses,
+		 subject, body_html, body_plain, thread_id, in_reply_to, COALESCE(attachment_ids, '[]')
+		 FROM emails WHERE id = $1`,
+		emailID,
+	).Scan(&orgID, &userID, &domainID, &fromAddr, &toJSON, &ccJSON, &bccJSON,
+		&subject, &bodyHTML, &bodyPlain, &threadID, &inReplyTo, &attachmentIDs)
+	if err != nil {
+		slog.Error("email worker: createRecoveryDraft query failed", "email_id", emailID, "error", err)
+		return ""
+	}
+
+	kind := "compose"
+	if inReplyTo != nil && *inReplyTo != "" {
+		kind = "reply"
+	}
+
+	var draftID string
+	err = w.store.Q().QueryRow(ctx,
+		`INSERT INTO drafts (org_id, user_id, domain_id, thread_id, kind, subject, from_address,
+		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain, attachment_ids)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		 RETURNING id`,
+		orgID, userID, domainID, threadID, kind, subject, fromAddr,
+		toJSON, ccJSON, bccJSON, bodyHTML, bodyPlain, attachmentIDs,
+	).Scan(&draftID)
+	if err != nil {
+		slog.Error("email worker: createRecoveryDraft insert failed", "email_id", emailID, "error", err)
+		return ""
+	}
+
+	slog.Info("email worker: created recovery draft", "email_id", emailID, "draft_id", draftID)
+	return draftID
 }
 
 // RunStaleRecovery periodically checks for running jobs with stale heartbeats.
@@ -284,7 +345,7 @@ func (w *EmailWorker) RunStaleRecovery(ctx context.Context) {
 }
 
 func (w *EmailWorker) recoverStaleJobs(ctx context.Context) {
-	rows, err := w.pool.Query(ctx,
+	rows, err := w.store.Q().Query(ctx,
 		`SELECT id, retry_count, max_retries FROM email_jobs
 		 WHERE status = 'running' AND heartbeat_at < now() - interval '90 seconds'`,
 	)
@@ -300,7 +361,7 @@ func (w *EmailWorker) recoverStaleJobs(ctx context.Context) {
 		rows.Scan(&id, &retryCount, &maxRetries)
 
 		if retryCount >= maxRetries {
-			if _, err := w.pool.Exec(ctx,
+			if _, err := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET status='failed', error_message='stale: max retries exceeded',
 				 updated_at=now() WHERE id=$1`, id,
 			); err != nil {
@@ -310,7 +371,7 @@ func (w *EmailWorker) recoverStaleJobs(ctx context.Context) {
 			continue
 		}
 
-		_, err := w.pool.Exec(ctx,
+		_, err := w.store.Q().Exec(ctx,
 			`UPDATE email_jobs SET status='pending', retry_count=retry_count+1,
 			 error_message='recovered from stale heartbeat', updated_at=now() WHERE id=$1`, id,
 		)
@@ -326,7 +387,7 @@ func (w *EmailWorker) recoverStaleJobs(ctx context.Context) {
 // recoverOrphanedJobs re-enqueues pending jobs that were never pushed to Redis
 // (or whose Redis push failed). Uses updated_at to avoid interfering with retry backoffs.
 func (w *EmailWorker) recoverOrphanedJobs(ctx context.Context) {
-	rows, err := w.pool.Query(ctx,
+	rows, err := w.store.Q().Query(ctx,
 		`SELECT id FROM email_jobs
 		 WHERE status = 'pending' AND updated_at < now() - interval '5 minutes'`,
 	)
@@ -360,6 +421,10 @@ func isRetryableFailure(err error) bool {
 	if err == nil {
 		return true
 	}
+	var nre *nonRetryableError
+	if errors.As(err, &nre) {
+		return false
+	}
 	var resendErr *service.ResendError
 	if errors.As(err, &resendErr) {
 		return resendErr.IsRetryable()
@@ -371,6 +436,12 @@ func isRetryableFailure(err error) bool {
 func shouldPermanentlyFail(retryable bool, newRetryCount, maxRetries int) bool {
 	return !retryable || newRetryCount >= maxRetries
 }
+
+// nonRetryableError wraps errors that should never be retried (e.g. missing domain).
+type nonRetryableError struct{ err error }
+
+func (e *nonRetryableError) Error() string { return e.err.Error() }
+func (e *nonRetryableError) Unwrap() error { return e.err }
 
 // isDomainFailure returns true when the error indicates a domain/account problem
 // that should mark the domain as disconnected (not a transient or payload error).
@@ -388,7 +459,7 @@ func isDomainFailure(err error) bool {
 // markDomainDisconnected marks the domain associated with a job as disconnected.
 func (w *EmailWorker) markDomainDisconnected(ctx context.Context, jobID string, sendErr error) {
 	var domainID, orgID string
-	err := w.pool.QueryRow(ctx,
+	err := w.store.Q().QueryRow(ctx,
 		`SELECT ej.domain_id, ej.org_id FROM email_jobs ej WHERE ej.id = $1`,
 		jobID,
 	).Scan(&domainID, &orgID)
@@ -396,7 +467,7 @@ func (w *EmailWorker) markDomainDisconnected(ctx context.Context, jobID string, 
 		return
 	}
 
-	tag, err := w.pool.Exec(ctx,
+	tag, err := w.store.Q().Exec(ctx,
 		`UPDATE domains SET status = 'disconnected', updated_at = now()
 		 WHERE id = $1 AND status != 'disconnected'`,
 		domainID,
@@ -416,7 +487,7 @@ func (w *EmailWorker) markDomainDisconnected(ctx context.Context, jobID string, 
 func (w *EmailWorker) isPlanActive(ctx context.Context, orgID string) bool {
 	var plan string
 	var planExpiresAt *time.Time
-	if err := w.pool.QueryRow(ctx,
+	if err := w.store.Q().QueryRow(ctx,
 		"SELECT plan, plan_expires_at FROM orgs WHERE id = $1 AND deleted_at IS NULL", orgID,
 	).Scan(&plan, &planExpiresAt); err != nil {
 		return false

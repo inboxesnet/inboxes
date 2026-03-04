@@ -110,7 +110,7 @@ export function NotificationListener() {
       }
 
       // In-app toast (cap at MAX_TOASTS)
-      const id = Date.now().toString();
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       setToasts((prev) => {
         const next = [...prev, { id, from, subject }];
         return next.length > MAX_TOASTS ? next.slice(-MAX_TOASTS) : next;
@@ -128,6 +128,30 @@ export function NotificationListener() {
     const unsub = subscribe("email.received", handleEmailReceived);
     return unsub;
   }, [subscribe, handleEmailReceived]);
+
+  useEffect(() => {
+    const unsub = subscribe("domain.not_found", (msg: WSMessage) => {
+      const payload = msg.payload as { domain?: string; domains?: string[] } | undefined;
+      const domain = payload?.domain || payload?.domains?.[0] || "unknown";
+      toast.warning(`Email skipped — domain "${domain}" not found. Check Settings → Domains.`, {
+        id: `domain-not-found-${domain}`,
+        duration: 8000,
+      });
+    });
+    return unsub;
+  }, [subscribe]);
+
+  useEffect(() => {
+    const unsub = subscribe("domain.discovered", (msg: WSMessage) => {
+      const payload = msg.payload as { domain?: string } | undefined;
+      const domain = payload?.domain || "unknown";
+      toast.info(`New domain found in Resend: ${domain}. Add it in Settings → Domains.`, {
+        id: `domain-discovered-${domain}`,
+        duration: 10000,
+      });
+    });
+    return unsub;
+  }, [subscribe]);
 
   return (
     <>

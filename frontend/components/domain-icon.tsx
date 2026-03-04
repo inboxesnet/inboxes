@@ -39,7 +39,7 @@ export function DomainIcon({
       </button>
 
       {/* Unread dot */}
-      {hasUnread && !active && (
+      {hasUnread && (
         <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-red-500 rounded-full border-2 border-background" />
       )}
 

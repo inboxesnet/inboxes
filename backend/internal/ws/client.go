@@ -12,7 +12,7 @@ import (
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/util"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/inboxes/backend/internal/store"
 )
 
 const (
@@ -90,8 +90,8 @@ func ServeWS(hub *Hub, secret string, appURL string, w http.ResponseWriter, r *h
 
 	// Load alias addresses for non-admin filtering
 	var aliasAddrs []string
-	if hub.pool != nil {
-		aliasAddrs = loadUserAliases(hub.pool, claims.UserID)
+	if hub.store != nil {
+		aliasAddrs = loadUserAliases(hub.ctx, hub.store, claims.UserID)
 	}
 
 	client := &Client{
@@ -113,10 +113,10 @@ func ServeWS(hub *Hub, secret string, appURL string, w http.ResponseWriter, r *h
 }
 
 // loadUserAliases queries the DB for all alias addresses assigned to a user.
-func loadUserAliases(pool *pgxpool.Pool, userID string) []string {
-	queryCtx, queryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+func loadUserAliases(parent context.Context, st store.Store, userID string) []string {
+	queryCtx, queryCancel := context.WithTimeout(parent, 5*time.Second)
 	defer queryCancel()
-	rows, err := pool.Query(queryCtx,
+	rows, err := st.Q().Query(queryCtx,
 		`SELECT a.address FROM aliases a JOIN alias_users au ON au.alias_id = a.id WHERE au.user_id = $1`,
 		userID)
 	if err != nil {
@@ -191,7 +191,7 @@ func (c *Client) writePump() {
 				return
 			}
 			// Check if token has been revoked
-			revokeCtx, revokeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			revokeCtx, revokeCancel := context.WithTimeout(c.hub.ctx, 5*time.Second)
 			revoked := blacklist.IsRevoked(revokeCtx, c.JTI, c.UserID, c.IssuedAt)
 			revokeCancel()
 			if revoked {
@@ -200,8 +200,8 @@ func (c *Client) writePump() {
 				return
 			}
 			// Refresh alias addresses for event filtering
-			if c.hub.pool != nil {
-				c.AliasAddresses = loadUserAliases(c.hub.pool, c.UserID)
+			if c.hub.store != nil {
+				c.AliasAddresses = loadUserAliases(c.hub.ctx, c.hub.store, c.UserID)
 			}
 		}
 	}

@@ -24,7 +24,7 @@ func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID stri
 	var emailID, threadID string
 	var resendPayloadRaw []byte
 	var draftID *string
-	err := w.pool.QueryRow(ctx,
+	err := w.store.Q().QueryRow(ctx,
 		`SELECT email_id, thread_id, resend_payload, draft_id
 		 FROM email_jobs WHERE id = $1`,
 		jobID,
@@ -35,7 +35,7 @@ func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID stri
 
 	// Check domain status before sending
 	var domainStatus string
-	if err := w.pool.QueryRow(ctx,
+	if err := w.store.Q().QueryRow(ctx,
 		`SELECT d.status FROM domains d
 		 JOIN emails e ON e.domain_id = d.id
 		 WHERE e.id = $1`,
@@ -61,7 +61,7 @@ func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID stri
 	}}
 
 	// Batch collection: grab up to 99 more pending send jobs for same org
-	rows, err := w.pool.Query(ctx,
+	rows, err := w.store.Q().Query(ctx,
 		`SELECT id, email_id, thread_id, resend_payload, draft_id, user_id
 		 FROM email_jobs
 		 WHERE org_id = $1 AND status = 'pending' AND job_type = 'send' AND id != $2
@@ -83,7 +83,7 @@ func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID stri
 
 		// Mark additional items as running
 		for _, item := range items[1:] {
-			if _, err := w.pool.Exec(ctx,
+			if _, err := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET status='running', heartbeat_at=now(), updated_at=now() WHERE id=$1`,
 				item.jobID,
 			); err != nil {
@@ -122,7 +122,7 @@ func (w *EmailWorker) sendSingle(ctx context.Context, apiKey string, item sendIt
 		return fmt.Errorf("parse resend response: %w", err)
 	}
 
-	if _, err := w.pool.Exec(ctx,
+	if _, err := w.store.Q().Exec(ctx,
 		`UPDATE emails SET resend_email_id=$1, status='sent', updated_at=now() WHERE id=$2`,
 		resp.ID, item.emailID,
 	); err != nil {
@@ -132,18 +132,18 @@ func (w *EmailWorker) sendSingle(ctx context.Context, apiKey string, item sendIt
 	aliasAddr := w.populateSentAsAlias(ctx, item.emailID, orgID)
 
 	// Ensure thread has sent label
-	addLabelQ(ctx, w.pool, item.threadID, orgID, "sent")
+	addLabelQ(ctx, w.store.Q(), item.threadID, orgID, "sent")
 
 	// Stamp alias label for visibility filtering
 	if aliasAddr != "" {
-		addLabelQ(ctx, w.pool, item.threadID, orgID, "alias:"+aliasAddr)
+		addLabelQ(ctx, w.store.Q(), item.threadID, orgID, "alias:"+aliasAddr)
 	}
 
 	// Merge outbound recipients into thread participant_emails
 	w.mergeParticipantEmails(ctx, item.emailID, item.threadID)
 
 	if item.draftID != nil && *item.draftID != "" {
-		if _, err := w.pool.Exec(ctx, "DELETE FROM drafts WHERE id = $1", *item.draftID); err != nil {
+		if _, err := w.store.Q().Exec(ctx, "DELETE FROM drafts WHERE id = $1", *item.draftID); err != nil {
 			slog.Error("email worker: failed to delete draft", "draft_id", *item.draftID, "error", err)
 		}
 	}
@@ -151,7 +151,7 @@ func (w *EmailWorker) sendSingle(ctx context.Context, apiKey string, item sendIt
 	slog.Info("email worker: sent email", "email_id", item.emailID, "resend_email_id", resp.ID)
 
 	var domainID string
-	warnIfErr(w.pool.QueryRow(ctx, `SELECT domain_id FROM emails WHERE id=$1`, item.emailID).Scan(&domainID),
+	warnIfErr(w.store.Q().QueryRow(ctx, `SELECT domain_id FROM emails WHERE id=$1`, item.emailID).Scan(&domainID),
 		"email worker: domain_id lookup for event failed", "email_id", item.emailID)
 
 	w.bus.Publish(ctx, event.Event{
@@ -186,7 +186,7 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 	if err != nil {
 		slog.Error("email worker: batch send failed, re-enqueueing individually", "error", err, "count", len(items))
 		for _, item := range items {
-			if _, execErr := w.pool.Exec(ctx,
+			if _, execErr := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET status='pending', retry_count=retry_count+1,
 				 error_message=$1, updated_at=now() WHERE id=$2`,
 				err.Error(), item.jobID,
@@ -206,7 +206,7 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 	if err := json.Unmarshal(data, &resps); err != nil {
 		slog.Error("email worker: parse batch response", "error", err)
 		for _, item := range items {
-			if _, execErr := w.pool.Exec(ctx,
+			if _, execErr := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET status='pending', retry_count=retry_count+1,
 				 error_message='failed to parse batch response', updated_at=now() WHERE id=$1`,
 				item.jobID,
@@ -233,7 +233,7 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 	// the count-mismatch warning above and the per-item audit log below.
 	for i, item := range items {
 		if i >= len(resps) {
-			if _, execErr := w.pool.Exec(ctx,
+			if _, execErr := w.store.Q().Exec(ctx,
 				`UPDATE email_jobs SET status='pending', retry_count=retry_count+1,
 				 error_message='unmapped in batch response', updated_at=now() WHERE id=$1`,
 				item.jobID,
@@ -251,7 +251,7 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 			"index", i, "job_id", item.jobID,
 			"email_id", item.emailID, "resend_email_id", resendID)
 
-		if _, execErr := w.pool.Exec(ctx,
+		if _, execErr := w.store.Q().Exec(ctx,
 			`UPDATE emails SET resend_email_id=$1, status='sent', updated_at=now() WHERE id=$2`,
 			resendID, item.emailID,
 		); execErr != nil {
@@ -261,23 +261,23 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 		aliasAddr := w.populateSentAsAlias(ctx, item.emailID, orgID)
 
 		// Ensure thread has sent label
-		addLabelQ(ctx, w.pool, item.threadID, orgID, "sent")
+		addLabelQ(ctx, w.store.Q(), item.threadID, orgID, "sent")
 
 		// Stamp alias label for visibility filtering
 		if aliasAddr != "" {
-			addLabelQ(ctx, w.pool, item.threadID, orgID, "alias:"+aliasAddr)
+			addLabelQ(ctx, w.store.Q(), item.threadID, orgID, "alias:"+aliasAddr)
 		}
 
 		// Merge outbound recipients into thread participant_emails
 		w.mergeParticipantEmails(ctx, item.emailID, item.threadID)
 
 		if item.draftID != nil && *item.draftID != "" {
-			if _, execErr := w.pool.Exec(ctx, "DELETE FROM drafts WHERE id = $1", *item.draftID); execErr != nil {
+			if _, execErr := w.store.Q().Exec(ctx, "DELETE FROM drafts WHERE id = $1", *item.draftID); execErr != nil {
 				slog.Error("email worker: failed to delete draft in batch", "draft_id", *item.draftID, "error", execErr)
 			}
 		}
 
-		if _, execErr := w.pool.Exec(ctx,
+		if _, execErr := w.store.Q().Exec(ctx,
 			`UPDATE email_jobs SET status='completed', heartbeat_at=now(), updated_at=now() WHERE id=$1`,
 			item.jobID,
 		); execErr != nil {
@@ -285,7 +285,7 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 		}
 
 		var domainID string
-		warnIfErr(w.pool.QueryRow(ctx, `SELECT domain_id FROM emails WHERE id=$1`, item.emailID).Scan(&domainID),
+		warnIfErr(w.store.Q().QueryRow(ctx, `SELECT domain_id FROM emails WHERE id=$1`, item.emailID).Scan(&domainID),
 			"email worker: domain_id lookup for batch event failed", "email_id", item.emailID)
 		w.bus.Publish(ctx, event.Event{
 			EventType: event.EmailSent,
@@ -306,7 +306,7 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 // to_addresses and cc_addresses from the sent email.
 func (w *EmailWorker) mergeParticipantEmails(ctx context.Context, emailID, threadID string) {
 	var toJSON, ccJSON json.RawMessage
-	if err := w.pool.QueryRow(ctx,
+	if err := w.store.Q().QueryRow(ctx,
 		`SELECT to_addresses, cc_addresses FROM emails WHERE id = $1`, emailID,
 	).Scan(&toJSON, &ccJSON); err != nil {
 		return
@@ -326,7 +326,7 @@ func (w *EmailWorker) mergeParticipantEmails(ctx context.Context, emailID, threa
 		return
 	}
 
-	if _, err := w.pool.Exec(ctx,
+	if _, err := w.store.Q().Exec(ctx,
 		`UPDATE threads SET participant_emails = (
 		   SELECT jsonb_agg(DISTINCT val) FROM (
 		     SELECT jsonb_array_elements(participant_emails) AS val
@@ -344,7 +344,7 @@ func (w *EmailWorker) mergeParticipantEmails(ctx context.Context, emailID, threa
 // Returns the alias address if matched, empty string otherwise.
 func (w *EmailWorker) populateSentAsAlias(ctx context.Context, emailID, orgID string) string {
 	var fromAddress string
-	if err := w.pool.QueryRow(ctx,
+	if err := w.store.Q().QueryRow(ctx,
 		`SELECT from_address FROM emails WHERE id=$1`, emailID,
 	).Scan(&fromAddress); err != nil {
 		return ""
@@ -352,14 +352,14 @@ func (w *EmailWorker) populateSentAsAlias(ctx context.Context, emailID, orgID st
 
 	fromClean := strings.ToLower(strings.TrimSpace(fromAddress))
 	var aliasAddress string
-	if err := w.pool.QueryRow(ctx,
+	if err := w.store.Q().QueryRow(ctx,
 		`SELECT address FROM aliases WHERE org_id=$1 AND address=$2`,
 		orgID, fromClean,
 	).Scan(&aliasAddress); err != nil {
 		return ""
 	}
 
-	if _, err := w.pool.Exec(ctx,
+	if _, err := w.store.Q().Exec(ctx,
 		`UPDATE emails SET sent_as_alias=$1, updated_at=now() WHERE id=$2`,
 		aliasAddress, emailID,
 	); err != nil {

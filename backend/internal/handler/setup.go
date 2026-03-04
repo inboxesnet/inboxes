@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,13 +10,13 @@ import (
 
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type SetupHandler struct {
-	DB        *pgxpool.Pool
+	Store     store.Store
 	EncSvc    *service.EncryptionService
 	ResendSvc *service.ResendService
 	Secret    string
@@ -35,8 +36,8 @@ func (h *SetupHandler) Status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	var count int
-	if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+	count, err := h.Store.SetupCountUsers(ctx)
+	if err != nil {
 		slog.Error("setup: failed to count users", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to check setup status")
 		return
@@ -113,8 +114,8 @@ func (h *SetupHandler) Setup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Guard: already set up
-	var count int
-	if err := h.DB.QueryRow(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+	count, err := h.Store.SetupCountUsers(ctx)
+	if err != nil {
 		slog.Error("setup: failed to count users", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to check setup status")
 		return
@@ -157,80 +158,18 @@ func (h *SetupHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		name = strings.Split(req.Email, "@")[0]
 	}
 
-	dbCtx, dbCancel := util.DBCtx(ctx)
-	defer dbCancel()
-
-	tx, err := h.DB.Begin(dbCtx)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
-	}
-	defer tx.Rollback(dbCtx)
-
-	// Create org
-	var orgID string
-	if err := tx.QueryRow(dbCtx,
-		"INSERT INTO orgs (name) VALUES ($1) RETURNING id", name+"'s Org",
-	).Scan(&orgID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create org")
-		return
-	}
-
-	// Create admin user with is_owner = true
-	var userID string
-	if err := tx.QueryRow(dbCtx,
-		`INSERT INTO users (org_id, email, name, password_hash, role, status, email_verified, is_owner)
-		 VALUES ($1, $2, $3, $4, 'admin', 'active', true, true)
-		 RETURNING id`,
-		orgID, req.Email, name, string(hash),
-	).Scan(&userID); err != nil {
-		if strings.Contains(err.Error(), "unique") {
+	var orgID, userID string
+	if err := h.Store.WithTx(ctx, func(tx store.Store) error {
+		var txErr error
+		orgID, userID, txErr = tx.CreateAdminSetup(ctx, name+"'s Org", req.Email, name, string(hash), req.SystemResendKey, req.SystemFromAddress, req.SystemFromName, h.EncSvc)
+		return txErr
+	}); err != nil {
+		if strings.Contains(err.Error(), "email already registered") {
 			writeError(w, http.StatusConflict, "email already registered")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to create user")
-		return
-	}
-
-	// Store system Resend key if provided
-	if req.SystemResendKey != "" {
-		encrypted, iv, tag, err := h.EncSvc.Encrypt(req.SystemResendKey)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to encrypt system key")
-			return
-		}
-		if _, err := tx.Exec(dbCtx,
-			`INSERT INTO system_settings (key, value, iv, tag, encrypted)
-			 VALUES ('resend_system_api_key', $1, $2, $3, true)`,
-			encrypted, iv, tag,
-		); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to store system key")
-			return
-		}
-	}
-
-	// Store from address/name if provided (plain text, not encrypted)
-	if req.SystemFromAddress != "" {
-		if _, err := tx.Exec(dbCtx,
-			`INSERT INTO system_settings (key, value, encrypted) VALUES ('system_from_address', $1, false)`,
-			req.SystemFromAddress,
-		); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to store from address")
-			return
-		}
-	}
-	if req.SystemFromName != "" {
-		if _, err := tx.Exec(dbCtx,
-			`INSERT INTO system_settings (key, value, encrypted) VALUES ('system_from_name', $1, false)`,
-			req.SystemFromName,
-		); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to store from name")
-			return
-		}
-	}
-
-	if err := tx.Commit(dbCtx); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit")
+		slog.Error("setup: failed to create admin", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to complete setup")
 		return
 	}
 
@@ -260,7 +199,7 @@ func (h *SetupHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		}
 
 		util.SafeGo("setup-welcome-email", func() {
-			if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+			if _, err := h.ResendSvc.SystemFetch(context.Background(), "POST", "/emails", map[string]interface{}{
 				"from":    from,
 				"to":      []string{req.Email},
 				"subject": "Welcome to Inboxes",
@@ -310,21 +249,13 @@ func (h *SetupHandler) UpdateSystemEmail(w http.ResponseWriter, r *http.Request)
 	}
 
 	// UPSERT from address
-	if _, err := h.DB.Exec(ctx,
-		`INSERT INTO system_settings (key, value, encrypted) VALUES ('system_from_address', $1, false)
-		 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`,
-		req.FromAddress,
-	); err != nil {
+	if err := h.Store.UpsertSystemSetting(ctx, "system_from_address", req.FromAddress); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save from address")
 		return
 	}
 
 	// UPSERT from name
-	if _, err := h.DB.Exec(ctx,
-		`INSERT INTO system_settings (key, value, encrypted) VALUES ('system_from_name', $1, false)
-		 ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now()`,
-		req.FromName,
-	); err != nil {
+	if err := h.Store.UpsertSystemSetting(ctx, "system_from_name", req.FromName); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save from name")
 		return
 	}
@@ -335,9 +266,7 @@ func (h *SetupHandler) UpdateSystemEmail(w http.ResponseWriter, r *http.Request)
 	if req.SendTest {
 		claims := middleware.GetCurrentUser(ctx)
 		if claims != nil {
-			var email string
-			warnIfErr(h.DB.QueryRow(ctx, "SELECT email FROM users WHERE id = $1", claims.UserID).Scan(&email),
-				"setup: failed to look up user email for test")
+			email, _ := h.Store.GetUserEmail(ctx, claims.UserID)
 			if email != "" {
 				from := h.ResendSvc.GetSystemFrom(ctx)
 				if from != "" {

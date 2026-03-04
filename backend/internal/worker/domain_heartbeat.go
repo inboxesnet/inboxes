@@ -169,12 +169,14 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 	}
 	defer localRows.Close()
 
+	localDomainNames := make(map[string]bool)
 	for localRows.Next() {
 		var id, domain, status string
 		var localSPF, localDKIM bool
 		if localRows.Scan(&id, &domain, &status, &localSPF, &localDKIM) != nil {
 			continue
 		}
+		localDomainNames[domain] = true
 
 		info, inResend := resendDomains[domain]
 
@@ -250,6 +252,39 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 			}
 		}
 	}
+
+	// Detect Resend domains not in our DB
+	for resendDomain := range resendDomains {
+		if localDomainNames[resendDomain] {
+			continue
+		}
+		var discoveredID string
+		err := dh.DB.QueryRow(ctx,
+			`INSERT INTO discovered_domains (org_id, domain)
+			 VALUES ($1, $2)
+			 ON CONFLICT (org_id, domain) DO NOTHING
+			 RETURNING id`,
+			orgID, resendDomain,
+		).Scan(&discoveredID)
+		if err == nil && discoveredID != "" {
+			slog.Info("domain heartbeat: discovered unknown Resend domain",
+				"org_id", orgID, "domain", resendDomain)
+			dh.Bus.Publish(ctx, event.Event{
+				EventType: event.DomainDiscovered,
+				OrgID:     orgID,
+				Payload:   map[string]interface{}{"domain": resendDomain},
+			})
+		}
+	}
+
+	// Clean up: remove discovered domains that have since been added locally
+	dh.DB.Exec(ctx,
+		`DELETE FROM discovered_domains
+		 WHERE org_id = $1 AND domain IN (
+		     SELECT d2.domain FROM domains d2 WHERE d2.org_id = $1 AND d2.status != 'deleted'
+		 )`,
+		orgID,
+	)
 }
 
 func isResendErr(err error, target **service.ResendError) bool {

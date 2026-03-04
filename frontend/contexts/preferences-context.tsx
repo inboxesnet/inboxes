@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 
 interface Preferences {
   stripTrackingParams: boolean;
+  warnNoSubject: boolean;
 }
 
 interface PreferencesContextValue extends Preferences {
@@ -13,6 +14,7 @@ interface PreferencesContextValue extends Preferences {
 
 const defaultPreferences: Preferences = {
   stripTrackingParams: true,
+  warnNoSubject: true,
 };
 
 const PreferencesContext = createContext<PreferencesContextValue>({
@@ -33,6 +35,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       .then((data) => {
         setPrefs({
           stripTrackingParams: data.strip_tracking_params !== false,
+          warnNoSubject: data.warn_no_subject !== false,
         });
       })
       .catch(() => {});
@@ -41,7 +44,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   const updatePreference = useCallback((key: keyof Preferences, value: boolean) => {
     setPrefs((prev) => ({ ...prev, [key]: value }));
 
-    const apiKey = key === "stripTrackingParams" ? "strip_tracking_params" : key;
+    const keyMap: Record<string, string> = {
+      stripTrackingParams: "strip_tracking_params",
+      warnNoSubject: "warn_no_subject",
+    };
+    const apiKey = keyMap[key] || key;
     api.patch("/api/users/me/preferences", { [apiKey]: value }).catch(() => {
       // Revert on failure
       setPrefs((prev) => ({ ...prev, [key]: !value }));

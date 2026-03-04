@@ -35,7 +35,7 @@ type webhookEmailData struct {
 func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID string) error {
 	var resendEmailID string
 	var webhookDataRaw []byte
-	err := w.pool.QueryRow(ctx,
+	err := w.store.Q().QueryRow(ctx,
 		`SELECT resend_email_id, webhook_data FROM email_jobs WHERE id = $1`,
 		jobID,
 	).Scan(&resendEmailID, &webhookDataRaw)
@@ -50,7 +50,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 
 	// Idempotency: skip if we already have this email
 	var existingID string
-	if err := w.pool.QueryRow(ctx,
+	if err := w.store.Q().QueryRow(ctx,
 		"SELECT id FROM emails WHERE resend_email_id = $1", resendEmailID,
 	).Scan(&existingID); err == nil {
 		slog.Info("email worker: duplicate email, skipping", "resend_email_id", resendEmailID)
@@ -84,8 +84,8 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	// Single query for all domain lookups
 	domainMap := make(map[string]string) // domain name -> domain ID
 	if len(domainNames) > 0 {
-		rows, err := w.pool.Query(ctx,
-			"SELECT id, domain FROM domains WHERE org_id = $1 AND domain = ANY($2) AND status = 'active'",
+		rows, err := w.store.Q().Query(ctx,
+			"SELECT id, domain FROM domains WHERE org_id = $1 AND domain = ANY($2) AND status = 'active' AND hidden = false",
 			orgID, domainNames,
 		)
 		if err == nil {
@@ -112,7 +112,12 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 		}
 	}
 	if domainID == "" {
-		return fmt.Errorf("no matching domain for email to=%v cc=%v bcc=%v", emailData.To, emailData.CC, emailData.BCC)
+		w.bus.Publish(ctx, event.Event{
+			EventType: event.DomainNotFound,
+			OrgID:     orgID,
+			Payload:   map[string]interface{}{"domains": domainNames},
+		})
+		return &nonRetryableError{fmt.Errorf("no matching domain for email to=%v cc=%v bcc=%v", emailData.To, emailData.CC, emailData.BCC)}
 	}
 
 	// Fetch full email from Resend API
@@ -265,8 +270,8 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	// Determine delivered_via_alias
 	var deliveredViaAlias *string
 	var aliasAddr string
-	if err := w.pool.QueryRow(ctx,
-		`SELECT address FROM aliases WHERE org_id=$1 AND address=$2`,
+	if err := w.store.Q().QueryRow(ctx,
+		`SELECT address FROM aliases WHERE org_id=$1 AND address=$2 AND deleted_at IS NULL`,
 		orgID, strings.ToLower(strings.TrimSpace(recipientAddress)),
 	).Scan(&aliasAddr); err == nil {
 		deliveredViaAlias = &aliasAddr
@@ -276,7 +281,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	dbCtx, dbCancel := util.DBCtx(ctx)
 	defer dbCancel()
 
-	tx, err := w.pool.Begin(dbCtx)
+	tx, err := w.store.Pool().Begin(dbCtx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
@@ -402,6 +407,33 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 		removeLabelQ(dbCtx, tx, threadID, "trash")
 	}
 
+	// Auto-create aliases for own-domain recipient addresses so every address
+	// that receives mail gets an alias for label stamping and sidebar visibility.
+	for _, addr := range allRecipients {
+		cleanAddr := strings.ToLower(strings.TrimSpace(addr))
+		addrParts := strings.Split(cleanAddr, "@")
+		if len(addrParts) == 2 {
+			if dID, ok := domainMap[addrParts[1]]; ok {
+				tx.Exec(dbCtx,
+					`INSERT INTO aliases (org_id, domain_id, address, name)
+					 VALUES ($1, $2, $3, $4)
+					 ON CONFLICT (org_id, address) DO UPDATE SET deleted_at = NULL WHERE aliases.deleted_at IS NOT NULL`,
+					orgID, dID, cleanAddr, addrParts[0],
+				)
+			}
+		}
+	}
+	// Re-check deliveredViaAlias now that alias may have been auto-created
+	if deliveredViaAlias == nil {
+		var autoAliasAddr string
+		if tx.QueryRow(dbCtx,
+			`SELECT address FROM aliases WHERE org_id=$1 AND address=$2 AND deleted_at IS NULL`,
+			orgID, strings.ToLower(strings.TrimSpace(recipientAddress)),
+		).Scan(&autoAliasAddr) == nil {
+			deliveredViaAlias = &autoAliasAddr
+		}
+	}
+
 	// Stamp alias labels for visibility filtering
 	if deliveredViaAlias != nil {
 		addLabelQ(dbCtx, tx, threadID, orgID, "alias:"+*deliveredViaAlias)
@@ -418,7 +450,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	}
 	if len(cleanAddrs) > 0 {
 		aliasRows, aliasErr := tx.Query(dbCtx,
-			`SELECT address FROM aliases WHERE org_id=$1 AND address = ANY($2)`,
+			`SELECT address FROM aliases WHERE org_id=$1 AND address = ANY($2) AND deleted_at IS NULL`,
 			orgID, cleanAddrs,
 		)
 		if aliasErr == nil {
@@ -445,11 +477,11 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 		if len(parts) == 2 {
 			// Only track addresses on our own domains
 			var matchedDomainID string
-			if w.pool.QueryRow(ctx,
+			if w.store.Q().QueryRow(ctx,
 				"SELECT id FROM domains WHERE org_id = $1 AND domain = $2",
 				orgID, parts[1],
 			).Scan(&matchedDomainID) == nil {
-				if _, err := w.pool.Exec(ctx,
+				if _, err := w.store.Q().Exec(ctx,
 					`INSERT INTO discovered_addresses (domain_id, address, local_part, email_count)
 					 VALUES ($1, $2, $3, 1)
 					 ON CONFLICT (domain_id, address) DO UPDATE SET email_count = discovered_addresses.email_count + 1`,
@@ -490,7 +522,7 @@ func (w *EmailWorker) routeEmail(ctx context.Context, orgID, domainID, address s
 	var userID string
 
 	// Phase 1: Direct user match
-	err := w.pool.QueryRow(ctx,
+	err := w.store.Q().QueryRow(ctx,
 		"SELECT id FROM users WHERE org_id = $1 AND email = $2 AND status = 'active'",
 		orgID, address,
 	).Scan(&userID)
@@ -500,12 +532,12 @@ func (w *EmailWorker) routeEmail(ctx context.Context, orgID, domainID, address s
 
 	// Phase 2: Alias match — only route to active users
 	var aliasID string
-	err = w.pool.QueryRow(ctx,
-		"SELECT id FROM aliases WHERE org_id = $1 AND address = $2",
+	err = w.store.Q().QueryRow(ctx,
+		"SELECT id FROM aliases WHERE org_id = $1 AND address = $2 AND deleted_at IS NULL",
 		orgID, address,
 	).Scan(&aliasID)
 	if err == nil {
-		err = w.pool.QueryRow(ctx,
+		err = w.store.Q().QueryRow(ctx,
 			`SELECT au.user_id FROM alias_users au
 			 JOIN users u ON u.id = au.user_id
 			 WHERE au.alias_id = $1 AND u.status = 'active'
@@ -518,7 +550,7 @@ func (w *EmailWorker) routeEmail(ctx context.Context, orgID, domainID, address s
 	}
 
 	// Phase 3: Catch-all — org admin
-	err = w.pool.QueryRow(ctx,
+	err = w.store.Q().QueryRow(ctx,
 		"SELECT id FROM users WHERE org_id = $1 AND role = 'admin' AND status = 'active' LIMIT 1",
 		orgID,
 	).Scan(&userID)
@@ -570,7 +602,7 @@ func (w *EmailWorker) downloadAndStoreAttachment(ctx context.Context, orgID, use
 
 	id := uuid.New().String()
 
-	_, err = w.pool.Exec(ctx,
+	_, err = w.store.Q().Exec(ctx,
 		`INSERT INTO attachments (id, org_id, user_id, filename, content_type, size, data, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
 		id, orgID, userID, filename, contentType, len(data), data,
@@ -595,7 +627,7 @@ func (w *EmailWorker) fetchThreadForEvent(ctx context.Context, threadID, orgID s
 	var messageCount, unreadCount int
 	var labels []string
 
-	err := w.pool.QueryRow(ctx,
+	err := w.store.Q().QueryRow(ctx,
 		`SELECT t.id, t.domain_id, t.subject, t.participant_emails,
 		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.original_to, t.created_at,
 		 `+labelsSubquery+` as labels

@@ -10,11 +10,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/inboxes/backend/internal/middleware"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/inboxes/backend/internal/store"
 )
 
 type AttachmentHandler struct {
-	DB *pgxpool.Pool
+	Store store.Store
 }
 
 // Upload handles multipart file upload and stores file content in the database.
@@ -65,7 +65,7 @@ func (h *AttachmentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store in attachments table
-	_, err = h.DB.Exec(r.Context(),
+	_, err = h.Store.Q().Exec(r.Context(),
 		`INSERT INTO attachments (id, org_id, user_id, filename, content_type, size, data, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
 		id, claims.OrgID, claims.UserID, header.Filename, contentType, len(data), data,
@@ -123,7 +123,7 @@ func (h *AttachmentHandler) Meta(w http.ResponseWriter, r *http.Request) {
 
 	var filename, contentType string
 	var size int
-	err := h.DB.QueryRow(r.Context(),
+	err := h.Store.Q().QueryRow(r.Context(),
 		`SELECT filename, content_type, size FROM attachments WHERE id = $1 AND org_id = $2`,
 		attachmentID, claims.OrgID,
 	).Scan(&filename, &contentType, &size)
@@ -150,7 +150,7 @@ func (h *AttachmentHandler) Download(w http.ResponseWriter, r *http.Request) {
 	var filename, contentType string
 	var size int
 	var data []byte
-	err := h.DB.QueryRow(r.Context(),
+	err := h.Store.Q().QueryRow(r.Context(),
 		`SELECT filename, content_type, size, data FROM attachments WHERE id = $1 AND org_id = $2`,
 		attachmentID, claims.OrgID,
 	).Scan(&filename, &contentType, &size, &data)

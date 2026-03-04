@@ -7,38 +7,23 @@ import (
 	"strings"
 
 	"github.com/inboxes/backend/internal/service"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/inboxes/backend/internal/store"
 )
 
 type CronHandler struct {
-	DB        *pgxpool.Pool
+	Store     store.Store
 	ResendSvc *service.ResendService
 }
 
 func (h *CronHandler) PurgeTrash(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Soft-delete threads with trash label past expiry
-	tag, err := h.DB.Exec(ctx,
-		`WITH expired AS (
-			SELECT t.id FROM threads t
-			JOIN thread_labels tl ON tl.thread_id = t.id AND tl.label = 'trash'
-			WHERE t.trash_expires_at < now() AND t.deleted_at IS NULL
-		)
-		UPDATE threads SET deleted_at = now(), updated_at = now() WHERE id IN (SELECT id FROM expired)`)
+	purged, err := h.Store.PurgeExpiredTrash(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to purge trash")
 		return
 	}
 
-	// Clean up orphaned labels
-	if _, err := h.DB.Exec(ctx,
-		`DELETE FROM thread_labels WHERE thread_id IN (SELECT id FROM threads WHERE deleted_at IS NOT NULL)`); err != nil {
-		slog.Error("cron: label cleanup failed", "error", err)
-	}
-
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"purged": tag.RowsAffected(),
+		"purged": purged,
 	})
 }
 
@@ -47,7 +32,7 @@ func (h *CronHandler) PurgeTrash(w http.ResponseWriter, r *http.Request) {
 func (h *CronHandler) CleanupWebhooks(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	rows, err := h.DB.Query(ctx,
+	rows, err := h.Store.Q().Query(ctx,
 		`SELECT id, resend_webhook_id FROM orgs WHERE resend_webhook_id IS NOT NULL AND resend_webhook_id != ''`,
 	)
 	if err != nil {
