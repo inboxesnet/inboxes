@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -138,9 +140,34 @@ func GenerateToken(secret, userID, orgID, role string) (tokenStr string, jti str
 	return
 }
 
+// cookieDomain derives a cross-subdomain cookie domain from appURL.
+// For "https://app.inboxes.net" it returns ".inboxes.net".
+// For localhost, IPs, or single-label hosts it returns "" (browser default).
+func cookieDomain(appURL string) string {
+	u, err := url.Parse(appURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	if host == "" || host == "localhost" {
+		return ""
+	}
+	// IP address — no domain attribute
+	if net.ParseIP(host) != nil {
+		return ""
+	}
+	// Single-label host (no dots) — no domain attribute
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	// Return parent domain (browsers treat Domain=x.com as .x.com per RFC 6265)
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
 func SetTokenCookie(w http.ResponseWriter, token, appURL string) {
 	secure := strings.HasPrefix(appURL, "https")
-	http.SetCookie(w, &http.Cookie{
+	c := &http.Cookie{
 		Name:     "token",
 		Value:    token,
 		Path:     "/",
@@ -148,12 +175,16 @@ func SetTokenCookie(w http.ResponseWriter, token, appURL string) {
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+	if d := cookieDomain(appURL); d != "" {
+		c.Domain = d
+	}
+	http.SetCookie(w, c)
 }
 
 func ClearTokenCookie(w http.ResponseWriter, appURL string) {
 	secure := strings.HasPrefix(appURL, "https")
-	http.SetCookie(w, &http.Cookie{
+	c := &http.Cookie{
 		Name:     "token",
 		Value:    "",
 		Path:     "/",
@@ -161,7 +192,11 @@ func ClearTokenCookie(w http.ResponseWriter, appURL string) {
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+	if d := cookieDomain(appURL); d != "" {
+		c.Domain = d
+	}
+	http.SetCookie(w, c)
 }
 
 // RequireOwner restricts access to the instance owner (is_owner = true).

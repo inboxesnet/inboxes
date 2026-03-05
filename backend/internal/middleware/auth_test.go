@@ -260,6 +260,9 @@ func TestSetTokenCookie_HTTPS(t *testing.T) {
 	if cookie.Name != "token" {
 		t.Errorf("SetTokenCookie(HTTPS): Name = %q, want %q", cookie.Name, "token")
 	}
+	if cookie.Domain != "example.com" {
+		t.Errorf("SetTokenCookie(HTTPS): Domain = %q, want %q", cookie.Domain, "example.com")
+	}
 }
 
 func TestSetTokenCookie_HTTP(t *testing.T) {
@@ -273,6 +276,9 @@ func TestSetTokenCookie_HTTP(t *testing.T) {
 	cookie := cookies[0]
 	if cookie.Secure {
 		t.Error("SetTokenCookie(HTTP): Secure = true, want false")
+	}
+	if cookie.Domain != "" {
+		t.Errorf("SetTokenCookie(HTTP): Domain = %q, want empty", cookie.Domain)
 	}
 }
 
@@ -293,6 +299,36 @@ func TestClearTokenCookie(t *testing.T) {
 	}
 	if cookie.Value != "" {
 		t.Errorf("ClearTokenCookie: Value = %q, want empty", cookie.Value)
+	}
+	if cookie.Domain != "example.com" {
+		t.Errorf("ClearTokenCookie: Domain = %q, want %q", cookie.Domain, "example.com")
+	}
+}
+
+func TestCookieDomain(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		appURL string
+		want   string
+	}{
+		{"subdomain", "https://app.inboxes.net", "inboxes.net"},
+		{"root domain", "https://inboxes.net", "inboxes.net"},
+		{"localhost", "http://localhost:3000", ""},
+		{"IP address", "http://192.168.1.1:8080", ""},
+		{"IPv6", "http://[::1]:8080", ""},
+		{"single-label host", "http://myhost:8080", ""},
+		{"invalid URL", "://bad", ""},
+		{"deep subdomain", "https://a.b.example.com", "example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := cookieDomain(tt.appURL)
+			if got != tt.want {
+				t.Errorf("cookieDomain(%q) = %q, want %q", tt.appURL, got, tt.want)
+			}
+		})
 	}
 }
 
