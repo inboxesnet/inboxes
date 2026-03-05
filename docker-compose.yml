@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-inboxes}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (generate with: openssl rand -hex 16)}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-inboxes}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -49,7 +49,7 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       SESSION_SECRET: ${SESSION_SECRET}
       APP_URL: https://${DOMAIN}
-      PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL to your externally reachable backend URL}
+      PUBLIC_URL: ${PUBLIC_URL}
       API_PORT: "8080"
       RESEND_SYSTEM_API_KEY: ${RESEND_SYSTEM_API_KEY:-}
       # ── Commercial mode (leave empty for self-hosted) ──
