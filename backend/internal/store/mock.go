@@ -82,7 +82,7 @@ type MockStore struct {
 	GetResendDomainIDFn      func(ctx context.Context, domainID, orgID string) (string, error)
 	UpdateDomainStatusFn     func(ctx context.Context, domainID, status string, dnsRecords json.RawMessage) error
 	ReorderDomainsFn         func(ctx context.Context, orgID string, order []DomainOrder) error
-	GetUnreadCountsFn        func(ctx context.Context, orgID, userID string) (map[string]int, error)
+	GetUnreadCountsFn        func(ctx context.Context, orgID string, role string, aliasAddrs []string) (map[string]int, error)
 	UpdateDomainVisibilityFn func(ctx context.Context, orgID string, visibleIDs []string) error
 	SyncDomainsFn            func(ctx context.Context, orgID string, resendDomains []ResendDomainInfo) error
 	SoftDeleteDomainFn       func(ctx context.Context, domainID, orgID string) (int64, error)
@@ -638,9 +638,9 @@ func (m *MockStore) ReorderDomains(ctx context.Context, orgID string, order []Do
 	return nil
 }
 
-func (m *MockStore) GetUnreadCounts(ctx context.Context, orgID, userID string) (map[string]int, error) {
+func (m *MockStore) GetUnreadCounts(ctx context.Context, orgID string, role string, aliasAddrs []string) (map[string]int, error) {
 	if m.GetUnreadCountsFn != nil {
-		return m.GetUnreadCountsFn(ctx, orgID, userID)
+		return m.GetUnreadCountsFn(ctx, orgID, role, aliasAddrs)
 	}
 	return map[string]int{}, nil
 }

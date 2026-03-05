@@ -166,8 +166,18 @@ func (h *DomainHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 
 func (h *DomainHandler) UnreadCounts(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
+	ctx := r.Context()
 
-	counts, err := h.Store.GetUnreadCounts(r.Context(), claims.OrgID, claims.UserID)
+	var aliasAddrs []string
+	if claims.Role != "admin" {
+		addrs, _ := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
+		if addrs == nil {
+			addrs = []string{}
+		}
+		aliasAddrs = addrs
+	}
+
+	counts, err := h.Store.GetUnreadCounts(ctx, claims.OrgID, claims.Role, aliasAddrs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get unread counts")
 		return

@@ -160,7 +160,7 @@ func TestUnreadCounts(t *testing.T) {
 	testStore.UpdateThreadUnread(ctx, t2, orgID, 1)
 	testStore.UpdateThreadUnread(ctx, t3, orgID, 3)
 
-	counts, err := testStore.GetUnreadCounts(ctx, orgID, userID)
+	counts, err := testStore.GetUnreadCounts(ctx, orgID, "admin", nil)
 	if err != nil {
 		t.Fatalf("GetUnreadCounts failed: %v", err)
 	}

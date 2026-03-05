@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
 import { hasLabel } from "@/lib/types";
-import type { Thread, ThreadListResponse, Label } from "@/lib/types";
+import type { Thread, ThreadListResponse, Label, UnreadCounts } from "@/lib/types";
 
 const LIMIT = 100;
 
@@ -198,6 +198,29 @@ export function useThreadAction() {
       const movingActions = ["archive", "trash", "spam", "delete", "move:deleted_forever"];
       const isMoving = movingActions.includes(action) || action.startsWith("move:");
 
+      // Adjust unread counts BEFORE modifying cached threads (WSSync will see delta=0)
+      if (action === "read" || action === "unread" || isMoving) {
+        const allQueries = qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() });
+        let thread: Thread | undefined;
+        for (const query of allQueries) {
+          const data = query.state.data as ThreadListResponse | undefined;
+          const found = data?.threads?.find((t) => t.id === threadId);
+          if (found) { thread = found; break; }
+        }
+        if (thread && hasLabel(thread, "inbox") && !hasLabel(thread, "trash") && !hasLabel(thread, "spam")) {
+          let delta = 0;
+          if (action === "read") delta = -thread.unread_count;
+          else if (action === "unread") delta = 1 - thread.unread_count;
+          else if (isMoving) delta = -thread.unread_count;
+          if (delta !== 0) {
+            qc.setQueryData<UnreadCounts>(queryKeys.domains.unreadCounts(), (old) => {
+              if (!old) return old;
+              return { ...old, [thread!.domain_id]: Math.max(0, (old[thread!.domain_id] || 0) + delta) };
+            });
+          }
+        }
+      }
+
       // Optimistic: update all thread lists
       qc.setQueriesData<ThreadListResponse>(
         { queryKey: queryKeys.threads.lists() },
@@ -355,6 +378,36 @@ export function useBulkAction() {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
       const movingActions = ["archive", "trash", "spam", "move", "delete"];
+
+      // Adjust unread counts BEFORE modifying cached threads (WSSync will see delta=0)
+      if (action === "read" || action === "unread" || movingActions.includes(action)) {
+        const seen = new Set<string>();
+        const deltaByDomain: Record<string, number> = {};
+        for (const query of qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() })) {
+          const data = query.state.data as ThreadListResponse | undefined;
+          if (!data?.threads) continue;
+          for (const t of data.threads) {
+            if (seen.has(t.id) || !threadIds.includes(t.id)) continue;
+            seen.add(t.id);
+            if (!hasLabel(t, "inbox") || hasLabel(t, "trash") || hasLabel(t, "spam")) continue;
+            let delta = 0;
+            if (action === "read") delta = -t.unread_count;
+            else if (action === "unread") delta = 1 - t.unread_count;
+            else delta = -t.unread_count;
+            if (delta !== 0) deltaByDomain[t.domain_id] = (deltaByDomain[t.domain_id] || 0) + delta;
+          }
+        }
+        if (Object.keys(deltaByDomain).length > 0) {
+          qc.setQueryData<UnreadCounts>(queryKeys.domains.unreadCounts(), (old) => {
+            if (!old) return old;
+            const updated = { ...old };
+            for (const [domainId, delta] of Object.entries(deltaByDomain)) {
+              updated[domainId] = Math.max(0, (updated[domainId] || 0) + delta);
+            }
+            return updated;
+          });
+        }
+      }
 
       // Optimistic: update all thread lists
       qc.setQueriesData<ThreadListResponse>(

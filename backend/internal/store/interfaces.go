@@ -127,7 +127,7 @@ type DomainStore interface {
 	GetResendDomainID(ctx context.Context, domainID, orgID string) (string, error)
 	UpdateDomainStatus(ctx context.Context, domainID, status string, dnsRecords json.RawMessage) error
 	ReorderDomains(ctx context.Context, orgID string, order []DomainOrder) error
-	GetUnreadCounts(ctx context.Context, orgID, userID string) (map[string]int, error)
+	GetUnreadCounts(ctx context.Context, orgID string, role string, aliasAddrs []string) (map[string]int, error)
 	UpdateDomainVisibility(ctx context.Context, orgID string, visibleIDs []string) error
 	SyncDomains(ctx context.Context, orgID string, resendDomains []ResendDomainInfo) error
 	SoftDeleteDomain(ctx context.Context, domainID, orgID string) (int64, error)

@@ -60,15 +60,31 @@ func (s *PgStore) ReorderDomains(ctx context.Context, orgID string, order []Doma
 	return nil
 }
 
-func (s *PgStore) GetUnreadCounts(ctx context.Context, orgID, userID string) (map[string]int, error) {
-	rows, err := s.q.Query(ctx,
-		`SELECT t.domain_id, COALESCE(SUM(t.unread_count), 0)
+func (s *PgStore) GetUnreadCounts(ctx context.Context, orgID string, role string, aliasAddrs []string) (map[string]int, error) {
+	query := `SELECT t.domain_id, COALESCE(SUM(t.unread_count), 0)
 		 FROM threads t
 		 JOIN thread_labels tl ON tl.thread_id = t.id
 		 JOIN domains d ON d.id = t.domain_id
-		 WHERE d.org_id = $1 AND t.user_id = $2 AND tl.label = 'inbox' AND t.deleted_at IS NULL
-		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))
-		 GROUP BY t.domain_id`, orgID, userID)
+		 WHERE d.org_id = $1 AND tl.label = 'inbox' AND t.deleted_at IS NULL
+		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
+	args := []interface{}{orgID}
+
+	// Non-admins: filter by alias visibility (same as ListThreads)
+	if role != "admin" {
+		if aliasAddrs == nil {
+			aliasAddrs = []string{}
+		}
+		labels := make([]string, len(aliasAddrs))
+		for i, addr := range aliasAddrs {
+			labels[i] = "alias:" + addr
+		}
+		query += ` AND EXISTS (SELECT 1 FROM thread_labels al WHERE al.thread_id = t.id AND al.label = ANY($2::text[]))`
+		args = append(args, labels)
+	}
+
+	query += ` GROUP BY t.domain_id`
+
+	rows, err := s.q.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
