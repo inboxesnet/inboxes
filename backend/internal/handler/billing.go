@@ -12,12 +12,12 @@ import (
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/store"
-	"github.com/stripe/stripe-go/v82"
-	billingportalSession "github.com/stripe/stripe-go/v82/billingportal/session"
-	checkoutSession "github.com/stripe/stripe-go/v82/checkout/session"
-	"github.com/stripe/stripe-go/v82/customer"
-	"github.com/stripe/stripe-go/v82/subscription"
-	"github.com/stripe/stripe-go/v82/webhook"
+	"github.com/stripe/stripe-go/v84"
+	billingportalSession "github.com/stripe/stripe-go/v84/billingportal/session"
+	checkoutSession "github.com/stripe/stripe-go/v84/checkout/session"
+	"github.com/stripe/stripe-go/v84/customer"
+	"github.com/stripe/stripe-go/v84/subscription"
+	"github.com/stripe/stripe-go/v84/webhook"
 )
 
 type BillingHandler struct {
@@ -239,6 +239,7 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 		event, err = webhook.ConstructEvent(body, sig, h.StripeWebhookSecret)
 	}
 	if err != nil {
+		slog.Error("stripe: webhook signature verification failed", "error", err, "sig_header", sig[:min(len(sig), 50)])
 		writeError(w, http.StatusBadRequest, "invalid signature")
 		return
 	}
@@ -416,6 +417,65 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 			}
 		}
 
+	case "invoice.paid":
+		var inv stripe.Invoice
+		if err := decodeStripeObject(event.Data.Raw, &inv); err != nil {
+			slog.Error("stripe: decode invoice.paid", "error", err)
+			break
+		}
+		if inv.Customer != nil {
+			tag, err := h.Store.Q().Exec(ctx,
+				`UPDATE orgs SET plan = 'pro', plan_expires_at = NULL
+				 WHERE stripe_customer_id = $1`,
+				inv.Customer.ID,
+			)
+			if err != nil {
+				slog.Error("stripe: update org after invoice paid", "error", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if tag.RowsAffected() == 0 {
+				slog.Warn("stripe: no org found for customer", "customer_id", inv.Customer.ID)
+			} else {
+				h.publishPlanChanged(ctx, inv.Customer.ID, "pro")
+			}
+		}
+
+	case "invoice.payment_action_required":
+		var inv stripe.Invoice
+		if err := decodeStripeObject(event.Data.Raw, &inv); err != nil {
+			slog.Error("stripe: decode invoice.payment_action_required", "error", err)
+			break
+		}
+		if inv.Customer != nil {
+			slog.Warn("stripe: payment action required", "customer_id", inv.Customer.ID)
+		}
+
+	case "invoice.marked_uncollectible":
+		var inv stripe.Invoice
+		if err := decodeStripeObject(event.Data.Raw, &inv); err != nil {
+			slog.Error("stripe: decode invoice.marked_uncollectible", "error", err)
+			break
+		}
+		if inv.Customer != nil {
+			expiry := time.Now().Add(7 * 24 * time.Hour)
+			tag, err := h.Store.Q().Exec(ctx,
+				`UPDATE orgs SET plan = 'cancelled', plan_expires_at = $1
+				 WHERE stripe_customer_id = $2`,
+				expiry, inv.Customer.ID,
+			)
+			if err != nil {
+				slog.Error("stripe: update org after invoice uncollectible", "error", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if tag.RowsAffected() == 0 {
+				slog.Warn("stripe: no org found for customer", "customer_id", inv.Customer.ID)
+			} else {
+				h.publishPlanChanged(ctx, inv.Customer.ID, "cancelled")
+			}
+		}
+
 	case "invoice.upcoming":
 		// Notification only — don't change plan state
 		var inv stripe.Invoice
@@ -426,6 +486,45 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 		if inv.Customer != nil {
 			slog.Info("stripe: upcoming invoice", "customer_id", inv.Customer.ID)
 		}
+
+	case "customer.subscription.pending_update_applied":
+		var sub stripe.Subscription
+		if err := decodeStripeObject(event.Data.Raw, &sub); err != nil {
+			slog.Error("stripe: decode customer.subscription.pending_update_applied", "error", err)
+			break
+		}
+		if sub.Customer != nil {
+			slog.Info("stripe: pending subscription update applied", "customer_id", sub.Customer.ID)
+		}
+
+	case "customer.subscription.pending_update_expired":
+		var sub stripe.Subscription
+		if err := decodeStripeObject(event.Data.Raw, &sub); err != nil {
+			slog.Error("stripe: decode customer.subscription.pending_update_expired", "error", err)
+			break
+		}
+		if sub.Customer != nil {
+			slog.Info("stripe: pending subscription update expired", "customer_id", sub.Customer.ID)
+		}
+
+	case "customer.subscription.trial_will_end":
+		var sub stripe.Subscription
+		if err := decodeStripeObject(event.Data.Raw, &sub); err != nil {
+			slog.Error("stripe: decode customer.subscription.trial_will_end", "error", err)
+			break
+		}
+		if sub.Customer != nil {
+			slog.Info("stripe: trial ending soon", "customer_id", sub.Customer.ID)
+		}
+
+	case "payment_intent.succeeded":
+		slog.Info("stripe: payment intent succeeded", "event_id", event.ID)
+
+	case "payment_intent.payment_failed":
+		slog.Info("stripe: payment intent failed", "event_id", event.ID)
+
+	case "payment_intent.canceled":
+		slog.Info("stripe: payment intent canceled", "event_id", event.ID)
 
 	default:
 		slog.Warn("stripe: unhandled event type", "type", event.Type, "event_id", event.ID)
