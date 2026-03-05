@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import DOMPurify from "dompurify";
 import { sanitizeEmailHtml, ALLOWED_CSS_PROPERTIES } from "@/lib/sanitize-html";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
