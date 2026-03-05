@@ -152,10 +152,10 @@ func (s *PgStore) InsertEmail(ctx context.Context, threadID, userID, orgID, doma
 	return emailID, err
 }
 
-func (s *PgStore) UpdateThreadStats(ctx context.Context, threadID, snippet string) error {
+func (s *PgStore) UpdateThreadStats(ctx context.Context, threadID, snippet, lastSender string) error {
 	_, err := s.q.Exec(ctx,
-		`UPDATE threads SET message_count = message_count + 1, last_message_at = now(), snippet = $2, updated_at = now()
-		 WHERE id = $1`, threadID, snippet,
+		`UPDATE threads SET message_count = message_count + 1, last_message_at = now(), snippet = $2, last_sender = $3, updated_at = now()
+		 WHERE id = $1`, threadID, snippet, lastSender,
 	)
 	return err
 }
@@ -175,7 +175,7 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 	sqlQuery := `SELECT DISTINCT ON (t.id)
 		t.id, t.domain_id, t.subject, t.participant_emails,
 		t.last_message_at, t.message_count, t.unread_count,
-		t.snippet, t.original_to, t.created_at
+		t.snippet, t.last_sender, t.original_to, t.created_at
 		FROM threads t
 		JOIN emails e ON e.thread_id = t.id
 		WHERE e.org_id = $1 AND e.search_vector @@ plainto_tsquery('english', $2)
@@ -213,7 +213,7 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 	var results []map[string]any
 	var threadIDs []string
 	for rows.Next() {
-		var id, dID, subject, snippet string
+		var id, dID, subject, snippet, lastSender string
 		var originalTo *string
 		var participants json.RawMessage
 		var lastMessageAt, createdAt time.Time
@@ -221,7 +221,7 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 
 		rows.Scan(&id, &dID, &subject, &participants,
 			&lastMessageAt, &messageCount, &unreadCount,
-			&snippet, &originalTo, &createdAt)
+			&snippet, &lastSender, &originalTo, &createdAt)
 
 		t := map[string]any{
 			"id":                 id,
@@ -232,6 +232,7 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 			"message_count":      messageCount,
 			"unread_count":       unreadCount,
 			"snippet":            snippet,
+			"last_sender":        lastSender,
 			"created_at":         createdAt,
 		}
 		if originalTo != nil {

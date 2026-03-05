@@ -16,6 +16,7 @@ const mockThread: Thread & { emails: Email[] } = {
   unread_count: 0,
   labels: ["inbox"],
   snippet: "Hello world",
+  last_sender: "",
   original_to: "bob@test.com",
   created_at: "2026-01-01T00:00:00Z",
   emails: [

@@ -210,7 +210,7 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("failed to marshal participants")
 			}
 			var err error
-			threadID, err = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, req.Subject, participants, snippet)
+			threadID, err = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, req.Subject, participants, snippet, req.From)
 			if err != nil {
 				slog.Error("email: create thread failed", "error", err)
 				return fmt.Errorf("failed to create thread")
@@ -231,7 +231,7 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Update thread stats
-		if err := tx.UpdateThreadStats(ctx, threadID, snippet); err != nil {
+		if err := tx.UpdateThreadStats(ctx, threadID, snippet, req.From); err != nil {
 			slog.Error("email: update thread failed", "thread_id", threadID, "error", err)
 		}
 

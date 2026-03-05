@@ -12,6 +12,16 @@ vi.mock("@/lib/thread-helpers", () => ({
     const atIndex = first.indexOf("@");
     return atIndex > 0 ? first.substring(0, atIndex) : first;
   },
+  extractDisplayName: (raw: string) => {
+    if (!raw) return "";
+    const ltIndex = raw.indexOf("<");
+    if (ltIndex > 0) {
+      const name = raw.substring(0, ltIndex).trim().replace(/^["']|["']$/g, "");
+      if (name) return name;
+    }
+    const atIndex = raw.indexOf("@");
+    return atIndex > 0 ? raw.substring(0, atIndex) : raw;
+  },
 }));
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -27,6 +37,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     unread_count: 0,
     labels: ["inbox"],
     snippet: "Hello world",
+    last_sender: "",
     original_to: "hello@test.com",
     created_at: "2026-01-01T00:00:00Z",
     ...overrides,

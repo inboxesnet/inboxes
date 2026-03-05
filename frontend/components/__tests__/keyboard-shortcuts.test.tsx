@@ -15,6 +15,7 @@ const mockThread = (id: string, labels: string[] = ["inbox"]): Thread => ({
   unread_count: 0,
   labels,
   snippet: "test",
+  last_sender: "",
   original_to: "a@b.com",
   created_at: "2026-01-01T00:00:00Z",
 });

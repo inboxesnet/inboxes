@@ -193,7 +193,7 @@ func TestDraftGet_Success(t *testing.T) {
 				return "From <from@example.com>", nil
 			},
 			// WithTx defaults to calling fn(m), so these will run on the same mock
-			CreateThreadFn: func(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet string) (string, error) {
+			CreateThreadFn: func(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet, lastSender string) (string, error) {
 				return "new-thread", nil
 			},
 			AddLabelFn: func(ctx context.Context, threadID, orgID, label string) error {
@@ -202,7 +202,7 @@ func TestDraftGet_Success(t *testing.T) {
 			InsertEmailFn: func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status, inReplyTo string, refsJSON []byte) (string, error) {
 				return "email1", nil
 			},
-			UpdateThreadStatsFn: func(ctx context.Context, threadID, snippet string) error {
+			UpdateThreadStatsFn: func(ctx context.Context, threadID, snippet, lastSender string) error {
 				return nil
 			},
 			CreateEmailJobFn: func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error) {

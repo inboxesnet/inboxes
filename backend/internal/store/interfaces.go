@@ -90,7 +90,7 @@ type ThreadStore interface {
 	FilterTrashThreadIDs(ctx context.Context, threadIDs []string) ([]string, error)
 	BulkSoftDelete(ctx context.Context, threadIDs []string, orgID string) (int64, error)
 	ResolveFilteredThreadIDs(ctx context.Context, orgID, label, domainID, role string, aliasAddrs []string) ([]string, error)
-	CreateThread(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet string) (string, error)
+	CreateThread(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet, lastSender string) (string, error)
 
 	// Label operations (work on both pool and tx)
 	AddLabel(ctx context.Context, threadID, orgID, label string) error
@@ -112,7 +112,7 @@ type EmailStore interface {
 	ResolveFromDisplay(ctx context.Context, orgID, address string) (string, error)
 	LookupDomainByName(ctx context.Context, orgID, domainName string) (string, error)
 	InsertEmail(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status string, inReplyTo string, refsJSON []byte) (string, error)
-	UpdateThreadStats(ctx context.Context, threadID, snippet string) error
+	UpdateThreadStats(ctx context.Context, threadID, snippet, lastSender string) error
 	CreateEmailJob(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
 	SearchEmails(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error)
 	ListAdminJobs(ctx context.Context, orgID string) ([]map[string]any, error)

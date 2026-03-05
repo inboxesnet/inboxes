@@ -94,6 +94,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     unread_count: 1,
     labels: ["inbox"],
     snippet: "Hello",
+    last_sender: "",
     original_to: "alice@test.com",
     created_at: "2026-01-01T00:00:00Z",
     ...overrides,

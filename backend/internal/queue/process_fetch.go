@@ -345,9 +345,9 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 			return fmt.Errorf("marshal participants: %w", marshalErr)
 		}
 		if err := tx.QueryRow(dbCtx,
-			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-			orgID, routedUserID, domainID, cleanSubject, participants, recipientAddress, snippet,
+			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet, last_sender)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+			orgID, routedUserID, domainID, cleanSubject, participants, recipientAddress, snippet, emailData.From,
 		).Scan(&threadID); err != nil {
 			return fmt.Errorf("create thread: %w", err)
 		}
@@ -383,7 +383,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	// UPDATE thread stats + merge participant_emails
 	if _, err := tx.Exec(dbCtx,
 		`UPDATE threads SET message_count = message_count + 1, unread_count = unread_count + 1,
-		 last_message_at = now(), snippet = $2, updated_at = now(),
+		 last_message_at = now(), snippet = $2, last_sender = $4, updated_at = now(),
 		 participant_emails = (
 		   SELECT jsonb_agg(DISTINCT val) FROM (
 		     SELECT jsonb_array_elements(participant_emails) AS val
@@ -391,7 +391,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 		     SELECT jsonb_array_elements($3::jsonb) AS val
 		   ) sub
 		 )
-		 WHERE id = $1`, threadID, snippet, toJSON,
+		 WHERE id = $1`, threadID, snippet, toJSON, emailData.From,
 	); err != nil {
 		return fmt.Errorf("update thread: %w", err)
 	}
@@ -620,7 +620,7 @@ const labelsSubquery = `(SELECT COALESCE(array_agg(tl2.label ORDER BY tl2.label)
 
 // fetchThreadForEvent returns a thread summary map suitable for WS event payloads.
 func (w *EmailWorker) fetchThreadForEvent(ctx context.Context, threadID, orgID string) map[string]interface{} {
-	var id, dID, subject, snippet string
+	var id, dID, subject, snippet, lastSender string
 	var originalTo *string
 	var participants json.RawMessage
 	var lastMessageAt, createdAt time.Time
@@ -629,12 +629,12 @@ func (w *EmailWorker) fetchThreadForEvent(ctx context.Context, threadID, orgID s
 
 	err := w.store.Q().QueryRow(ctx,
 		`SELECT t.id, t.domain_id, t.subject, t.participant_emails,
-		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.original_to, t.created_at,
+		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 		 `+labelsSubquery+` as labels
 		 FROM threads t WHERE t.id = $1 AND t.org_id = $2`,
 		threadID, orgID,
 	).Scan(&id, &dID, &subject, &participants,
-		&lastMessageAt, &messageCount, &unreadCount, &snippet, &originalTo, &createdAt, &labels)
+		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &labels)
 	if err != nil {
 		return nil
 	}
@@ -651,6 +651,7 @@ func (w *EmailWorker) fetchThreadForEvent(ctx context.Context, threadID, orgID s
 		"unread_count":       unreadCount,
 		"labels":             labels,
 		"snippet":            snippet,
+		"last_sender":        lastSender,
 		"created_at":         createdAt,
 	}
 	if originalTo != nil {

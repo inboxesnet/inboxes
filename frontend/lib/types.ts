@@ -44,6 +44,7 @@ export interface Thread {
   unread_count: number;
   labels: string[];
   snippet: string;
+  last_sender: string;
   original_to: string;
   trash_expires_at?: string;
   created_at: string;

@@ -371,7 +371,7 @@ func TestSend_ReplyHeaders(t *testing.T) {
 					InsertEmailFn: func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, to, cc, bcc []byte, subject, html, text, status, inReplyTo string, refs []byte) (string, error) {
 						return "e1", nil
 					},
-					UpdateThreadStatsFn: func(ctx context.Context, threadID, snippet string) error {
+					UpdateThreadStatsFn: func(ctx context.Context, threadID, snippet, lastSender string) error {
 						return nil
 					},
 					CreateEmailJobFn: func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, payload []byte, draftID *string) (string, error) {
@@ -440,7 +440,7 @@ func TestSend_DomainLookupFromAddress(t *testing.T) {
 			},
 			WithTxFn: func(ctx context.Context, fn func(store.Store) error) error {
 				return fn(&store.MockStore{
-					CreateThreadFn: func(ctx context.Context, orgID, userID, domainID, subject string, participants []byte, snippet string) (string, error) {
+					CreateThreadFn: func(ctx context.Context, orgID, userID, domainID, subject string, participants []byte, snippet, lastSender string) (string, error) {
 						capturedDomainID = domainID
 						return "t1", nil
 					},
@@ -450,7 +450,7 @@ func TestSend_DomainLookupFromAddress(t *testing.T) {
 					InsertEmailFn: func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, to, cc, bcc []byte, subject, html, text, status, inReplyTo string, refs []byte) (string, error) {
 						return "e1", nil
 					},
-					UpdateThreadStatsFn: func(ctx context.Context, threadID, snippet string) error {
+					UpdateThreadStatsFn: func(ctx context.Context, threadID, snippet, lastSender string) error {
 						return nil
 					},
 					CreateEmailJobFn: func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, payload []byte, draftID *string) (string, error) {

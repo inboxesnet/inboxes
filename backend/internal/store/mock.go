@@ -53,7 +53,7 @@ type MockStore struct {
 	FilterTrashThreadIDsFn     func(ctx context.Context, threadIDs []string) ([]string, error)
 	BulkSoftDeleteFn           func(ctx context.Context, threadIDs []string, orgID string) (int64, error)
 	ResolveFilteredThreadIDsFn func(ctx context.Context, orgID, label, domainID, role string, aliasAddrs []string) ([]string, error)
-	CreateThreadFn             func(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet string) (string, error)
+	CreateThreadFn             func(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet, lastSender string) (string, error)
 	AddLabelFn                 func(ctx context.Context, threadID, orgID, label string) error
 	RemoveLabelFn              func(ctx context.Context, threadID, label string) error
 	RemoveAllLabelsFn          func(ctx context.Context, threadID string) error
@@ -70,7 +70,7 @@ type MockStore struct {
 	ResolveFromDisplayFn       func(ctx context.Context, orgID, address string) (string, error)
 	LookupDomainByNameFn       func(ctx context.Context, orgID, domainName string) (string, error)
 	InsertEmailFn              func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status string, inReplyTo string, refsJSON []byte) (string, error)
-	UpdateThreadStatsFn        func(ctx context.Context, threadID, snippet string) error
+	UpdateThreadStatsFn        func(ctx context.Context, threadID, snippet, lastSender string) error
 	CreateEmailJobFn           func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
 	SearchEmailsFn             func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error)
 	ListAdminJobsFn            func(ctx context.Context, orgID string) ([]map[string]any, error)
@@ -455,9 +455,9 @@ func (m *MockStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, 
 	return []string{}, nil
 }
 
-func (m *MockStore) CreateThread(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet string) (string, error) {
+func (m *MockStore) CreateThread(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet, lastSender string) (string, error) {
 	if m.CreateThreadFn != nil {
-		return m.CreateThreadFn(ctx, orgID, userID, domainID, subject, participantsJSON, snippet)
+		return m.CreateThreadFn(ctx, orgID, userID, domainID, subject, participantsJSON, snippet, lastSender)
 	}
 	return "", nil
 }
@@ -564,9 +564,9 @@ func (m *MockStore) InsertEmail(ctx context.Context, threadID, userID, orgID, do
 	return "", nil
 }
 
-func (m *MockStore) UpdateThreadStats(ctx context.Context, threadID, snippet string) error {
+func (m *MockStore) UpdateThreadStats(ctx context.Context, threadID, snippet, lastSender string) error {
 	if m.UpdateThreadStatsFn != nil {
-		return m.UpdateThreadStatsFn(ctx, threadID, snippet)
+		return m.UpdateThreadStatsFn(ctx, threadID, snippet, lastSender)
 	}
 	return nil
 }

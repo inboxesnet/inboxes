@@ -337,7 +337,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("failed to marshal participants: %w", err)
 			}
 			var err2 error
-			finalThreadID, err2 = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, subject, participants, snippet)
+			finalThreadID, err2 = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, subject, participants, snippet, fromAddr)
 			if err2 != nil {
 				slog.Error("draft: create thread failed", "error", err2)
 				return err2
@@ -357,7 +357,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Update thread stats
-		if err := tx.UpdateThreadStats(ctx, finalThreadID, snippet); err != nil {
+		if err := tx.UpdateThreadStats(ctx, finalThreadID, snippet, fromAddr); err != nil {
 			slog.Error("draft: update thread failed", "thread_id", finalThreadID, "error", err)
 		}
 

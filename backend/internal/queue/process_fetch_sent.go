@@ -203,9 +203,9 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 			originalTo = &addr
 		}
 		if err := tx.QueryRow(dbCtx,
-			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet, last_message_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, '1970-01-01T00:00:00Z') RETURNING id`,
-			orgID, userID, domainID, cleanSubject, participants, originalTo, snippet,
+			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet, last_sender, last_message_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '1970-01-01T00:00:00Z') RETURNING id`,
+			orgID, userID, domainID, cleanSubject, participants, originalTo, snippet, emailData.From,
 		).Scan(&threadID); err != nil {
 			return fmt.Errorf("create thread: %w", err)
 		}
@@ -232,9 +232,10 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 		`UPDATE threads SET message_count = message_count + 1,
 		 last_message_at = GREATEST(last_message_at, $1),
 		 snippet = CASE WHEN $1 >= last_message_at THEN $3 ELSE snippet END,
+		 last_sender = CASE WHEN $1 >= last_message_at THEN $4 ELSE last_sender END,
 		 updated_at = now()
 		 WHERE id = $2`,
-		createdAt, threadID, snippet,
+		createdAt, threadID, snippet, emailData.From,
 	); err != nil {
 		slog.Error("email worker: failed to update thread stats (sent)", "error", err)
 	}

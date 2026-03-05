@@ -9,7 +9,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The stack includes four services: `postgres`, `redis`, `backend`, and `frontend`. A fifth service (`caddy`) is present but commented out — see [Reverse Proxy Options](#reverse-proxy-options) below.
+The stack includes four services: `postgres`, `redis`, `backend`, and `frontend`. You'll need your own reverse proxy for HTTPS — see [Reverse Proxy Options](#reverse-proxy-options) below.
 
 ---
 
@@ -170,42 +170,9 @@ The backend depends on both `postgres` and `redis` being healthy before starting
 
 ## Reverse Proxy Options
 
-Neither the backend nor the frontend exposes host ports in docker-compose.yml. You need a reverse proxy to route external traffic. Three options:
+Neither the backend nor the frontend exposes host ports in docker-compose.yml. You need a reverse proxy to route external traffic. Two options:
 
-### Option A: Uncomment the Caddy Service
-
-A Caddy service is included in docker-compose.yml but commented out. To use it:
-
-1. Uncomment the `caddy:` block in docker-compose.yml.
-2. Add `caddy_data` and `caddy_config` to the `volumes:` section at the bottom:
-
-```yaml
-volumes:
-  postgres_data:
-  redis_data:
-  caddy_data:
-  caddy_config:
-```
-
-3. Ensure the `Caddyfile` in the repo root is correct. It routes by path:
-
-```
-{$DOMAIN} {
-    handle /api/* {
-        reverse_proxy backend:8080
-    }
-    handle /api/ws {
-        reverse_proxy backend:8080
-    }
-    handle {
-        reverse_proxy frontend:3000
-    }
-}
-```
-
-Caddy auto-provisions TLS via Let's Encrypt. Ports 80 and 443 must be open on the host.
-
-### Option B: External Nginx / Traefik / HAProxy
+### Option A: External Reverse Proxy (Nginx / Traefik / Caddy / HAProxy)
 
 If you already have a reverse proxy on the host, point it at the containers. The key routing rules:
 
@@ -215,7 +182,7 @@ If you already have a reverse proxy on the host, point it at the containers. The
 
 You will need to expose ports on the backend and frontend services (add `ports:` sections) or attach them to the same Docker network as your proxy.
 
-### Option C: Coolify
+### Option B: Coolify
 
 Coolify handles TLS and reverse proxying automatically. See the [Coolify Setup](#coolify-setup) section below.
 
@@ -259,8 +226,6 @@ SESSION_SECRET=<openssl rand -hex 32>
 ENCRYPTION_KEY=<openssl rand -base64 32>
 POSTGRES_PASSWORD=<openssl rand -hex 16>
 ```
-
-Leave the Caddy service commented out -- Coolify provides its own reverse proxy.
 
 ### 4. Deploy
 

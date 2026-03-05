@@ -1,7 +1,7 @@
 "use client";
 
 import type { Thread } from "@/lib/types";
-import { extractSender } from "@/lib/thread-helpers";
+import { extractSender, extractDisplayName } from "@/lib/thread-helpers";
 
 interface DragPreviewProps {
   thread: Thread;
@@ -9,7 +9,7 @@ interface DragPreviewProps {
 }
 
 export function DragPreview({ thread, count = 1 }: DragPreviewProps) {
-  const sender = extractSender(thread.participant_emails);
+  const sender = thread.last_sender ? extractDisplayName(thread.last_sender) : extractSender(thread.participant_emails);
 
   return (
     <div className="bg-background border rounded-md shadow-lg px-3 py-2 w-[200px] pointer-events-none opacity-80">

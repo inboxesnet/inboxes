@@ -91,6 +91,7 @@ CREATE TABLE threads (
   message_count INT NOT NULL DEFAULT 0,
   unread_count INT NOT NULL DEFAULT 0,
   snippet TEXT NOT NULL DEFAULT '',
+  last_sender TEXT NOT NULL DEFAULT '',
   original_to TEXT,
   trash_expires_at TIMESTAMPTZ,
   deleted_at TIMESTAMPTZ,

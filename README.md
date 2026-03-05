@@ -68,7 +68,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This starts the backend, frontend, PostgreSQL, and Redis. You'll need a reverse proxy (Caddy, nginx, or a platform like Coolify) in front for HTTPS.
+This starts the backend, frontend, PostgreSQL, and Redis. You'll need a reverse proxy (nginx, Traefik, Caddy, or a platform like Coolify) in front for HTTPS.
 
 See [Deployment Guide](docs/deployment.md) for Coolify setup, reverse proxy options, env var details, and troubleshooting.
 
@@ -96,7 +96,6 @@ See [Deployment Guide](docs/deployment.md) for Coolify setup, reverse proxy opti
 - **Frontend:** Next.js 15, React 19, Tailwind CSS, shadcn/ui
 - **Database:** PostgreSQL 16 (auto-managed migrations via goose)
 - **Cache/PubSub:** Redis 7
-- **Reverse Proxy:** Caddy 2 (auto-HTTPS, production only)
 - **Background Workers:** 9 workers — email sync, send queue, trash collector, domain heartbeat, event pruner, grace period, stripe event pruner, status recovery, inbox poller
 
 ## Self-Hosted vs Commercial

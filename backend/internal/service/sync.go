@@ -494,7 +494,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			}
 			defer tx.Rollback(dbCtx)
 
-			threadID, err := s.findOrCreateThread(dbCtx, tx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, inReplyTo, "inbound")
+			threadID, err := s.findOrCreateThread(dbCtx, tx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, inReplyTo, "inbound", email.From)
 			if err != nil {
 				return fmt.Errorf("find/create thread: %w", err)
 			}
@@ -528,7 +528,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 				return fmt.Errorf("insert email: %w", err)
 			}
 
-			s.updateThreadStats(dbCtx, tx, threadID, createdAt, snippet)
+			s.updateThreadStats(dbCtx, tx, threadID, createdAt, snippet, email.From)
 
 			// Stamp alias labels for all to/cc addresses matching an alias (inbound = delivered_via_alias)
 			for _, addr := range append(email.To, email.CC...) {
@@ -694,7 +694,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			}
 			defer tx.Rollback(dbCtx)
 
-			threadID, err := s.findOrCreateThread(dbCtx, tx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, "", "outbound")
+			threadID, err := s.findOrCreateThread(dbCtx, tx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, "", "outbound", email.From)
 			if err != nil {
 				return fmt.Errorf("find/create thread: %w", err)
 			}
@@ -713,7 +713,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 				return fmt.Errorf("insert email: %w", err)
 			}
 
-			s.updateThreadStats(dbCtx, tx, threadID, createdAt, snippet)
+			s.updateThreadStats(dbCtx, tx, threadID, createdAt, snippet, email.From)
 
 			// Stamp alias label if from_address matches an alias (outbound = sent_as_alias)
 			fromClean := strings.ToLower(strings.TrimSpace(ExtractEmail(email.From)))
@@ -842,7 +842,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 	return result, nil
 }
 
-func (s *SyncService) findOrCreateThread(ctx context.Context, q querier, orgID, userID, domainID, subject, from string, to []string, snippet string, inReplyTo string, direction string) (string, error) {
+func (s *SyncService) findOrCreateThread(ctx context.Context, q querier, orgID, userID, domainID, subject, from string, to []string, snippet string, inReplyTo string, direction string, lastSender string) (string, error) {
 	var threadID string
 	cleanSubject := util.CleanSubjectLine(subject)
 
@@ -898,10 +898,10 @@ func (s *SyncService) findOrCreateThread(ctx context.Context, q querier, orgID, 
 		originalTo = &addr
 	}
 	err = q.QueryRow(ctx,
-		`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet, last_message_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, '1970-01-01T00:00:00Z')
+		`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet, last_sender, last_message_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '1970-01-01T00:00:00Z')
 		 RETURNING id`,
-		orgID, userID, domainID, cleanSubject, participants, originalTo, snippet,
+		orgID, userID, domainID, cleanSubject, participants, originalTo, snippet, lastSender,
 	).Scan(&threadID)
 	if err == nil && direction == "outbound" {
 		// Add sent label only for outbound threads
@@ -914,14 +914,15 @@ func (s *SyncService) findOrCreateThread(ctx context.Context, q querier, orgID, 
 	return threadID, err
 }
 
-func (s *SyncService) updateThreadStats(ctx context.Context, q querier, threadID string, messageAt time.Time, snippet string) {
+func (s *SyncService) updateThreadStats(ctx context.Context, q querier, threadID string, messageAt time.Time, snippet, lastSender string) {
 	if _, err := q.Exec(ctx,
 		`UPDATE threads SET message_count = message_count + 1,
 		 last_message_at = GREATEST(last_message_at, $1),
 		 snippet = CASE WHEN $1 >= last_message_at THEN $3 ELSE snippet END,
+		 last_sender = CASE WHEN $1 >= last_message_at THEN $4 ELSE last_sender END,
 		 updated_at = now()
 		 WHERE id = $2`,
-		messageAt, threadID, snippet,
+		messageAt, threadID, snippet, lastSender,
 	); err != nil {
 		slog.Error("sync: failed to update thread stats", "error", err)
 	}
@@ -932,7 +933,7 @@ const labelsSubquery = `(SELECT COALESCE(array_agg(tl2.label ORDER BY tl2.label)
 
 // fetchThreadForEvent returns a thread summary map suitable for WS event payloads.
 func (s *SyncService) fetchThreadForEvent(ctx context.Context, threadID, orgID string) map[string]interface{} {
-	var id, dID, subject, snippet string
+	var id, dID, subject, snippet, lastSender string
 	var originalTo *string
 	var participants json.RawMessage
 	var lastMessageAt, createdAt time.Time
@@ -941,12 +942,12 @@ func (s *SyncService) fetchThreadForEvent(ctx context.Context, threadID, orgID s
 
 	err := s.pool.QueryRow(ctx,
 		`SELECT t.id, t.domain_id, t.subject, t.participant_emails,
-		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.original_to, t.created_at,
+		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 		 `+labelsSubquery+` as labels
 		 FROM threads t WHERE t.id = $1 AND t.org_id = $2`,
 		threadID, orgID,
 	).Scan(&id, &dID, &subject, &participants,
-		&lastMessageAt, &messageCount, &unreadCount, &snippet, &originalTo, &createdAt, &labels)
+		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &labels)
 	if err != nil {
 		return nil
 	}
@@ -963,6 +964,7 @@ func (s *SyncService) fetchThreadForEvent(ctx context.Context, threadID, orgID s
 		"unread_count":       unreadCount,
 		"labels":             labels,
 		"snippet":            snippet,
+		"last_sender":        lastSender,
 		"created_at":         createdAt,
 	}
 	if originalTo != nil {

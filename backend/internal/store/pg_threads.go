@@ -64,7 +64,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label = 'inbox')
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex2 WHERE tex2.thread_id = t.id AND tex2.label IN ('trash','spam'))`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
-			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.original_to, t.created_at,
+			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 			t.trash_expires_at
 			FROM threads t
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
@@ -78,7 +78,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			JOIN thread_labels tl ON tl.thread_id = t.id
 			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
-			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.original_to, t.created_at,
+			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 			t.trash_expires_at
 			FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
@@ -92,7 +92,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
-			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.original_to, t.created_at,
+			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 			t.trash_expires_at
 			FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
@@ -143,7 +143,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 	var threads []map[string]any
 	var threadIDs []string
 	for rows.Next() {
-		var id, oID, userID, dID, subject, snippet string
+		var id, oID, userID, dID, subject, snippet, lastSender string
 		var originalTo *string
 		var trashExpiresAt *time.Time
 		var participants json.RawMessage
@@ -151,7 +151,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 		var messageCount, unreadCount int
 
 		err := rows.Scan(&id, &oID, &userID, &dID, &subject, &participants,
-			&lastMessageAt, &messageCount, &unreadCount, &snippet, &originalTo, &createdAt, &trashExpiresAt)
+			&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &trashExpiresAt)
 		if err != nil {
 			continue
 		}
@@ -164,6 +164,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			"message_count":      messageCount,
 			"unread_count":       unreadCount,
 			"snippet":            snippet,
+			"last_sender":        lastSender,
 			"created_at":         createdAt,
 		}
 		if originalTo != nil {
@@ -196,7 +197,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 }
 
 func (s *PgStore) GetThread(ctx context.Context, threadID, orgID string) (map[string]any, error) {
-	var id, oID, userID, domainID, subject, snippet string
+	var id, oID, userID, domainID, subject, snippet, lastSender string
 	var participants json.RawMessage
 	var trashExpiresAt *time.Time
 	var lastMessageAt, createdAt time.Time
@@ -205,13 +206,13 @@ func (s *PgStore) GetThread(ctx context.Context, threadID, orgID string) (map[st
 
 	err := s.q.QueryRow(ctx,
 		`SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
-		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.created_at,
+		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.created_at,
 		 t.trash_expires_at,
 		 `+labelsSubquery+` as labels
 		 FROM threads t WHERE t.id = $1 AND t.org_id = $2`,
 		threadID, orgID,
 	).Scan(&id, &oID, &userID, &domainID, &subject, &participants,
-		&lastMessageAt, &messageCount, &unreadCount, &snippet, &createdAt, &trashExpiresAt, &labels)
+		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &createdAt, &trashExpiresAt, &labels)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +230,7 @@ func (s *PgStore) GetThread(ctx context.Context, threadID, orgID string) (map[st
 		"unread_count":       unreadCount,
 		"labels":             labels,
 		"snippet":            snippet,
+		"last_sender":        lastSender,
 		"created_at":         createdAt,
 	}
 	if trashExpiresAt != nil {
@@ -325,7 +327,7 @@ func (s *PgStore) GetThreadDomainID(ctx context.Context, threadID, orgID string)
 }
 
 func (s *PgStore) FetchThreadSummary(ctx context.Context, threadID, orgID string) (map[string]any, error) {
-	var id, dID, subject, snippet string
+	var id, dID, subject, snippet, lastSender string
 	var originalTo *string
 	var participants json.RawMessage
 	var lastMessageAt, createdAt time.Time
@@ -334,12 +336,12 @@ func (s *PgStore) FetchThreadSummary(ctx context.Context, threadID, orgID string
 
 	err := s.q.QueryRow(ctx,
 		`SELECT t.id, t.domain_id, t.subject, t.participant_emails,
-		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.original_to, t.created_at,
+		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 		 `+labelsSubquery+` as labels
 		 FROM threads t WHERE t.id = $1 AND t.org_id = $2`,
 		threadID, orgID,
 	).Scan(&id, &dID, &subject, &participants,
-		&lastMessageAt, &messageCount, &unreadCount, &snippet, &originalTo, &createdAt, &labels)
+		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &labels)
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +358,7 @@ func (s *PgStore) FetchThreadSummary(ctx context.Context, threadID, orgID string
 		"unread_count":       unreadCount,
 		"labels":             labels,
 		"snippet":            snippet,
+		"last_sender":        lastSender,
 		"created_at":         createdAt,
 	}
 	if originalTo != nil {
@@ -518,12 +521,12 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 	return ids, nil
 }
 
-func (s *PgStore) CreateThread(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet string) (string, error) {
+func (s *PgStore) CreateThread(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet, lastSender string) (string, error) {
 	var threadID string
 	err := s.q.QueryRow(ctx,
-		`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, snippet)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		orgID, userID, domainID, subject, participantsJSON, snippet,
+		`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, snippet, last_sender)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		orgID, userID, domainID, subject, participantsJSON, snippet, lastSender,
 	).Scan(&threadID)
 	return threadID, err
 }

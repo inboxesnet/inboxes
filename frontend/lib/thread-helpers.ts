@@ -1,8 +1,19 @@
+export function extractDisplayName(raw: string): string {
+  if (!raw) return "";
+  // Parse "Display Name <email@example.com>" format
+  const ltIndex = raw.indexOf("<");
+  if (ltIndex > 0) {
+    const name = raw.substring(0, ltIndex).trim().replace(/^["']|["']$/g, "");
+    if (name) return name;
+  }
+  // Fallback: local part of email
+  const atIndex = raw.indexOf("@");
+  return atIndex > 0 ? raw.substring(0, atIndex) : raw;
+}
+
 export function extractSender(emails: string[]): string {
   if (!emails || emails.length === 0) return "Unknown";
-  const first = emails[0];
-  const atIndex = first.indexOf("@");
-  return atIndex > 0 ? first.substring(0, atIndex) : first;
+  return extractDisplayName(emails[0]);
 }
 
 export function decodeHtmlEntities(text: string): string {

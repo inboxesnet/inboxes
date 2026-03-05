@@ -14,7 +14,7 @@ import { queryClient } from "@/lib/query-client";
 import type { WSMessage } from "@/lib/types";
 
 // In local dev, NEXT_PUBLIC_WS_URL points to backend (ws://localhost:8080).
-// In production behind Caddy, derive from current page origin.
+// In production behind a reverse proxy, derive from current page origin.
 function getWsUrl(): string {
   if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
   if (typeof window !== "undefined") {

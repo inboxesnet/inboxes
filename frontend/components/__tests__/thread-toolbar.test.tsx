@@ -60,6 +60,7 @@ const mkThread = (
   unread_count: unread,
   labels,
   snippet: "",
+  last_sender: "",
   original_to: "a@b.com",
   created_at: "2026-01-01T00:00:00Z",
 });

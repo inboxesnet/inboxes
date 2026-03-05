@@ -6,7 +6,7 @@ import { Star, Archive, Trash2, Mail, MailOpen, BellOff } from "lucide-react";
 import { useDraggable } from "@dnd-kit/core";
 import { hasLabel } from "@/lib/types";
 import type { Thread, Label } from "@/lib/types";
-import { extractSender, cleanSnippet, parseParticipants } from "@/lib/thread-helpers";
+import { extractSender, extractDisplayName, cleanSnippet, parseParticipants } from "@/lib/thread-helpers";
 
 interface ThreadListProps {
   threads: Thread[];
@@ -70,7 +70,9 @@ function ThreadRow({
   const displayName =
     effectiveLabel === "sent" && thread.original_to
       ? extractSender([thread.original_to])
-      : extractSender(participants);
+      : thread.last_sender
+        ? extractDisplayName(thread.last_sender)
+        : extractSender(participants);
 
   return (
     <div
