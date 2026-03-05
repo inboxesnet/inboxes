@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inboxes/backend/internal/store"
-	"github.com/stripe/stripe-go/v82"
+	"github.com/stripe/stripe-go/v84"
 )
 
 func TestDecodeStripeObject_ValidJSON(t *testing.T) {

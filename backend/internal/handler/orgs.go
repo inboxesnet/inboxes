@@ -10,8 +10,8 @@ import (
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
 	"github.com/redis/go-redis/v9"
-	"github.com/stripe/stripe-go/v82"
-	"github.com/stripe/stripe-go/v82/subscription"
+	"github.com/stripe/stripe-go/v84"
+	"github.com/stripe/stripe-go/v84/subscription"
 )
 
 type OrgHandler struct {
