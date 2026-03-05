@@ -12,7 +12,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/pressly/goose/v3 v3.22.1
 	github.com/redis/go-redis/v9 v9.7.0
-	github.com/stripe/stripe-go/v82 v82.5.1
+	github.com/stripe/stripe-go/v84 v84.4.0
 	golang.org/x/crypto v0.28.0
 )
 
