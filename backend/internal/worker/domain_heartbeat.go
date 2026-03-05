@@ -162,7 +162,7 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 
 	// Check local domains against Resend
 	localRows, err := dh.DB.Query(ctx,
-		`SELECT id, domain, status, COALESCE(spf_verified, false), COALESCE(dkim_verified, false) FROM domains WHERE org_id = $1`, orgID)
+		`SELECT id, domain, status FROM domains WHERE org_id = $1`, orgID)
 	if err != nil {
 		slog.Error("domain heartbeat: failed to list local domains", "org_id", orgID, "error", err)
 		return
@@ -172,8 +172,7 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 	localDomainNames := make(map[string]bool)
 	for localRows.Next() {
 		var id, domain, status string
-		var localSPF, localDKIM bool
-		if localRows.Scan(&id, &domain, &status, &localSPF, &localDKIM) != nil {
+		if localRows.Scan(&id, &domain, &status) != nil {
 			continue
 		}
 		localDomainNames[domain] = true
@@ -214,41 +213,18 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 			})
 		}
 
-		// PRD-075: Check DNS verification status changes
+		// Check DNS verification from Resend response (stateless — no DB columns needed)
 		if inResend {
-			dnsChanged := false
 			var degraded []string
-			if info.spf != localSPF {
-				dnsChanged = true
-				if !info.spf && localSPF {
-					degraded = append(degraded, "SPF")
-				}
+			if !info.spf {
+				degraded = append(degraded, "SPF")
 			}
-			if info.dkim != localDKIM {
-				dnsChanged = true
-				if !info.dkim && localDKIM {
-					degraded = append(degraded, "DKIM")
-				}
+			if !info.dkim {
+				degraded = append(degraded, "DKIM")
 			}
-			if dnsChanged {
-				if _, err := dh.DB.Exec(ctx,
-					`UPDATE domains SET spf_verified = $2, dkim_verified = $3, updated_at = now() WHERE id = $1`,
-					id, info.spf, info.dkim); err != nil {
-					slog.Error("heartbeat: failed to update DNS status", "error", err, "domain_id", id)
-				}
-				if len(degraded) > 0 {
-					slog.Warn("domain heartbeat: DNS verification degraded",
-						"org_id", orgID, "domain_id", id, "domain", domain, "degraded", degraded)
-					dh.Bus.Publish(ctx, event.Event{
-						EventType: event.DomainDNSDegraded,
-						OrgID:     orgID,
-						DomainID:  id,
-						Payload: map[string]interface{}{
-							"domain":   domain,
-							"degraded": degraded,
-						},
-					})
-				}
+			if len(degraded) > 0 {
+				slog.Warn("domain heartbeat: DNS verification missing",
+					"org_id", orgID, "domain_id", id, "domain", domain, "missing", degraded)
 			}
 		}
 	}

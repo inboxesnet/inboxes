@@ -34,7 +34,6 @@ const (
 
 	DomainDisconnected = "domain.disconnected"
 	DomainReconnected  = "domain.reconnected"
-	DomainDNSDegraded  = "domain.dns_degraded"
 	DomainNotFound     = "domain.not_found"
 	DomainDiscovered   = "domain.discovered"
 )

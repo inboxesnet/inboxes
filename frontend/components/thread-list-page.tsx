@@ -231,7 +231,8 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
         moveFolder = actionStr.split(":")[1];
       }
 
-      // Clear selection only on success — preserve on error so user can retry
+      // Clear selection only for actions that remove threads from the current view
+      const removesFromView = ["archive", "trash", "spam", "delete", "move"].includes(action);
       bulkMutation.mutate(
         {
           threadIds: ids,
@@ -243,8 +244,10 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
         },
         {
           onSuccess: () => {
-            selection.clearSelection();
-            setSelectAllPages(false);
+            if (removesFromView) {
+              selection.clearSelection();
+              setSelectAllPages(false);
+            }
           },
         }
       );
