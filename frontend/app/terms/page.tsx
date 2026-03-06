@@ -3,7 +3,7 @@ import Image from "next/image";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 export const metadata = {
-  title: "Terms of Service — Inboxes",
+  title: "Terms of Service - Inboxes",
 };
 
 export default function TermsPage() {

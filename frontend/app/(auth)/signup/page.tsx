@@ -117,7 +117,7 @@ export default function SignupPage() {
       <CardHeader>
         <CardTitle>Create your account</CardTitle>
         <CardDescription>
-          Get started with Inboxes — the missing inbox for Resend
+          Get started with Inboxes - the missing inbox for Resend
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>

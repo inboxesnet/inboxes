@@ -323,7 +323,7 @@ export function FloatingComposeWindow() {
 
     if (!subject && warnNoSubject && !subjectWarning) {
       setSubjectWarning(true);
-      setError("No subject — click Send again to send anyway");
+      setError("No subject - click Send again to send anyway");
       return;
     }
     setSubjectWarning(false);

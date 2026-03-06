@@ -740,7 +740,7 @@ export function WSSync() {
           const reason = msg.payload?.reason as string | undefined;
           if (reason === "api_key_revoked") {
             toast.error(
-              "API key revoked — all domains disconnected. Check Settings."
+              "API key revoked - all domains disconnected. Check Settings."
             );
           } else {
             toast.error(

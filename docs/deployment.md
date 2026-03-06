@@ -5,11 +5,11 @@
 ```bash
 git clone https://github.com/headswim/inboxes.git && cd inboxes
 cp .env.example .env
-# Edit .env — at minimum set: DOMAIN, ENCRYPTION_KEY, SESSION_SECRET, PUBLIC_URL, POSTGRES_PASSWORD
+# Edit .env - at minimum set: DOMAIN, ENCRYPTION_KEY, SESSION_SECRET, PUBLIC_URL, POSTGRES_PASSWORD
 docker compose up -d
 ```
 
-The stack includes four services: `postgres`, `redis`, `backend`, and `frontend`. You'll need your own reverse proxy for HTTPS — see [Reverse Proxy Options](#reverse-proxy-options) below.
+The stack includes four services: `postgres`, `redis`, `backend`, and `frontend`. You'll need your own reverse proxy for HTTPS - see [Reverse Proxy Options](#reverse-proxy-options) below.
 
 ---
 
@@ -25,7 +25,7 @@ The stack includes four services: `postgres`, `redis`, `backend`, and `frontend`
 | `SESSION_SECRET` | `openssl rand -hex 32` | Must be at least 16 characters. Backend refuses to start without it |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 16` | **No default.** Compose will fail to start if unset (`${POSTGRES_PASSWORD:?...}` syntax) |
 
-### Required (have defaults — override in production)
+### Required (have defaults - override in production)
 
 | Variable | Default | Notes |
 |----------|---------|-------|

@@ -8,7 +8,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Inboxes — The missing inbox for Resend",
+  title: "Inboxes - The missing inbox for Resend",
   description: "Multi-tenant email client built on Resend",
 };
 

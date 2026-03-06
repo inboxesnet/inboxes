@@ -149,7 +149,7 @@ function ThreadRow({
           <span className={isUnread ? "font-medium text-foreground" : "text-muted-foreground dark:text-muted-foreground/80"}>{thread.subject}</span>
           {thread.snippet && (
             <span className="text-muted-foreground/80">
-              {" — "}{cleanSnippet(thread.snippet)}
+              {" - "}{cleanSnippet(thread.snippet)}
             </span>
           )}
         </div>
@@ -177,7 +177,7 @@ function ThreadRow({
         <span className={isUnread ? "font-semibold text-foreground" : "dark:text-muted-foreground"}>{thread.subject}</span>
         {thread.snippet && (
           <span className="text-muted-foreground/70">
-            {" — "}{cleanSnippet(thread.snippet)}
+            {" - "}{cleanSnippet(thread.snippet)}
           </span>
         )}
       </div>

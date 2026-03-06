@@ -159,7 +159,7 @@ function JobsPanel() {
                       {new Date(job.created_at).toLocaleString()}
                     </td>
                     <td className="px-3 py-2 text-xs text-destructive max-w-[200px] truncate">
-                      {job.error_message || "—"}
+                      {job.error_message || "-"}
                     </td>
                   </tr>
                 ))}
@@ -1294,7 +1294,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                       <CardHeader>
                         <CardTitle>Email Sync</CardTitle>
                         <CardDescription>
-                          Re-import emails from Resend. Safe to run multiple times — duplicates are skipped.
+                          Re-import emails from Resend. Safe to run multiple times - duplicates are skipped.
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4">
@@ -1624,7 +1624,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                                             <td className="pr-3 py-0.5 font-mono">{rec.type}</td>
                                             <td className="pr-3 py-0.5 font-mono truncate max-w-[120px]">{rec.name}</td>
                                             <td className="pr-3 py-0.5 font-mono truncate max-w-[200px]">{rec.value}</td>
-                                            <td className="py-0.5">{rec.status || "—"}</td>
+                                            <td className="py-0.5">{rec.status || "-"}</td>
                                           </tr>
                                         ))}
                                       </tbody>

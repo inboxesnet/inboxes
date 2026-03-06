@@ -3,7 +3,7 @@ import Image from "next/image";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 export const metadata = {
-  title: "Privacy Policy — Inboxes",
+  title: "Privacy Policy - Inboxes",
 };
 
 export default function PrivacyPage() {
@@ -45,8 +45,8 @@ export default function PrivacyPage() {
         <h2>Third-Party Services</h2>
         <p>We use the following third-party services:</p>
         <ul>
-          <li><strong>Resend</strong> — to send and receive email (using your API key)</li>
-          <li><strong>Stripe</strong> — to process payments (if on a paid plan)</li>
+          <li><strong>Resend</strong> - to send and receive email (using your API key)</li>
+          <li><strong>Stripe</strong> - to process payments (if on a paid plan)</li>
         </ul>
         <p>
           These services have their own privacy policies. We send them only what's necessary

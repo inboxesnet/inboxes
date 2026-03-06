@@ -133,7 +133,7 @@ export function NotificationListener() {
     const unsub = subscribe("domain.not_found", (msg: WSMessage) => {
       const payload = msg.payload as { domain?: string; domains?: string[] } | undefined;
       const domain = payload?.domain || payload?.domains?.[0] || "unknown";
-      toast.warning(`Email skipped — domain "${domain}" not found. Check Settings → Domains.`, {
+      toast.warning(`Email skipped - domain "${domain}" not found. Check Settings > Domains.`, {
         id: `domain-not-found-${domain}`,
         duration: 8000,
       });

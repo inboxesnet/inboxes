@@ -59,10 +59,10 @@ describe("useUnreadBadge", () => {
   it("includes domain name in title when domainId is provided", () => {
     setDomainsMock(
       {},
-      [{ id: "d1", domain: "cx.agency" }]
+      [{ id: "d1", domain: "example.org" }]
     );
     renderHook(() => useUnreadBadge("Sent", "d1"));
-    expect(document.title).toBe("Sent - cx.agency - Inboxes.net");
+    expect(document.title).toBe("Sent - example.org - Inboxes.net");
   });
 
   it("omits domain name from title when domainId is undefined", () => {

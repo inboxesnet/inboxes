@@ -130,7 +130,7 @@ export function useSyncJob() {
               job.phase === "scanning" || job.phase === "aliases"
                 ? "Scanning emails..."
                 : job.phase === "aliases_ready"
-                  ? "Addresses discovered — starting import..."
+                  ? "Addresses discovered - starting import..."
                   : job.phase === "importing" && job.total > 0
                     ? `Importing ${job.imported} of ${job.total} emails`
                     : job.phase === "addresses"
