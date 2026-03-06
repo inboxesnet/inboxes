@@ -1,0 +1,312 @@
+"use client";
+
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Underline from "@tiptap/extension-underline";
+import Link from "@tiptap/extension-link";
+import Placeholder from "@tiptap/extension-placeholder";
+import {
+  Bold,
+  Italic,
+  Underline as UnderlineIcon,
+  Link as LinkIcon,
+  List,
+  ListOrdered,
+  Quote,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { useEffect, useState, useCallback, useRef } from "react";
+import DOMPurify from "dompurify";
+import { sanitizeLinkNode } from "@/lib/sanitize-links";
+import {
+  EmojiSuggestion,
+  type EmojiSuggestionState,
+} from "./emoji-extension";
+
+interface TipTapEditorProps {
+  content?: string;
+  placeholder?: string;
+  onChange?: (html: string, plain: string) => void;
+  autofocus?: boolean;
+  className?: string;
+  /** Rendered left of formatting buttons (e.g. Send button) */
+  toolbarLeft?: React.ReactNode;
+  /** Rendered at the far right of the toolbar (e.g. Discard) */
+  toolbarRight?: React.ReactNode;
+  /** Quoted text shown as read-only preview below editor content */
+  quotedHtml?: string;
+  /** Whether to strip tracking parameters from links (default true) */
+  stripTracking?: boolean;
+}
+
+export function TipTapEditor({
+  content,
+  placeholder = "Write your message...",
+  onChange,
+  autofocus = false,
+  className,
+  toolbarLeft,
+  toolbarRight,
+  quotedHtml,
+  stripTracking = true,
+}: TipTapEditorProps) {
+  const [emojiState, setEmojiState] = useState<EmojiSuggestionState>({
+    active: false,
+    query: "",
+    from: 0,
+    to: 0,
+    items: [],
+  });
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const editorWrapperRef = useRef<HTMLDivElement>(null);
+  const prevEmojiRef = useRef({ active: false, query: "", from: 0 });
+
+  const onEmojiStateChange = useCallback(
+    (state: EmojiSuggestionState) => {
+      const prev = prevEmojiRef.current;
+      if (
+        prev.active === state.active &&
+        prev.query === state.query &&
+        prev.from === state.from
+      ) {
+        return;
+      }
+      prevEmojiRef.current = { active: state.active, query: state.query, from: state.from };
+      setEmojiState(state);
+      setSelectedIndex(0);
+    },
+    []
+  );
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    extensions: [
+      StarterKit.configure({
+        heading: false,
+      }),
+      Underline,
+      Link.configure({
+        openOnClick: false,
+        HTMLAttributes: { class: "text-primary underline" },
+      }),
+      Placeholder.configure({ placeholder }),
+      EmojiSuggestion.configure({
+        onStateChange: onEmojiStateChange,
+      }),
+    ],
+    content: content || "",
+    autofocus,
+    editorProps: {
+      attributes: {
+        class: "text-[13px] leading-relaxed max-w-none focus:outline-none min-h-[120px] px-3 py-2 [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary [&_a]:underline",
+      },
+    },
+    onUpdate: ({ editor }) => {
+      onChange?.(editor.getHTML(), editor.getText());
+    },
+  });
+
+  // Update content when prop changes (e.g. loading a draft)
+  useEffect(() => {
+    if (editor && content !== undefined && editor.getHTML() !== content) {
+      editor.commands.setContent(content || "");
+    }
+  }, [content]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const insertEmoji = useCallback(
+    (emoji: string, from: number, to: number) => {
+      editor
+        ?.chain()
+        .focus()
+        .deleteRange({ from, to })
+        .insertContent(emoji)
+        .run();
+    },
+    [editor]
+  );
+
+  const popupActive = emojiState.active && emojiState.items.length > 0;
+
+  // Compute popup position relative to editor wrapper
+  const getPopupStyle = (): React.CSSProperties => {
+    if (!popupActive || !editor || !editorWrapperRef.current) return { display: "none" };
+    try {
+      const coords = editor.view.coordsAtPos(emojiState.from);
+      const wrapperRect = editorWrapperRef.current.getBoundingClientRect();
+      return {
+        position: "absolute",
+        left: coords.left - wrapperRect.left,
+        top: coords.bottom - wrapperRect.top + 4,
+        zIndex: 50,
+      };
+    } catch {
+      return { display: "none" };
+    }
+  };
+
+  if (!editor) return null;
+
+  return (
+    <div
+      className={cn("border rounded-md overflow-hidden flex flex-col", className)}
+      onKeyDownCapture={(e) => {
+        if (!popupActive) return;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSelectedIndex((i) => Math.min(i + 1, emojiState.items.length - 1));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSelectedIndex((i) => Math.max(i - 1, 0));
+        } else if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          const item = emojiState.items[selectedIndex];
+          if (item) insertEmoji(item.emoji, emojiState.from, emojiState.to);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setEmojiState((s) => ({ ...s, active: false }));
+        }
+      }}
+    >
+      {/* Editor + quoted text share scrollable area */}
+      <div className="flex-1 overflow-y-auto min-h-0 relative" ref={editorWrapperRef}>
+        <EditorContent editor={editor} />
+
+        {/* Emoji autocomplete popup */}
+        {popupActive && (
+          <div
+            className="bg-popover border rounded-md shadow-md py-1 w-56"
+            style={getPopupStyle()}
+          >
+            {emojiState.items.map((item, i) => (
+              <div
+                key={item.shortcode}
+                className={cn(
+                  "flex items-center gap-2 px-2 py-1 text-sm cursor-pointer",
+                  i === selectedIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+                )}
+                onMouseEnter={() => setSelectedIndex(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertEmoji(item.emoji, emojiState.from, emojiState.to);
+                }}
+              >
+                <span className="text-base">{item.emoji}</span>
+                <span className="text-muted-foreground">:{item.shortcode}:</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {quotedHtml && (
+          <div
+            className="text-xs text-muted-foreground border-l-2 border-muted pl-3 mx-3 mb-2 max-h-[200px] overflow-y-auto"
+            dangerouslySetInnerHTML={{
+              __html: (() => {
+                DOMPurify.addHook("afterSanitizeAttributes", (node) => { sanitizeLinkNode(node, stripTracking); });
+                const clean = DOMPurify.sanitize(quotedHtml, {
+                  ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
+                  ALLOWED_ATTR: ["href", "target", "rel"],
+                });
+                DOMPurify.removeAllHooks();
+                return clean;
+              })(),
+            }}
+          />
+        )}
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-0.5 border-t px-1 py-1 bg-muted/30 shrink-0">
+        {toolbarLeft}
+        {toolbarLeft && <div className="w-px h-5 bg-border mx-1" />}
+        <ToolbarButton
+          active={editor.isActive("bold")}
+          onClick={() => editor.chain().focus().toggleBold().run()}
+          title="Bold"
+        >
+          <Bold className="h-3.5 w-3.5" />
+        </ToolbarButton>
+        <ToolbarButton
+          active={editor.isActive("italic")}
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+          title="Italic"
+        >
+          <Italic className="h-3.5 w-3.5" />
+        </ToolbarButton>
+        <ToolbarButton
+          active={editor.isActive("underline")}
+          onClick={() => editor.chain().focus().toggleUnderline().run()}
+          title="Underline"
+        >
+          <UnderlineIcon className="h-3.5 w-3.5" />
+        </ToolbarButton>
+        <div className="w-px h-4 bg-border mx-0.5" />
+        <ToolbarButton
+          active={editor.isActive("link")}
+          onClick={() => {
+            if (editor.isActive("link")) {
+              editor.chain().focus().unsetLink().run();
+            } else {
+              const url = window.prompt("URL:");
+              if (url && /^(https?:\/\/|mailto:)/i.test(url)) {
+                editor.chain().focus().setLink({ href: url }).run();
+              }
+            }
+          }}
+          title="Link"
+        >
+          <LinkIcon className="h-3.5 w-3.5" />
+        </ToolbarButton>
+        <div className="w-px h-4 bg-border mx-0.5" />
+        <ToolbarButton
+          active={editor.isActive("bulletList")}
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+          title="Bullet list"
+        >
+          <List className="h-3.5 w-3.5" />
+        </ToolbarButton>
+        <ToolbarButton
+          active={editor.isActive("orderedList")}
+          onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          title="Numbered list"
+        >
+          <ListOrdered className="h-3.5 w-3.5" />
+        </ToolbarButton>
+        <ToolbarButton
+          active={editor.isActive("blockquote")}
+          onClick={() => editor.chain().focus().toggleBlockquote().run()}
+          title="Quote"
+        >
+          <Quote className="h-3.5 w-3.5" />
+        </ToolbarButton>
+        {toolbarRight && <div className="flex-1" />}
+        {toolbarRight}
+      </div>
+    </div>
+  );
+}
+
+function ToolbarButton({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "p-1.5 rounded hover:bg-muted transition-colors",
+        active && "bg-muted text-foreground"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
