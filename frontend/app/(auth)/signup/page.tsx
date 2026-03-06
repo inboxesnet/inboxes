@@ -193,6 +193,16 @@ export default function SignupPage() {
               Sign in
             </Link>
           </p>
+          <p className="text-xs text-muted-foreground text-center">
+            Use of this software is governed by the Inboxes{" "}
+            <Link href="/privacy" className="underline hover:text-foreground">
+              Privacy Policy
+            </Link>{" "}
+            and{" "}
+            <Link href="/terms" className="underline hover:text-foreground">
+              Terms and Conditions
+            </Link>
+          </p>
         </CardFooter>
       </form>
     </Card>

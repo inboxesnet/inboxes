@@ -171,7 +171,7 @@ export default function SetupPage() {
 
   const brandHeader = (
     <div className="flex flex-col items-center gap-3 mb-8">
-      <Image src="/icon.svg" alt="Inboxes" width={48} height={48} className="rounded-xl" />
+      <Image src="/logo.png" alt="Inboxes" width={48} height={48} className="rounded-xl" />
       <div className="text-center">
         <h1 className="text-2xl font-bold">Inboxes</h1>
         <p className="text-sm text-muted-foreground mt-1">
