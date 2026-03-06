@@ -178,8 +178,6 @@ func (h *BillingHandler) GetBilling(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	ctx := r.Context()
 
-	stripe.Key = h.StripeKey
-
 	billingInfo, err := h.Store.GetBillingInfo(ctx, claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "org not found")
@@ -203,6 +201,7 @@ func (h *BillingHandler) GetBilling(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stripeSubID != nil && *stripeSubID != "" {
+		stripe.Key = h.StripeKey
 		params := &stripe.SubscriptionParams{}
 		params.AddExpand("items")
 		sub, err := subscription.Get(*stripeSubID, params)
