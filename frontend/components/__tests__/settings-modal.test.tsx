@@ -268,10 +268,10 @@ describe("SettingsModal", () => {
   it("shows all visible tabs for admin user", async () => {
     render(<SettingsModal {...defaultProps} />);
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /Profile/ })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /Team/ })).toBeInTheDocument();
     });
+    expect(screen.getByRole("tab", { name: /Profile/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Domains/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Team/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Aliases/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Labels/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Organization/ })).toBeInTheDocument();
