@@ -97,13 +97,13 @@ func (s *PgStore) DeleteDraft(ctx context.Context, draftID, userID string) (int6
 	return tag.RowsAffected(), nil
 }
 
-func (s *PgStore) GetDraft(ctx context.Context, draftID, userID string) (domainID string, threadID *string, kind, subject, fromAddr, bodyHTML, bodyPlain string, toAddr, ccAddr, bccAddr, attIDsRaw json.RawMessage, err error) {
+func (s *PgStore) GetDraft(ctx context.Context, draftID, userID, orgID string) (domainID string, threadID *string, kind, subject, fromAddr, bodyHTML, bodyPlain string, toAddr, ccAddr, bccAddr, attIDsRaw json.RawMessage, err error) {
 	err = s.q.QueryRow(ctx,
 		`SELECT domain_id, thread_id, kind, subject, from_address,
 		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain,
 		 COALESCE(attachment_ids, '[]')
-		 FROM drafts WHERE id = $1 AND user_id = $2`,
-		draftID, userID,
+		 FROM drafts WHERE id = $1 AND user_id = $2 AND org_id = $3`,
+		draftID, userID, orgID,
 	).Scan(&domainID, &threadID, &kind, &subject, &fromAddr,
 		&toAddr, &ccAddr, &bccAddr, &bodyHTML, &bodyPlain, &attIDsRaw)
 	return

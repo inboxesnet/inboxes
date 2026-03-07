@@ -31,6 +31,10 @@ Rate-limited responses include a `Retry-After` header (seconds until the window 
 
 | Endpoint | Limit | Window | Key |
 |----------|-------|--------|-----|
+| `GET /api/health` | 30 | 60 sec | IP |
+| `GET /api/config` | 30 | 60 sec | IP |
+| `POST /api/webhooks/resend/{orgId}` | 60 | 60 sec | IP |
+| `POST /api/webhooks/stripe` | 60 | 60 sec | IP |
 | `GET /api/setup/status` | 60 | 60 sec | IP |
 | `POST /api/setup` | 3 | 15 min | IP |
 | `POST /api/setup/validate-key` | 3 | 15 min | IP |
@@ -61,11 +65,13 @@ No authentication required.
 |--------|------|-------------|
 | `GET` | `/api/health` | Service health check |
 
+Rate limited: 30 requests/minute per IP.
+
 **Response (200):**
 ```json
-{ "status": "ok", "db": true, "redis": true }
+{ "status": "ok" }
 ```
-Returns `503` with `"status": "degraded"` if either Postgres or Redis is unreachable.
+Returns `503` with `{"status": "degraded"}` if either Postgres or Redis is unreachable.
 
 ### Runtime Config
 
@@ -73,11 +79,13 @@ Returns `503` with `"status": "degraded"` if either Postgres or Redis is unreach
 |--------|------|-------------|
 | `GET` | `/api/config` | Public runtime configuration |
 
+Rate limited: 30 requests/minute per IP.
+
 **Response (200):**
 ```json
 { "api_url": "https://...", "ws_url": "wss://...", "commercial": false }
 ```
-`commercial` is `true` when `STRIPE_KEY` is configured. Cached for 1 hour (`Cache-Control: public, max-age=3600`).
+`commercial` is `true` when `STRIPE_KEY` is configured. Uses `Cache-Control: no-store`.
 
 ### Setup (Self-Hosted Only)
 
@@ -183,12 +191,12 @@ Always returns `200` (does not reveal email existence).
 
 ### Webhooks
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/webhooks/resend/{orgId}` | Resend webhook receiver (Svix signature-verified) |
-| `POST` | `/api/webhooks/stripe` | Stripe webhook receiver (commercial mode only) |
+| Method | Path | Rate Limit | Description |
+|--------|------|------------|-------------|
+| `POST` | `/api/webhooks/resend/{orgId}` | 60/min | Resend webhook receiver (Svix signature-verified) |
+| `POST` | `/api/webhooks/stripe` | 60/min | Stripe webhook receiver (commercial mode only) |
 
-Webhooks use their own signature verification (Svix for Resend, Stripe SDK for Stripe), not JWT auth. Returns `410 Gone` for deleted orgs to signal Resend to stop delivering.
+Webhooks use their own signature verification (Svix for Resend, Stripe SDK for Stripe), not JWT auth. The `orgId` parameter must be a valid UUID. Returns `410 Gone` for deleted orgs to signal Resend to stop delivering.
 
 ### WebSocket
 

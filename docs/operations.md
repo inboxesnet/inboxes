@@ -116,11 +116,11 @@ GET /api/health
 
 Returns:
 ```json
-{ "status": "ok", "db": true, "redis": true }
+{ "status": "ok" }
 ```
 
 - `200` -- all dependencies healthy
-- `503` -- one or more dependencies down (`"status": "degraded"`)
+- `503` -- `{"status": "degraded"}` if Postgres or Redis is unreachable
 
 ### Docker HEALTHCHECK
 
@@ -204,7 +204,7 @@ cd backend && goose -dir internal/db/migrations postgres "$DATABASE_URL" down
 
 | Variable | Notes |
 |----------|-------|
-| `SESSION_SECRET` | Must be at least 16 characters |
+| `SESSION_SECRET` | Must be at least 32 characters |
 | `ENCRYPTION_KEY` | Base64-encoded 32 bytes (`openssl rand -base64 32`). Used for AES-256-GCM encryption of stored API keys and system settings |
 
 ### Infrastructure

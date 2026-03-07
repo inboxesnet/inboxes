@@ -164,7 +164,7 @@ A `plan.changed` WebSocket event is broadcast to all org members whenever the pl
 | Variable | Format | Description |
 |----------|--------|-------------|
 | `ENCRYPTION_KEY` | Base64 string that decodes to exactly 32 bytes | AES-256 key for encrypting stored Resend API keys and webhook secrets |
-| `SESSION_SECRET` | String, minimum 16 characters | JWT signing secret (HMAC-SHA256) |
+| `SESSION_SECRET` | String, minimum 32 characters | JWT signing secret (HMAC-SHA256) |
 
 Generate an `ENCRYPTION_KEY`:
 
@@ -248,7 +248,7 @@ All accept Go duration strings (e.g., `1h`, `5m`, `30s`).
 
 ## /api/config Endpoint
 
-`GET /api/config` is a public, unauthenticated endpoint that returns runtime configuration for the frontend. It is cached for 1 hour (`Cache-Control: public, max-age=3600`).
+`GET /api/config` is a public, unauthenticated endpoint that returns runtime configuration for the frontend. It uses `Cache-Control: no-store` to prevent CDN/proxy caching.
 
 Response:
 

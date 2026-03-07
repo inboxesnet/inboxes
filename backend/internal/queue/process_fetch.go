@@ -14,6 +14,7 @@ import (
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/util"
+	"github.com/microcosm-cc/bluemonday"
 )
 
 // webhookEmailData mirrors the webhook payload structure for email.received.
@@ -150,6 +151,18 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 
 	// Merge fetched data — prefer API response over webhook payload
 	bodyHTML := full.HTML
+	if bodyHTML != "" {
+		p := bluemonday.UGCPolicy()
+		p.AllowAttrs("style").Globally()
+		p.AllowAttrs("class").Globally()
+		p.AllowAttrs("width", "height").OnElements("img", "table", "td", "th")
+		p.AllowAttrs("dir").Globally()
+		p.AllowElements("table", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup", "col", "caption")
+		p.AllowAttrs("colspan", "rowspan", "align", "valign").OnElements("td", "th")
+		p.AllowAttrs("target", "rel").OnElements("a")
+		p.AllowDataURIImages()
+		bodyHTML = p.Sanitize(bodyHTML)
+	}
 	bodyPlain := full.Text
 	headers := full.Headers
 	if headers == nil {
