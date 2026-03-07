@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
@@ -63,6 +64,10 @@ func (h *WebhookHandler) HandleResend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing org id", http.StatusBadRequest)
 		return
 	}
+	if _, err := uuid.Parse(orgID); err != nil {
+		http.Error(w, "invalid org id", http.StatusBadRequest)
+		return
+	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10MB limit
 	if err != nil {
@@ -98,10 +103,12 @@ func (h *WebhookHandler) HandleResend(w http.ResponseWriter, r *http.Request) {
 		decrypted, decErr := h.EncSvc.Decrypt(encSecret, encIV, encTag)
 		if decErr != nil {
 			slog.Error("webhook: failed to decrypt webhook secret", "org_id", orgID, "error", decErr)
-		} else {
-			webhookSecret = decrypted
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
+		webhookSecret = decrypted
 	}
+	// Only use plaintext if no encrypted secret exists (pre-migration orgs)
 	if webhookSecret == "" && plainSecret != nil {
 		webhookSecret = *plainSecret
 	}

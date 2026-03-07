@@ -238,7 +238,7 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 		event, err = webhook.ConstructEvent(body, sig, h.StripeWebhookSecret)
 	}
 	if err != nil {
-		slog.Error("stripe: webhook signature verification failed", "error", err, "sig_header", sig[:min(len(sig), 50)])
+		slog.Error("stripe: webhook signature verification failed", "error", err)
 		writeError(w, http.StatusBadRequest, "invalid signature")
 		return
 	}

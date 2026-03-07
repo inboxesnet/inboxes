@@ -73,7 +73,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	}
 
 	// Health
-	r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
+	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		dbOK := db.Ping(ctx) == nil
 		redisOK := rdb.Ping(ctx).Err() == nil
@@ -89,13 +89,11 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		w.WriteHeader(httpStatus)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": status,
-			"db":     dbOK,
-			"redis":  redisOK,
 		})
 	})
 
 	// Public runtime config (self-host: no rebuild needed per deployment)
-	r.Get("/api/config", func(w http.ResponseWriter, r *http.Request) {
+	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Get("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		wsURL := appURL
 		if len(wsURL) > 4 && wsURL[:5] == "https" {
 			wsURL = "wss" + wsURL[5:]
@@ -103,7 +101,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			wsURL = "ws" + wsURL[4:]
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"api_url":    appURL,
 			"ws_url":     wsURL,
@@ -127,9 +125,9 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	r.With(middleware.RateLimitByIP(rdb, 3, 1*60*60), middleware.RateLimitByBodyField(rdb, "email", 3, 1*60*60)).Post("/api/auth/resend-verification", auth.ResendVerification)
 
 	// Webhooks (signature-verified, not JWT)
-	r.Post("/api/webhooks/resend/{orgId}", webhooks.HandleResend)
+	r.With(middleware.RateLimitByIP(rdb, 60, 60)).Post("/api/webhooks/resend/{orgId}", webhooks.HandleResend)
 	if stripeKey != "" {
-		r.Post("/api/webhooks/stripe", billing.HandleStripeWebhook)
+		r.With(middleware.RateLimitByIP(rdb, 60, 60)).Post("/api/webhooks/stripe", billing.HandleStripeWebhook)
 	}
 
 	// WebSocket

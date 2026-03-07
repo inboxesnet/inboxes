@@ -22,7 +22,7 @@ The stack includes four services: `postgres`, `redis`, `backend`, and `frontend`
 | `DOMAIN` | `mail.yourdomain.com` | Interpolated in docker-compose.yml to build `APP_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL` |
 | `PUBLIC_URL` | `https://mail.yourdomain.com` | Passed to the backend in docker-compose.yml. Used as the Resend webhook callback base URL. Compose will fail to start if unset (`${PUBLIC_URL:?...}` syntax) |
 | `ENCRYPTION_KEY` | `openssl rand -base64 32` | Must be valid base64 decoding to exactly 32 bytes. Encrypts stored Resend API keys. **If lost, stored org API keys are unrecoverable** |
-| `SESSION_SECRET` | `openssl rand -hex 32` | Must be at least 16 characters. Backend refuses to start without it |
+| `SESSION_SECRET` | `openssl rand -hex 32` | Must be at least 32 characters. Backend refuses to start without it |
 | `POSTGRES_PASSWORD` | `openssl rand -hex 16` | **No default.** Compose will fail to start if unset (`${POSTGRES_PASSWORD:?...}` syntax) |
 
 ### Required (have defaults - override in production)
@@ -308,7 +308,7 @@ The frontend's `next.config.js` includes a rewrite rule that proxies `/api/*` re
 | Compose fails with `PUBLIC_URL` error | Missing env var | `PUBLIC_URL` has no default in docker-compose.yml and is required. Set it in `.env` |
 | "ENCRYPTION_KEY is required" on startup | Missing env var | Set `ENCRYPTION_KEY` (must be `openssl rand -base64 32`) |
 | "ENCRYPTION_KEY must decode to 32 bytes" | Wrong format | Must be base64-encoded 32 bytes, not hex or plain text |
-| "SESSION_SECRET must be at least 16 characters" | Too short | Use `openssl rand -hex 32` for a 64-character hex string |
+| "SESSION_SECRET must be at least 32 characters" | Too short | Use `openssl rand -hex 32` for a 64-character hex string |
 | Webhook emails not arriving | `PUBLIC_URL` wrong or unreachable from internet | Verify `PUBLIC_URL` is externally reachable. Check Resend dashboard for webhook delivery status |
 | Login doesn't persist across refreshes | `APP_URL` doesn't match browser URL | Cookie domain is derived from `APP_URL`. Ensure it matches what the browser sees |
 | WebSocket won't connect | `DOMAIN` mismatch or mixed http/https | Frontend derives `wss://${DOMAIN}` for WebSocket. Ensure `DOMAIN` matches the actual domain and TLS is working |

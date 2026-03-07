@@ -7,7 +7,7 @@ import (
 
 // Valid base64-encoded 32 bytes (all zeros)
 const testEncryptionKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-const testSessionSecret = "test-secret-that-is-long-enough"
+const testSessionSecret = "test-secret-that-is-long-enough!"
 
 // setValidEnv sets the minimum valid environment for config.Load() to succeed.
 func setValidEnv(t *testing.T) {
@@ -32,7 +32,7 @@ func TestLoad_ShortSessionSecret(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for short SESSION_SECRET, got nil")
 	}
-	if !strings.Contains(err.Error(), "at least 16 characters") {
+	if !strings.Contains(err.Error(), "at least 32 characters") {
 		t.Errorf("unexpected error message: %v", err)
 	}
 }

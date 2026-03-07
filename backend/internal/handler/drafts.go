@@ -227,7 +227,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch draft
-	domainID, threadID, kind, subject, fromAddr, bodyHTML, bodyPlain, toAddr, ccAddr, bccAddr, attachmentIDsRaw, err := h.Store.GetDraft(ctx, id, claims.UserID)
+	domainID, threadID, kind, subject, fromAddr, bodyHTML, bodyPlain, toAddr, ccAddr, bccAddr, attachmentIDsRaw, err := h.Store.GetDraft(ctx, id, claims.UserID, claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "draft not found")
 		return

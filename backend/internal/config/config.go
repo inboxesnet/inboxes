@@ -86,8 +86,8 @@ func Load() (*Config, error) {
 	if cfg.SessionSecret == "" {
 		return nil, fmt.Errorf("SESSION_SECRET is required")
 	}
-	if len(cfg.SessionSecret) < 16 {
-		return nil, fmt.Errorf("SESSION_SECRET must be at least 16 characters")
+	if len(cfg.SessionSecret) < 32 {
+		return nil, fmt.Errorf("SESSION_SECRET must be at least 32 characters")
 	}
 	if cfg.EncryptionKey == "" {
 		return nil, fmt.Errorf("ENCRYPTION_KEY is required")

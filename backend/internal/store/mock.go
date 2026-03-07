@@ -134,7 +134,7 @@ type MockStore struct {
 	CreateDraftFn func(ctx context.Context, orgID, userID, domainID string, threadID *string, kind, subject, fromAddress string, toJSON, ccJSON, bccJSON, attJSON []byte) (string, error)
 	UpdateDraftFn func(ctx context.Context, draftID, userID string, sets []string, args []any) (int64, error)
 	DeleteDraftFn func(ctx context.Context, draftID, userID string) (int64, error)
-	GetDraftFn    func(ctx context.Context, draftID, userID string) (string, *string, string, string, string, string, string, json.RawMessage, json.RawMessage, json.RawMessage, json.RawMessage, error)
+	GetDraftFn    func(ctx context.Context, draftID, userID, orgID string) (string, *string, string, string, string, string, string, json.RawMessage, json.RawMessage, json.RawMessage, json.RawMessage, error)
 
 	// ---- Orgs ----
 	GetOrgSettingsFn            func(ctx context.Context, orgID string) (map[string]any, error)
@@ -970,9 +970,9 @@ func (m *MockStore) DeleteDraft(ctx context.Context, draftID, userID string) (in
 	return 0, nil
 }
 
-func (m *MockStore) GetDraft(ctx context.Context, draftID, userID string) (string, *string, string, string, string, string, string, json.RawMessage, json.RawMessage, json.RawMessage, json.RawMessage, error) {
+func (m *MockStore) GetDraft(ctx context.Context, draftID, userID, orgID string) (string, *string, string, string, string, string, string, json.RawMessage, json.RawMessage, json.RawMessage, json.RawMessage, error) {
 	if m.GetDraftFn != nil {
-		return m.GetDraftFn(ctx, draftID, userID)
+		return m.GetDraftFn(ctx, draftID, userID, orgID)
 	}
 	return "", nil, "", "", "", "", "", json.RawMessage{}, json.RawMessage{}, json.RawMessage{}, json.RawMessage{}, nil
 }

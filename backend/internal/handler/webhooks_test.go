@@ -46,7 +46,7 @@ func TestHandleResend_InvalidPayloadJSON(t *testing.T) {
 	r := chi.NewRouter()
 	r.Post("/webhooks/resend/{orgId}", h.HandleResend)
 
-	req := httptest.NewRequest("POST", "/webhooks/resend/org123", strings.NewReader("not json at all"))
+	req := httptest.NewRequest("POST", "/webhooks/resend/00000000-0000-0000-0000-000000000001", strings.NewReader("not json at all"))
 	w := httptest.NewRecorder()
 	// This will still panic because h.Store is nil. Skip for now.
 	// The Store.Q().QueryRow call happens before JSON parsing.
@@ -93,8 +93,8 @@ func TestHandleResend_ReachesDBWithValidOrgID(t *testing.T) {
 	// Without a real Store, it panics on h.Store.Q() — that's expected.
 	h := &WebhookHandler{}
 	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("orgId", "org-valid")
-	req := httptest.NewRequest("POST", "/webhooks/resend/org-valid", strings.NewReader(`{"type":"email.sent"}`))
+	rctx.URLParams.Add("orgId", "00000000-0000-0000-0000-000000000002")
+	req := httptest.NewRequest("POST", "/webhooks/resend/00000000-0000-0000-0000-000000000002", strings.NewReader(`{"type":"email.sent"}`))
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 	w := httptest.NewRecorder()
 
@@ -178,8 +178,8 @@ func TestHandleResend_DeletedOrg(t *testing.T) {
 	}
 
 	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("orgId", "org-deleted")
-	req := httptest.NewRequest("POST", "/webhooks/resend/org-deleted", strings.NewReader(`{"type":"email.sent"}`))
+	rctx.URLParams.Add("orgId", "00000000-0000-0000-0000-000000000003")
+	req := httptest.NewRequest("POST", "/webhooks/resend/00000000-0000-0000-0000-000000000003", strings.NewReader(`{"type":"email.sent"}`))
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 	w := httptest.NewRecorder()
 
@@ -222,8 +222,8 @@ func TestHandleResend_NoWebhookSecret(t *testing.T) {
 	}
 
 	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("orgId", "org-nosecret")
-	req := httptest.NewRequest("POST", "/webhooks/resend/org-nosecret", strings.NewReader(`{"type":"email.sent"}`))
+	rctx.URLParams.Add("orgId", "00000000-0000-0000-0000-000000000004")
+	req := httptest.NewRequest("POST", "/webhooks/resend/00000000-0000-0000-0000-000000000004", strings.NewReader(`{"type":"email.sent"}`))
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 	w := httptest.NewRecorder()
 
