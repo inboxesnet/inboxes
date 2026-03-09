@@ -321,7 +321,7 @@ func (h *DomainHandler) ReregisterWebhook(w http.ResponseWriter, r *http.Request
 
 	var webhookResp struct {
 		ID     string `json:"id"`
-		Secret string `json:"secret"`
+		Secret string `json:"signing_secret"`
 	}
 	if err := json.Unmarshal(data, &webhookResp); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to parse webhook response")

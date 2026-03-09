@@ -276,7 +276,28 @@ func (s *ResendService) SystemFetch(ctx context.Context, method, path string, bo
 	if key == "" {
 		return nil, nil // graceful degradation
 	}
-	return DoRequest(key, method, resendBaseURL+path, body)
+
+	// Critical user-facing sends (invites, verification, password reset) get
+	// retry-with-backoff on 429 so background pollers can't starve them.
+	const maxRetries = 3
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err := DoRequest(key, method, resendBaseURL+path, body)
+		if err == nil {
+			return resp, nil
+		}
+		re, ok := err.(*ResendError)
+		if !ok || re.StatusCode != 429 || attempt == maxRetries {
+			return nil, err
+		}
+		wait := time.Duration(attempt+1) * time.Second
+		slog.Warn("resend: system send rate-limited, retrying", "attempt", attempt+1, "wait", wait)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, fmt.Errorf("resend: system send failed after retries")
 }
 
 // ResendDirectFetch makes a request with a raw API key (used during onboarding before key is stored).
