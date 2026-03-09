@@ -26,14 +26,15 @@ export function PaymentWall() {
       const interval = setInterval(async () => {
         attempts++;
         try {
-          const billing = await api.get<{ plan_status: string }>("/api/billing");
-          if (billing.plan_status === "pro" || billing.plan_status === "active") {
+          const billing = await api.get<{ plan: string }>("/api/billing");
+          if (billing.plan === "pro" || billing.plan === "active") {
             clearInterval(interval);
             setPolling(false);
-            // Clean up URL
+            // Clean up URL and reload to clear cached 402 errors
             const url = new URL(window.location.href);
             url.searchParams.delete("billing");
             window.history.replaceState({}, "", url.toString());
+            window.location.reload();
             return;
           }
         } catch { /* ignore */ }
