@@ -416,7 +416,11 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	domainID, _ := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
 
 	if err := h.Store.WithTx(ctx, func(tx store.Store) error {
 		switch req.Label {
@@ -618,7 +622,11 @@ func (h *ThreadHandler) Archive(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	domainID, _ := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
 
 	if err := h.Store.RemoveLabel(ctx, threadID, "inbox"); err != nil {
 		slog.Error("threads: archive removeLabel failed", "thread_id", threadID, "error", err)
@@ -645,7 +653,11 @@ func (h *ThreadHandler) Trash(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	domainID, _ := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
 
 	if err := h.Store.WithTx(ctx, func(tx store.Store) error {
 		if err := tx.AddLabel(ctx, threadID, claims.OrgID, "trash"); err != nil {
@@ -682,7 +694,11 @@ func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {
 	}
 	readJSON(r, &req)
 
-	domainID, _ := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
 
 	evtType := event.ThreadSpammed
 	payload := map[string]interface{}{}

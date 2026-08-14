@@ -231,8 +231,8 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Post("/api/domains/discovered/{id}/dismiss", domains.DismissDiscoveredDomain)
 
 			r.With(middleware.RequireAdmin).Get("/api/users", users.List)
-			r.With(middleware.RequireAdmin).Post("/api/users/invite", users.Invite)
-			r.With(middleware.RequireAdmin).Post("/api/users/{id}/reinvite", users.Reinvite)
+			r.With(middleware.RequireAdmin, middleware.RateLimitByIP(rdb, 20, 60*60), middleware.RateLimitByUser(rdb, 10, 60*60)).Post("/api/users/invite", users.Invite)
+			r.With(middleware.RequireAdmin, middleware.RateLimitByIP(rdb, 20, 60*60), middleware.RateLimitByUser(rdb, 10, 60*60)).Post("/api/users/{id}/reinvite", users.Reinvite)
 			r.With(middleware.RequireAdmin).Patch("/api/users/{id}/disable", users.Disable)
 			r.With(middleware.RequireAdmin).Patch("/api/users/{id}/role", users.ChangeRole)
 			r.With(middleware.RequireAdmin).Patch("/api/users/{id}/enable", users.Enable)

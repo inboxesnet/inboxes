@@ -88,6 +88,14 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// If replying into an existing thread, verify it belongs to the caller's org.
+	if req.ReplyTo != "" {
+		if _, err := h.Store.GetThreadDomainID(ctx, req.ReplyTo, claims.OrgID); err != nil {
+			writeError(w, http.StatusNotFound, "thread not found")
+			return
+		}
+	}
+
 	// Bounce block check: reject if any recipient is on the bounce list
 	var allRecipients []string
 	allRecipients = append(allRecipients, req.To...)
@@ -231,7 +239,7 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Update thread stats
-		if err := tx.UpdateThreadStats(ctx, threadID, snippet, req.From); err != nil {
+		if err := tx.UpdateThreadStats(ctx, threadID, claims.OrgID, snippet, req.From); err != nil {
 			slog.Error("email: update thread failed", "thread_id", threadID, "error", err)
 		}
 

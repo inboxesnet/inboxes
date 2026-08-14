@@ -221,14 +221,16 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	if status != "active" {
-		slog.Warn("auth: login failed", "email", req.Email, "reason", "inactive account")
-		writeError(w, http.StatusUnauthorized, "account is not active")
+	// Always compare the password first so the response and timing do not reveal
+	// whether an account exists or is inactive (account enumeration defense).
+	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+		slog.Warn("auth: login failed", "email", req.Email, "reason", "bad password")
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
-		slog.Warn("auth: login failed", "email", req.Email, "reason", "bad password")
+	if status != "active" {
+		slog.Warn("auth: login failed", "email", req.Email, "reason", "inactive account")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}

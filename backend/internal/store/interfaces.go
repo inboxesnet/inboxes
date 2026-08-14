@@ -112,7 +112,7 @@ type EmailStore interface {
 	ResolveFromDisplay(ctx context.Context, orgID, address string) (string, error)
 	LookupDomainByName(ctx context.Context, orgID, domainName string) (string, error)
 	InsertEmail(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status string, inReplyTo string, refsJSON []byte) (string, error)
-	UpdateThreadStats(ctx context.Context, threadID, snippet, lastSender string) error
+	UpdateThreadStats(ctx context.Context, threadID, orgID, snippet, lastSender string) error
 	CreateEmailJob(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
 	SearchEmails(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error)
 	ListAdminJobs(ctx context.Context, orgID string) ([]map[string]any, error)

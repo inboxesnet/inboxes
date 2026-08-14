@@ -256,6 +256,14 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the draft targets an existing thread, verify it belongs to the caller's org.
+	if threadID != nil && *threadID != "" {
+		if _, err := h.Store.GetThreadDomainID(ctx, *threadID, claims.OrgID); err != nil {
+			writeError(w, http.StatusNotFound, "thread not found")
+			return
+		}
+	}
+
 	// Bounce block check: reject if any recipient is on the bounce list
 	allRecipients := append(append(to, cc...), bcc...)
 	blocked, _ := h.Store.CheckBouncedRecipients(ctx, claims.OrgID, allRecipients)
@@ -357,7 +365,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Update thread stats
-		if err := tx.UpdateThreadStats(ctx, finalThreadID, snippet, fromAddr); err != nil {
+		if err := tx.UpdateThreadStats(ctx, finalThreadID, claims.OrgID, snippet, fromAddr); err != nil {
 			slog.Error("draft: update thread failed", "thread_id", finalThreadID, "error", err)
 		}
 

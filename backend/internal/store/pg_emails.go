@@ -152,10 +152,10 @@ func (s *PgStore) InsertEmail(ctx context.Context, threadID, userID, orgID, doma
 	return emailID, err
 }
 
-func (s *PgStore) UpdateThreadStats(ctx context.Context, threadID, snippet, lastSender string) error {
+func (s *PgStore) UpdateThreadStats(ctx context.Context, threadID, orgID, snippet, lastSender string) error {
 	_, err := s.q.Exec(ctx,
 		`UPDATE threads SET message_count = message_count + 1, last_message_at = now(), snippet = $2, last_sender = $3, updated_at = now()
-		 WHERE id = $1`, threadID, snippet, lastSender,
+		 WHERE id = $1 AND org_id = $4`, threadID, snippet, lastSender, orgID,
 	)
 	return err
 }

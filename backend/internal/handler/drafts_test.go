@@ -202,7 +202,7 @@ func TestDraftGet_Success(t *testing.T) {
 			InsertEmailFn: func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status, inReplyTo string, refsJSON []byte) (string, error) {
 				return "email1", nil
 			},
-			UpdateThreadStatsFn: func(ctx context.Context, threadID, snippet, lastSender string) error {
+			UpdateThreadStatsFn: func(ctx context.Context, threadID, orgID, snippet, lastSender string) error {
 				return nil
 			},
 			CreateEmailJobFn: func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error) {

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"time"
@@ -87,9 +88,12 @@ func (h *UserHandler) Invite(w http.ResponseWriter, r *http.Request) {
 		from = "noreply@inboxes.net"
 		slog.Warn("users: using hardcoded noreply fallback — configure system email in settings")
 	}
-	inviteIntro := fmt.Sprintf("You've been invited to join <strong>%s</strong> on Inboxes.", orgName)
+	// Escape org and inviter names — they are user-controlled and go into email HTML.
+	orgNameHTML := html.EscapeString(orgName)
+	inviterNameHTML := html.EscapeString(inviterName)
+	inviteIntro := fmt.Sprintf("You've been invited to join <strong>%s</strong> on Inboxes.", orgNameHTML)
 	if inviterName != "" {
-		inviteIntro = fmt.Sprintf("<strong>%s</strong> has invited you to join <strong>%s</strong> on Inboxes.", inviterName, orgName)
+		inviteIntro = fmt.Sprintf("<strong>%s</strong> has invited you to join <strong>%s</strong> on Inboxes.", inviterNameHTML, orgNameHTML)
 	}
 	if _, err := h.ResendSvc.SystemFetch(r.Context(), "POST", "/emails", map[string]interface{}{
 		"from":    from,
@@ -133,7 +137,7 @@ func (h *UserHandler) Reinvite(w http.ResponseWriter, r *http.Request) {
 		"from":    from,
 		"to":      []string{email},
 		"subject": fmt.Sprintf("Reminder: You're invited to %s on Inboxes", reinviteOrgName),
-		"html":    fmt.Sprintf("<p>You've been invited to join <strong>%s</strong> on Inboxes.</p><p><a href='%s/claim?token=%s'>Accept Invitation</a></p>", reinviteOrgName, h.AppURL, token),
+		"html":    fmt.Sprintf("<p>You've been invited to join <strong>%s</strong> on Inboxes.</p><p><a href='%s/claim?token=%s'>Accept Invitation</a></p>", html.EscapeString(reinviteOrgName), h.AppURL, token),
 	}); err != nil {
 		slog.Error("users: failed to send reinvite email", "email", email, "error", err)
 		writeError(w, http.StatusInternalServerError, "reinvite email failed to send")

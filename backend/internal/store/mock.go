@@ -70,7 +70,7 @@ type MockStore struct {
 	ResolveFromDisplayFn       func(ctx context.Context, orgID, address string) (string, error)
 	LookupDomainByNameFn       func(ctx context.Context, orgID, domainName string) (string, error)
 	InsertEmailFn              func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status string, inReplyTo string, refsJSON []byte) (string, error)
-	UpdateThreadStatsFn        func(ctx context.Context, threadID, snippet, lastSender string) error
+	UpdateThreadStatsFn        func(ctx context.Context, threadID, orgID, snippet, lastSender string) error
 	CreateEmailJobFn           func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
 	SearchEmailsFn             func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error)
 	ListAdminJobsFn            func(ctx context.Context, orgID string) ([]map[string]any, error)
@@ -564,9 +564,9 @@ func (m *MockStore) InsertEmail(ctx context.Context, threadID, userID, orgID, do
 	return "", nil
 }
 
-func (m *MockStore) UpdateThreadStats(ctx context.Context, threadID, snippet, lastSender string) error {
+func (m *MockStore) UpdateThreadStats(ctx context.Context, threadID, orgID, snippet, lastSender string) error {
 	if m.UpdateThreadStatsFn != nil {
-		return m.UpdateThreadStatsFn(ctx, threadID, snippet, lastSender)
+		return m.UpdateThreadStatsFn(ctx, threadID, orgID, snippet, lastSender)
 	}
 	return nil
 }

@@ -819,8 +819,10 @@ func TestLogin_DisabledUser(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("Login(disabled): got status %d, want %d", w.Code, http.StatusUnauthorized)
 	}
-	if !strings.Contains(w.Body.String(), "not active") {
-		t.Errorf("Login(disabled): body = %q, want 'not active'", w.Body.String())
+	// A disabled account returns the same generic message as a bad password,
+	// so the response does not reveal that the account exists.
+	if !strings.Contains(w.Body.String(), "invalid credentials") {
+		t.Errorf("Login(disabled): body = %q, want 'invalid credentials'", w.Body.String())
 	}
 }
 
