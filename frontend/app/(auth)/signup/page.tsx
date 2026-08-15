@@ -32,7 +32,7 @@ export default function SignupPage() {
     async function check() {
       // A user with a valid session does not need the signup form.
       try {
-        await api.get("/api/users/me");
+        await api.get("/api/users/me", { noLatch: true });
         router.replace("/d");
         return;
       } catch {

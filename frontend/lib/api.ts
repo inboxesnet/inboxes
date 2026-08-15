@@ -9,17 +9,25 @@ let sessionExpired = false;
 interface FetchOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   signal?: AbortSignal;
+  // Session probes (e.g. "am I logged in?" checks on auth pages) must not
+  // trip the global 401 latch — an expected 401 there would block all
+  // later calls, including the login POST itself.
+  noLatch?: boolean;
 }
 
 async function request<T = unknown>(
   path: string,
   opts?: FetchOptions
 ): Promise<T> {
-  if (sessionExpired) {
+  const { body, headers, noLatch, ...rest } = opts || {};
+  // Auth endpoints are exempt from the latch in both directions: a failed
+  // login is a 401 that must reach the user as "invalid credentials", and
+  // a successful login must always be able to reach the network.
+  const latchExempt = noLatch || path.startsWith("/api/auth/");
+
+  if (sessionExpired && !latchExempt) {
     throw new ApiError(401, "Session expired");
   }
-
-  const { body, headers, ...rest } = opts || {};
   const res = await fetch(`${API_URL}${path}`, {
     credentials: "include",
     headers: {
@@ -36,6 +44,9 @@ async function request<T = unknown>(
 
     // Global 401 interceptor — show session expired modal instead of hard redirect
     if (res.status === 401) {
+      if (latchExempt) {
+        throw new ApiError(401, err.error || "unauthorized", err.code);
+      }
       if (!sessionExpired) {
         sessionExpired = true;
         window.dispatchEvent(new CustomEvent("session-expired"));
@@ -49,6 +60,11 @@ async function request<T = unknown>(
     }
 
     throw new ApiError(res.status, err.error || res.statusText, err.code);
+  }
+
+  // A successful auth call (login, verify, claim) starts a fresh session.
+  if (path.startsWith("/api/auth/")) {
+    sessionExpired = false;
   }
 
   if (res.status === 204) return undefined as T;
@@ -67,7 +83,7 @@ export class ApiError extends Error {
 }
 
 export const api = {
-  get: <T = unknown>(path: string, opts?: { signal?: AbortSignal }) =>
+  get: <T = unknown>(path: string, opts?: { signal?: AbortSignal; noLatch?: boolean }) =>
     request<T>(path, opts),
   post: <T = unknown>(path: string, body?: unknown, opts?: { signal?: AbortSignal }) =>
     request<T>(path, { method: "POST", body, ...opts }),

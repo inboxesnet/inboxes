@@ -20,7 +20,7 @@ export default function Home() {
     async function check() {
       // A valid session cookie skips the auth pages entirely.
       try {
-        await api.get("/api/users/me");
+        await api.get("/api/users/me", { noLatch: true });
         router.replace("/d");
         return;
       } catch (err) {

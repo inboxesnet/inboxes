@@ -27,7 +27,7 @@ export default function LoginPage() {
   useEffect(() => {
     // A user with a valid session does not need the login form.
     api
-      .get("/api/users/me")
+      .get("/api/users/me", { noLatch: true })
       .then(() => router.replace("/d"))
       .catch(() => {
         // No session — stay on the login form.
