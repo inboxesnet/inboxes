@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Spinner } from "@/components/ui/spinner";
 import type { Domain } from "@/lib/types";
 
@@ -18,8 +18,14 @@ export default function DomainRedirectPage() {
         } else {
           router.replace("/onboarding");
         }
-      } catch {
-        router.replace("/login");
+      } catch (err) {
+        // 402 = plan expired/invalid, not an auth failure — send the user
+        // to the billing page, never back to login (avoids a redirect loop)
+        if (err instanceof ApiError && err.status === 402) {
+          router.replace("/billing");
+        } else {
+          router.replace("/login");
+        }
       }
     }
     redirect();
