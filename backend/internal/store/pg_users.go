@@ -198,24 +198,31 @@ func (s *PgStore) ReassignAndDisable(ctx context.Context, orgID, adminID, source
 }
 
 func (s *PgStore) GetMe(ctx context.Context, userID string) (map[string]any, error) {
-	var id, email, name, role, status string
+	var id, email, name, role, status, signatureHTML string
 	var createdAt time.Time
 	var isOwner, hasWebhook bool
 	err := s.q.QueryRow(ctx,
-		`SELECT u.id, u.email, u.name, u.role, u.status, u.created_at, u.is_owner,
+		`SELECT u.id, u.email, u.name, u.role, u.status, u.created_at, u.is_owner, u.signature_html,
 		        (o.resend_webhook_id IS NOT NULL AND o.resend_webhook_id != '') AS has_webhook
 		 FROM users u
 		 JOIN orgs o ON o.id = u.org_id
 		 WHERE u.id = $1`,
-		userID).Scan(&id, &email, &name, &role, &status, &createdAt, &isOwner, &hasWebhook)
+		userID).Scan(&id, &email, &name, &role, &status, &createdAt, &isOwner, &signatureHTML, &hasWebhook)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"id": id, "email": email, "name": name, "role": role,
 		"status": status, "created_at": createdAt, "is_owner": isOwner,
-		"has_webhook": hasWebhook,
+		"has_webhook": hasWebhook, "signature_html": signatureHTML,
 	}, nil
+}
+
+func (s *PgStore) UpdateSignature(ctx context.Context, userID, signatureHTML string) error {
+	_, err := s.q.Exec(ctx,
+		`UPDATE users SET signature_html = $1, updated_at = now() WHERE id = $2`,
+		signatureHTML, userID)
+	return err
 }
 
 func (s *PgStore) UpdateUserName(ctx context.Context, userID, name string) error {

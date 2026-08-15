@@ -60,6 +60,27 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
+  useQuery: () => ({ data: undefined }),
+}));
+
+vi.mock("@/lib/query-keys", () => ({
+  queryKeys: { users: { all: ["users"], me: () => ["users", "me"] } },
+}));
+
+// Mock the rich editor as a plain textarea
+vi.mock("@/components/tiptap-editor", () => ({
+  TipTapEditor: ({ content, onChange, placeholder }: { content?: string; onChange?: (html: string, plain: string) => void; placeholder?: string }) => (
+    <textarea
+      data-testid="signature-editor"
+      placeholder={placeholder}
+      defaultValue={content}
+      onChange={(e) => onChange?.(e.target.value, e.target.value)}
+    />
+  ),
+}));
+
 // Mock contexts
 vi.mock("@/contexts/app-config-context", () => ({
   useAppConfig: () => ({ commercial: false, apiUrl: "", wsUrl: "" }),

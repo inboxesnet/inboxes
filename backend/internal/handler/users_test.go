@@ -386,3 +386,69 @@ func TestUserRoleChange_SelfChange(t *testing.T) {
 		t.Errorf("ChangeRole(self): body = %q", w.Body.String())
 	}
 }
+
+// ── Signature ──
+
+func TestUpdateSignature_SanitizesHTML(t *testing.T) {
+	t.Parallel()
+	var saved string
+	h := &UserHandler{
+		Store: &store.MockStore{
+			UpdateSignatureFn: func(ctx context.Context, userID, signatureHTML string) error {
+				saved = signatureHTML
+				return nil
+			},
+		},
+	}
+	body := `{"signature_html": "<p>Best,</p><script>alert(1)</script><p>Harrison</p>"}`
+	req := httptest.NewRequest("PATCH", "/users/me/signature", strings.NewReader(body))
+	req = withClaims(req, "user1", "org1", "member")
+	w := httptest.NewRecorder()
+	h.UpdateSignature(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateSignature: got status %d; body: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(saved, "<script>") {
+		t.Errorf("expected script tag stripped, saved: %q", saved)
+	}
+	if !strings.Contains(saved, "Harrison") {
+		t.Errorf("expected content preserved, saved: %q", saved)
+	}
+}
+
+func TestUpdateSignature_TooLong(t *testing.T) {
+	t.Parallel()
+	h := &UserHandler{Store: &store.MockStore{}}
+	long := strings.Repeat("a", 10001)
+	body := fmt.Sprintf(`{"signature_html": %q}`, long)
+	req := httptest.NewRequest("PATCH", "/users/me/signature", strings.NewReader(body))
+	req = withClaims(req, "user1", "org1", "member")
+	w := httptest.NewRecorder()
+	h.UpdateSignature(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for oversize signature, got %d", w.Code)
+	}
+}
+
+func TestUpdateSignature_EmptyClears(t *testing.T) {
+	t.Parallel()
+	var saved = "sentinel"
+	h := &UserHandler{
+		Store: &store.MockStore{
+			UpdateSignatureFn: func(ctx context.Context, userID, signatureHTML string) error {
+				saved = signatureHTML
+				return nil
+			},
+		},
+	}
+	req := httptest.NewRequest("PATCH", "/users/me/signature", strings.NewReader(`{"signature_html": ""}`))
+	req = withClaims(req, "user1", "org1", "member")
+	w := httptest.NewRecorder()
+	h.UpdateSignature(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if saved != "" {
+		t.Errorf("expected empty signature saved, got %q", saved)
+	}
+}

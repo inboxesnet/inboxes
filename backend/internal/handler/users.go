@@ -14,6 +14,7 @@ import (
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -321,6 +322,33 @@ func (h *UserHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *UserHandler) UpdateSignature(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+
+	var req struct {
+		SignatureHTML string `json:"signature_html"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if err := validateLength(req.SignatureHTML, "signature", 10000); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Sanitize server-side: the signature renders in the compose editor and
+	// in recipients' clients, so stored XSS must be impossible.
+	sanitized := bluemonday.UGCPolicy().Sanitize(req.SignatureHTML)
+
+	if err := h.Store.UpdateSignature(r.Context(), claims.UserID, sanitized); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update signature")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"signature_html": sanitized})
 }
 
 func (h *UserHandler) GetPreferences(w http.ResponseWriter, r *http.Request) {

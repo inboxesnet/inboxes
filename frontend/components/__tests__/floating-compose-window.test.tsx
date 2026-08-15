@@ -68,6 +68,18 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+// Signature holder — tests set this to simulate the profile query result
+let mockMe: Record<string, unknown> | undefined = undefined;
+
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
+  useQuery: () => ({ data: mockMe }),
+}));
+
+vi.mock("@/lib/query-keys", () => ({
+  queryKeys: { users: { all: ["users"], me: () => ["users", "me"] } },
+}));
+
 // Mock TipTapEditor as a simple textarea
 vi.mock("@/components/tiptap-editor", () => ({
   TipTapEditor: ({ onChange, content, toolbarLeft, toolbarRight }: {
@@ -163,6 +175,29 @@ describe("FloatingComposeWindow", () => {
     vi.clearAllMocks();
     mockComposeState = "open";
     mockComposeData = {};
+    mockMe = undefined;
+  });
+
+  it("inserts the signature into an empty new compose", () => {
+    mockMe = { id: "u1", signature_html: "<p>-- Harrison</p>" };
+    render(<FloatingComposeWindow />);
+    const textareas = screen.getAllByTestId("editor-textarea");
+    expect(
+      textareas.some((t) => (t as HTMLTextAreaElement).value.includes("-- Harrison"))
+    ).toBe(true);
+  });
+
+  it("does not insert the signature into a saved draft body", () => {
+    mockMe = { id: "u1", signature_html: "<p>-- Harrison</p>" };
+    mockComposeData = { draftId: "draft-9", bodyHtml: "<p>draft text</p>", bodyPlain: "draft text" };
+    render(<FloatingComposeWindow />);
+    const textareas = screen.getAllByTestId("editor-textarea");
+    expect(
+      textareas.some((t) => (t as HTMLTextAreaElement).value.includes("-- Harrison"))
+    ).toBe(false);
+    expect(
+      textareas.some((t) => (t as HTMLTextAreaElement).value.includes("draft text"))
+    ).toBe(true);
   });
 
   it("renders nothing when composeState is closed", () => {

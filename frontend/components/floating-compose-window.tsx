@@ -8,6 +8,9 @@ import { useEmailWindow } from "@/contexts/email-window-context";
 import { useDomains } from "@/contexts/domain-context";
 import { usePreferences } from "@/contexts/preferences-context";
 import { api, uploadFileWithProgress } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/query-keys";
+import type { User } from "@/lib/types";
 import { TipTapEditor } from "@/components/tiptap-editor";
 import { RecipientInput } from "@/components/recipient-input";
 import { Button } from "@/components/ui/button";
@@ -30,6 +33,20 @@ interface AttachmentMeta {
   size: number;
 }
 
+// htmlToPlain reduces signature HTML to a text form for the plain part.
+function htmlToPlain(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 interface MyAlias {
   id: string;
   address: string;
@@ -44,6 +61,16 @@ export function FloatingComposeWindow() {
     useEmailWindow();
   const { activeDomain } = useDomains();
   const { stripTrackingParams, warnNoSubject } = usePreferences();
+
+  const { data: me } = useQuery({
+    queryKey: queryKeys.users.me(),
+    queryFn: () => api.get<User>("/api/users/me"),
+    staleTime: Infinity,
+  });
+  // Read via a ref inside the open-effect so a late-arriving profile fetch
+  // cannot re-run the effect and wipe typed text.
+  const meRef = useRef<User | undefined>(undefined);
+  meRef.current = me;
 
   const [fromAddress, setFromAddress] = useState("");
   const [to, setTo] = useState<string[]>([]);
@@ -107,8 +134,16 @@ export function FloatingComposeWindow() {
       setCc(composeData.ccAddresses || []);
       setBcc(composeData.bccAddresses || []);
       setSubject(composeData.subject || "");
-      setBodyHtml(composeData.bodyHtml || "");
-      setBodyPlain(composeData.bodyPlain || "");
+      // Auto-insert the user's signature into an empty body (new compose or
+      // reply). Drafts keep their saved body; the signature is already in it.
+      const signature = meRef.current?.signature_html || "";
+      if (!composeData.bodyHtml && !composeData.draftId && signature) {
+        setBodyHtml(`<p></p><p></p>${signature}`);
+        setBodyPlain(`\n\n${htmlToPlain(signature)}`);
+      } else {
+        setBodyHtml(composeData.bodyHtml || "");
+        setBodyPlain(composeData.bodyPlain || "");
+      }
       setDraftId(composeData.draftId || null);
       draftIdRef.current = composeData.draftId || null;
       setShowCcBcc(

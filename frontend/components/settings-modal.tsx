@@ -3,6 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/query-keys";
+import { TipTapEditor } from "@/components/tiptap-editor";
 import { useSyncJob } from "@/hooks/use-sync-job";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -428,9 +431,12 @@ function ComposeCard() {
 export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalProps) {
   const { commercial } = useAppConfig();
   const { refreshDomains } = useDomains();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>(defaultTab || "profile");
   const [user, setUser] = useState<User | null>(null);
   const [name, setName] = useState("");
+  const [signatureHtml, setSignatureHtml] = useState("");
+  const [savingSignature, setSavingSignature] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [loading, setLoading] = useState(true);
@@ -551,6 +557,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
         ]);
         setUser(userData);
         setName(userData.name);
+        setSignatureHtml(userData.signature_html || "");
         setAllDomains(domainData);
         setVisibleIds(new Set(domainData.filter((d) => !d.hidden).map((d) => d.id)));
         setDiscoveredDomains(discoveredData);
@@ -575,6 +582,24 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       setError(err instanceof ApiError ? err.message : "Failed to update");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveSignature() {
+    setError("");
+    setSuccess("");
+    setSavingSignature(true);
+    try {
+      const result = await api.patch<{ signature_html: string }>("/api/users/me/signature", {
+        signature_html: signatureHtml,
+      });
+      setSignatureHtml(result.signature_html);
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.me() });
+      setSuccess("Signature saved");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to save signature");
+    } finally {
+      setSavingSignature(false);
     }
   }
 
@@ -1431,6 +1456,31 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                           </Button>
                         </CardFooter>
                       </form>
+                    </Card>
+
+                    {/* Signature */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Signature</CardTitle>
+                        <CardDescription>
+                          Added to the end of new messages and replies. Leave empty for no signature.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="rounded-md border">
+                          <TipTapEditor
+                            content={signatureHtml}
+                            onChange={(html) => setSignatureHtml(html)}
+                            placeholder="Write your signature..."
+                          />
+                        </div>
+                      </CardContent>
+                      <CardFooter>
+                        <Button disabled={savingSignature} onClick={handleSaveSignature} type="button">
+                          {savingSignature ? <Spinner className="mr-2" /> : null}
+                          Save signature
+                        </Button>
+                      </CardFooter>
                     </Card>
 
                     {/* Password */}

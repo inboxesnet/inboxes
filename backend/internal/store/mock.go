@@ -27,6 +27,7 @@ type MockStore struct {
 	CreateOrgAndAdminFn      func(ctx context.Context, orgName, email, name, passwordHash string, emailVerified bool, isOwner bool) (string, string, error)
 	SetVerificationCodeFn    func(ctx context.Context, userID, code string, expires time.Time) error
 	GetUserByEmailFn         func(ctx context.Context, email string) (id, orgID, name, role, status, passwordHash string, emailVerified bool, err error)
+	UpdateSignatureFn        func(ctx context.Context, userID, signatureHTML string) error
 	GetOnboardingCompletedFn func(ctx context.Context, orgID string) (bool, error)
 	SetResetTokenFn          func(ctx context.Context, email, token string, expires time.Time) (int64, error)
 	ResetPasswordFn          func(ctx context.Context, passwordHash, token string) (string, error)
@@ -277,6 +278,13 @@ func (m *MockStore) CreateOrgAndAdmin(ctx context.Context, orgName, email, name,
 func (m *MockStore) SetVerificationCode(ctx context.Context, userID, code string, expires time.Time) error {
 	if m.SetVerificationCodeFn != nil {
 		return m.SetVerificationCodeFn(ctx, userID, code, expires)
+	}
+	return nil
+}
+
+func (m *MockStore) UpdateSignature(ctx context.Context, userID, signatureHTML string) error {
+	if m.UpdateSignatureFn != nil {
+		return m.UpdateSignatureFn(ctx, userID, signatureHTML)
 	}
 	return nil
 }

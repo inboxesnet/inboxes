@@ -7,6 +7,8 @@ export interface User {
   status: "placeholder" | "invited" | "active" | "disabled";
   is_owner?: boolean;
   created_at: string;
+  has_webhook?: boolean;
+  signature_html?: string;
 }
 
 export interface Org {

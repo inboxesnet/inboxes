@@ -154,6 +154,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		r.With(middleware.RateLimitByIP(rdb, 5, 15*60)).Patch("/api/users/me/password", users.UpdatePassword)
 		r.Get("/api/users/me/preferences", users.GetPreferences)
 		r.Patch("/api/users/me/preferences", users.UpdatePreferences)
+		r.Patch("/api/users/me/signature", users.UpdateSignature)
 		r.Get("/api/users/me/sessions", users.ListSessions)
 		r.Delete("/api/users/me/sessions/{jti}", users.RevokeSession)
 

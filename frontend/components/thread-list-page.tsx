@@ -138,7 +138,7 @@ function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
   const { connected: wsConnected } = useNotifications();
   const { startSync, isRunning: syncRunning, isComplete: syncComplete, result: syncResult } = useSyncJob();
   const { data: meData } = useQuery({
-    queryKey: ["users", "me"],
+    queryKey: queryKeys.users.me(),
     queryFn: () => api.get<{ has_webhook: boolean }>("/api/users/me"),
     staleTime: Infinity,
   });
