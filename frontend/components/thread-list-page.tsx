@@ -379,8 +379,9 @@ function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
               ref={searchInputRef}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder="Search all mail — try from:, to:, has:attachment, after:2026-01-01"
-              className="h-8 pl-8 bg-muted"
+              placeholder="Search mail"
+              title="Operators: from:  to:  has:attachment  before:2026-01-01  after:2026-01-01"
+              className="h-8 pl-8 bg-muted border-transparent focus-visible:ring-1 focus-visible:ring-offset-0 focus-visible:bg-background"
             />
           </div>
           {searchQuery && (
