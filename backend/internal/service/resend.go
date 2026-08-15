@@ -22,6 +22,14 @@ var httpClient = &http.Client{Timeout: 30 * time.Second}
 // ResendBaseURL returns the base URL used for Resend API requests.
 func ResendBaseURL() string { return resendBaseURL }
 
+// SetResendBaseURLForTest points the Resend client at a test server and
+// returns a restore function. Test-only.
+func SetResendBaseURLForTest(url string) func() {
+	old := resendBaseURL
+	resendBaseURL = url
+	return func() { resendBaseURL = old }
+}
+
 // ResendError wraps Resend API errors with status code for retry decisions.
 type ResendError struct {
 	StatusCode int

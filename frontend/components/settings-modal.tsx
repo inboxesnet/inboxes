@@ -26,9 +26,9 @@ import { usePreferences } from "@/contexts/preferences-context";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn, validatePassword } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
-import { Check, ChevronDown, ChevronUp, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Forward, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
 
-export type Tab = "profile" | "domains" | "team" | "aliases" | "labels" | "organization" | "billing" | "system" | "jobs";
+export type Tab = "profile" | "domains" | "team" | "aliases" | "labels" | "rules" | "organization" | "billing" | "system" | "jobs";
 
 interface SettingsModalProps {
   open: boolean;
@@ -463,6 +463,342 @@ function ComposeCard({ initialUndoSeconds }: { initialUndoSeconds?: number }) {
   );
 }
 
+interface RuleAlias {
+  id: string;
+  address: string;
+}
+
+interface ForwardingRule {
+  id: string;
+  alias_id: string;
+  alias_address: string;
+  forward_to: string;
+  enabled: boolean;
+}
+
+interface AutoReply {
+  id: string;
+  alias_id: string;
+  alias_address: string;
+  subject: string;
+  body_plain: string;
+  body_html: string;
+  starts_at?: string;
+  ends_at?: string;
+  enabled: boolean;
+}
+
+function RulesTab({ isAdmin }: { isAdmin: boolean }) {
+  const [aliases, setAliases] = useState<RuleAlias[]>([]);
+  const [rules, setRules] = useState<ForwardingRule[]>([]);
+  const [replies, setReplies] = useState<AutoReply[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // Add-rule form
+  const [ruleAliasId, setRuleAliasId] = useState("");
+  const [ruleTarget, setRuleTarget] = useState("");
+  const [savingRule, setSavingRule] = useState(false);
+
+  // Auto-reply form
+  const [arAliasId, setArAliasId] = useState("");
+  const [arSubject, setArSubject] = useState("");
+  const [arBody, setArBody] = useState("");
+  const [arStarts, setArStarts] = useState("");
+  const [arEnds, setArEnds] = useState("");
+  const [savingReply, setSavingReply] = useState(false);
+
+  const reload = useCallbackRef(async () => {
+    try {
+      const [aliasData, ruleData, replyData] = await Promise.all([
+        api.get<RuleAlias[]>(isAdmin ? "/api/aliases" : "/api/users/me/aliases"),
+        api.get<ForwardingRule[]>("/api/forwarding-rules"),
+        api.get<AutoReply[]>("/api/auto-replies"),
+      ]);
+      setAliases(aliasData);
+      setRules(ruleData);
+      setReplies(replyData);
+      setError("");
+    } catch {
+      setError("Failed to load rules");
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleAddRule(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ruleAliasId || !ruleTarget) return;
+    setSavingRule(true);
+    setError("");
+    try {
+      await api.post("/api/forwarding-rules", { alias_id: ruleAliasId, forward_to: ruleTarget.trim() });
+      setRuleTarget("");
+      toast.success("Forwarding rule added");
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to add rule");
+    } finally {
+      setSavingRule(false);
+    }
+  }
+
+  async function handleToggleRule(rule: ForwardingRule) {
+    try {
+      await api.patch(`/api/forwarding-rules/${rule.id}`, { enabled: !rule.enabled });
+      setRules((prev) => prev.map((r) => (r.id === rule.id ? { ...r, enabled: !r.enabled } : r)));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to update rule");
+    }
+  }
+
+  async function handleDeleteRule(ruleId: string) {
+    try {
+      await api.delete(`/api/forwarding-rules/${ruleId}`);
+      setRules((prev) => prev.filter((r) => r.id !== ruleId));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete rule");
+    }
+  }
+
+  async function handleSaveReply(e: React.FormEvent) {
+    e.preventDefault();
+    if (!arAliasId || !arBody.trim()) return;
+    setSavingReply(true);
+    setError("");
+    try {
+      await api.post("/api/auto-replies", {
+        alias_id: arAliasId,
+        subject: arSubject,
+        body_html: `<p>${arBody.trim().split("\n\n").join("</p><p>")}</p>`.replace(/\n/g, "<br>"),
+        body_plain: arBody.trim(),
+        starts_at: arStarts ? new Date(arStarts).toISOString() : null,
+        ends_at: arEnds ? new Date(arEnds).toISOString() : null,
+        enabled: true,
+      });
+      setArSubject("");
+      setArBody("");
+      setArStarts("");
+      setArEnds("");
+      toast.success("Auto-reply saved");
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to save auto-reply");
+    } finally {
+      setSavingReply(false);
+    }
+  }
+
+  async function handleDeleteReply(replyId: string) {
+    try {
+      await api.delete(`/api/auto-replies/${replyId}`);
+      setReplies((prev) => prev.filter((r) => r.id !== replyId));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete auto-reply");
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner /> Loading rules...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div role="alert" className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Forwarding</CardTitle>
+          <CardDescription>
+            Forward inbound mail for an alias to another address. You can add rules
+            for {isAdmin ? "any alias" : "aliases assigned to you"}.
+          </CardDescription>
+        </CardHeader>
+        <form onSubmit={handleAddRule}>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                className="h-9 rounded-md border bg-background px-2 text-sm flex-1"
+                value={ruleAliasId}
+                onChange={(e) => setRuleAliasId(e.target.value)}
+                aria-label="Alias to forward"
+                required
+              >
+                <option value="">Select alias...</option>
+                {aliases.map((a) => (
+                  <option key={a.id} value={a.id}>{a.address}</option>
+                ))}
+              </select>
+              <Input
+                type="email"
+                placeholder="Forward to..."
+                value={ruleTarget}
+                onChange={(e) => setRuleTarget(e.target.value)}
+                className="flex-1"
+                required
+              />
+              <Button type="submit" disabled={savingRule}>
+                {savingRule ? <Spinner className="mr-2" /> : null}
+                Add
+              </Button>
+            </div>
+
+            {rules.length > 0 && (
+              <div className="divide-y rounded-md border">
+                {rules.map((rule) => (
+                  <div key={rule.id} className="flex items-center justify-between gap-2 px-3 py-2.5">
+                    <div className="min-w-0 text-sm">
+                      <span className="font-medium">{rule.alias_address}</span>
+                      <span className="text-muted-foreground"> → {rule.forward_to}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5"
+                          checked={rule.enabled}
+                          onChange={() => handleToggleRule(rule)}
+                        />
+                        Enabled
+                      </label>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteRule(rule.id)}
+                        title="Delete rule"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </form>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Auto-Reply</CardTitle>
+          <CardDescription>
+            Send one automatic reply per sender per 24 hours. Useful for out-of-office
+            and support acknowledgments.
+          </CardDescription>
+        </CardHeader>
+        <form onSubmit={handleSaveReply}>
+          <CardContent className="space-y-3">
+            <select
+              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              value={arAliasId}
+              onChange={(e) => {
+                setArAliasId(e.target.value);
+                const existing = replies.find((r) => r.alias_id === e.target.value);
+                setArSubject(existing?.subject || "");
+                setArBody(existing?.body_plain || "");
+                setArStarts(existing?.starts_at ? existing.starts_at.slice(0, 16) : "");
+                setArEnds(existing?.ends_at ? existing.ends_at.slice(0, 16) : "");
+              }}
+              aria-label="Alias for auto-reply"
+              required
+            >
+              <option value="">Select alias...</option>
+              {aliases.map((a) => (
+                <option key={a.id} value={a.id}>{a.address}</option>
+              ))}
+            </select>
+            <Input
+              placeholder="Subject (empty = Re: original subject)"
+              value={arSubject}
+              onChange={(e) => setArSubject(e.target.value)}
+              maxLength={255}
+            />
+            <textarea
+              className="w-full min-h-[100px] rounded-md border bg-background px-3 py-2 text-sm"
+              placeholder="Reply message..."
+              value={arBody}
+              onChange={(e) => setArBody(e.target.value)}
+              required
+            />
+            <div className="flex flex-col sm:flex-row gap-2">
+              <label className="flex-1 text-xs text-muted-foreground">
+                Starts (optional)
+                <input
+                  type="datetime-local"
+                  className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                  value={arStarts}
+                  onChange={(e) => setArStarts(e.target.value)}
+                />
+              </label>
+              <label className="flex-1 text-xs text-muted-foreground">
+                Ends (optional)
+                <input
+                  type="datetime-local"
+                  className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+                  value={arEnds}
+                  onChange={(e) => setArEnds(e.target.value)}
+                />
+              </label>
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button type="submit" disabled={savingReply}>
+              {savingReply ? <Spinner className="mr-2" /> : null}
+              Save auto-reply
+            </Button>
+          </CardFooter>
+        </form>
+
+        {replies.length > 0 && (
+          <CardContent>
+            <div className="divide-y rounded-md border">
+              {replies.map((r) => (
+                <div key={r.id} className="flex items-center justify-between gap-2 px-3 py-2.5">
+                  <div className="min-w-0 text-sm">
+                    <span className="font-medium">{r.alias_address}</span>
+                    <span className="text-muted-foreground truncate"> — {r.subject || "Re: (original subject)"}</span>
+                    {!r.enabled && <span className="ml-2 text-xs text-muted-foreground">(off)</span>}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-destructive hover:text-destructive shrink-0"
+                    onClick={() => handleDeleteReply(r.id)}
+                    title="Delete auto-reply"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// useCallbackRef returns a stable function that always calls the latest fn.
+function useCallbackRef<T extends (...args: never[]) => unknown>(fn: T): T {
+  const ref = useRef(fn);
+  ref.current = fn;
+  return useRef(((...args: never[]) => ref.current(...args)) as T).current;
+}
+
 export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalProps) {
   const { commercial } = useAppConfig();
   const { refreshDomains } = useDomains();
@@ -560,6 +896,9 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   const [autoPollEnabled, setAutoPollEnabled] = useState(false);
   const [autoPollMinutes, setAutoPollMinutes] = useState(5);
   const [savingAutoPoll, setSavingAutoPoll] = useState(false);
+  const [policyForwarding, setPolicyForwarding] = useState(true);
+  const [policyAutoReply, setPolicyAutoReply] = useState(true);
+  const [policyExternal, setPolicyExternal] = useState(true);
 
   // Generic confirm dialog state
   const [confirmAction, setConfirmAction] = useState<{
@@ -1277,7 +1616,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   async function loadOrgSettings() {
     setOrgLoading(true);
     try {
-      const data = await api.get<{ name: string; has_api_key: boolean; api_key_status?: string; api_key_checked_at?: string | null; resend_rps: number; auto_poll_enabled?: boolean; auto_poll_interval?: number }>("/api/orgs/settings");
+      const data = await api.get<{ name: string; has_api_key: boolean; api_key_status?: string; api_key_checked_at?: string | null; resend_rps: number; auto_poll_enabled?: boolean; auto_poll_interval?: number; forwarding_enabled?: boolean; auto_reply_enabled?: boolean; external_forwarding_allowed?: boolean }>("/api/orgs/settings");
       setOrgName(data.name || "");
       setOrgResendKey(data.has_api_key ? "********" : "");
       setApiKeyStatus(data.api_key_status || "unknown");
@@ -1285,6 +1624,9 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       setOrgResendRPS(data.resend_rps || 2);
       if (data.auto_poll_enabled !== undefined) setAutoPollEnabled(data.auto_poll_enabled);
       if (data.auto_poll_interval !== undefined) setAutoPollMinutes(Math.round(data.auto_poll_interval / 60));
+      setPolicyForwarding(data.forwarding_enabled !== false);
+      setPolicyAutoReply(data.auto_reply_enabled !== false);
+      setPolicyExternal(data.external_forwarding_allowed !== false);
     } catch {
       // handled
     } finally {
@@ -1314,6 +1656,21 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       setError(err instanceof ApiError ? err.message : "Failed to update");
     } finally {
       setSavingOrg(false);
+    }
+  }
+
+  async function handleTogglePolicy(field: "forwarding_enabled" | "auto_reply_enabled" | "external_forwarding_allowed", value: boolean) {
+    const setters = {
+      forwarding_enabled: setPolicyForwarding,
+      auto_reply_enabled: setPolicyAutoReply,
+      external_forwarding_allowed: setPolicyExternal,
+    };
+    setters[field](value);
+    try {
+      await api.patch("/api/orgs/settings", { [field]: value });
+    } catch (err) {
+      setters[field](!value);
+      setError(err instanceof ApiError ? err.message : "Failed to update policy");
     }
   }
 
@@ -1366,6 +1723,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     { key: "team", label: "Team", icon: <Users className="h-4 w-4" />, adminOnly: true },
     { key: "aliases", label: "Aliases", icon: <AtSign className="h-4 w-4" /> },
     { key: "labels", label: "Labels", icon: <Tag className="h-4 w-4" /> },
+    { key: "rules", label: "Rules", icon: <Forward className="h-4 w-4" /> },
     { key: "organization", label: "Organization", icon: <Building2 className="h-4 w-4" />, adminOnly: true },
     ...(commercial
       ? [{ key: "billing" as Tab, label: "Billing", icon: <CreditCard className="h-4 w-4" /> }]
@@ -2543,6 +2901,8 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                   </div>
                 )}
 
+                {activeTab === "rules" && <RulesTab isAdmin={isAdmin} />}
+
                 {activeTab === "organization" && isAdmin && (
                   <div className="space-y-6">
                     <Card>
@@ -2620,6 +2980,55 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                           </CardFooter>
                         </form>
                       )}
+                    </Card>
+
+                    {/* Rules policy */}
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Rules Policy</CardTitle>
+                        <CardDescription>
+                          Control which automation users can set up in the Rules tab.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border"
+                            checked={policyForwarding}
+                            onChange={(e) => handleTogglePolicy("forwarding_enabled", e.target.checked)}
+                          />
+                          <div>
+                            <p className="text-sm font-medium">Allow forwarding rules</p>
+                            <p className="text-xs text-muted-foreground">Users can forward alias mail to other addresses</p>
+                          </div>
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border"
+                            checked={policyExternal}
+                            disabled={!policyForwarding}
+                            onChange={(e) => handleTogglePolicy("external_forwarding_allowed", e.target.checked)}
+                          />
+                          <div>
+                            <p className="text-sm font-medium">Allow external forwarding targets</p>
+                            <p className="text-xs text-muted-foreground">Off: forwards can only target addresses on your own domains</p>
+                          </div>
+                        </label>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border"
+                            checked={policyAutoReply}
+                            onChange={(e) => handleTogglePolicy("auto_reply_enabled", e.target.checked)}
+                          />
+                          <div>
+                            <p className="text-sm font-medium">Allow auto-replies</p>
+                            <p className="text-xs text-muted-foreground">Users can set out-of-office and acknowledgment replies</p>
+                          </div>
+                        </label>
+                      </CardContent>
                     </Card>
 
                     {/* Auto-Sync (self-hosted only) */}

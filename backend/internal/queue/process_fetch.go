@@ -447,9 +447,12 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 		}
 	}
 
-	// Stamp alias labels for visibility filtering
+	// Stamp alias labels for visibility filtering. The matched aliases also
+	// drive forwarding rules and auto-replies after the commit.
+	var matchedAliases []string
 	if deliveredViaAlias != nil {
 		addLabelQ(dbCtx, tx, threadID, orgID, "alias:"+*deliveredViaAlias)
+		matchedAliases = append(matchedAliases, *deliveredViaAlias)
 	}
 	// Batch-check all to/cc/bcc addresses against aliases and stamp each match
 	// (BCC included for alias visibility, but NOT added to participant_emails for privacy)
@@ -472,6 +475,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 				var matchedAlias string
 				if aliasRows.Scan(&matchedAlias) == nil {
 					addLabelQ(dbCtx, tx, threadID, orgID, "alias:"+matchedAlias)
+					matchedAliases = append(matchedAliases, matchedAlias)
 				}
 			}
 			aliasRows.Close()
@@ -507,6 +511,26 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	}
 
 	slog.Info("email worker: email processed", "email_id", emailID, "thread_id", threadID, "spam", isSpam, "from", emailData.From)
+
+	// Forwarding rules and auto-replies run after the commit: a rule failure
+	// must never fail the fetch job.
+	senderIsAuto := false
+	if headers != nil {
+		if as, ok := headers["auto-submitted"]; ok && !strings.EqualFold(strings.TrimSpace(as), "no") {
+			senderIsAuto = true
+		}
+	}
+	w.applyInboundRules(ctx, inboundRuleInput{
+		orgID:          orgID,
+		matchedAliases: matchedAliases,
+		fromAddr:       emailData.From,
+		subject:        emailData.Subject,
+		bodyHTML:       bodyHTML,
+		bodyPlain:      bodyPlain,
+		isSpam:         isSpam,
+		isBounce:       isBounce,
+		senderIsAuto:   senderIsAuto,
+	})
 
 	// Publish event with full thread for smooth frontend cache updates
 	eventPayload := map[string]interface{}{

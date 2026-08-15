@@ -153,6 +153,7 @@ vi.mock("lucide-react", () => {
     Tag: icon("tag"),
     ChevronUp: icon("chevron-up"),
     ChevronDown: icon("chevron-down"),
+    Forward: icon("forward"),
   };
 });
 
@@ -646,6 +647,51 @@ describe("SettingsModal", () => {
           { id: "l2", order: 0 },
           { id: "l1", order: 1 },
         ],
+      });
+    });
+  });
+
+  it("rules tab — lists forwarding rules and posts new ones", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/api/users/me") {
+        return Promise.resolve({
+          id: "u1", org_id: "org1", email: "admin@test.com",
+          name: "Admin User", role: "admin", status: "active", is_owner: true,
+          created_at: "2026-01-01T00:00:00Z",
+        });
+      }
+      if (url === "/api/domains/all") return Promise.resolve([]);
+      if (url === "/api/aliases") {
+        return Promise.resolve([{ id: "a1", address: "support@test.com" }]);
+      }
+      if (url === "/api/forwarding-rules") {
+        return Promise.resolve([
+          { id: "fr1", alias_id: "a1", alias_address: "support@test.com", forward_to: "backup@other.com", enabled: true },
+        ]);
+      }
+      if (url === "/api/auto-replies") return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    vi.mocked(api.post).mockResolvedValue({ id: "fr2" });
+
+    render(<SettingsModal {...defaultProps} />);
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Rules/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /Rules/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/backup@other.com/)).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("Alias to forward"), { target: { value: "a1" } });
+    fireEvent.change(screen.getByPlaceholderText("Forward to..."), { target: { value: "new@target.com" } });
+    fireEvent.click(screen.getByText("Add"));
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith("/api/forwarding-rules", {
+        alias_id: "a1",
+        forward_to: "new@target.com",
       });
     });
   });

@@ -64,6 +64,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	events := &handler.EventHandler{Store: st, CatchupMaxAge: cfg.EventCatchupMaxAge}
 	cron := &handler.CronHandler{Store: st, ResendSvc: resendSvc}
 	bounces := &handler.BounceHandler{Store: st}
+	rules := &handler.RuleHandler{Store: st}
 	billing := &handler.BillingHandler{
 		Store:               st,
 		Bus:                 bus,
@@ -226,6 +227,15 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			// Bounce block list
 			r.Get("/api/bounces", bounces.List)
 			r.With(middleware.RequireAdmin).Delete("/api/bounces/{id}", bounces.Delete)
+
+			// Forwarding rules and auto-replies
+			r.Get("/api/forwarding-rules", rules.ListForwardingRules)
+			r.Post("/api/forwarding-rules", rules.CreateForwardingRule)
+			r.Patch("/api/forwarding-rules/{id}", rules.UpdateForwardingRule)
+			r.Delete("/api/forwarding-rules/{id}", rules.DeleteForwardingRule)
+			r.Get("/api/auto-replies", rules.ListAutoReplies)
+			r.Post("/api/auto-replies", rules.UpsertAutoReply)
+			r.Delete("/api/auto-replies/{id}", rules.DeleteAutoReply)
 
 			// Domains
 			r.Get("/api/domains", domains.List)

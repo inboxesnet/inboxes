@@ -44,6 +44,9 @@ func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		"last_webhook_at":      settings["last_webhook_at"],
 		"billing_enabled":      h.StripeKey != "",
 		"resend_rps":           settings["resend_rps"],
+		"forwarding_enabled":   settings["forwarding_enabled"],
+		"auto_reply_enabled":   settings["auto_reply_enabled"],
+		"external_forwarding_allowed": settings["external_forwarding_allowed"],
 	}
 	if h.StripeKey == "" {
 		resp["auto_poll_enabled"] = settings["auto_poll_enabled"]
@@ -61,10 +64,28 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		ResendRPS        *int   `json:"resend_rps"`
 		AutoPollEnabled  *bool  `json:"auto_poll_enabled"`
 		AutoPollInterval *int   `json:"auto_poll_interval"`
+		ForwardingEnabled         *bool `json:"forwarding_enabled"`
+		AutoReplyEnabled          *bool `json:"auto_reply_enabled"`
+		ExternalForwardingAllowed *bool `json:"external_forwarding_allowed"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+
+	// Rules policy: which automation the org allows.
+	if req.ForwardingEnabled != nil || req.AutoReplyEnabled != nil || req.ExternalForwardingAllowed != nil {
+		if _, err := h.Store.Q().Exec(r.Context(),
+			`UPDATE orgs SET
+			 forwarding_enabled = COALESCE($1, forwarding_enabled),
+			 auto_reply_enabled = COALESCE($2, auto_reply_enabled),
+			 external_forwarding_allowed = COALESCE($3, external_forwarding_allowed),
+			 updated_at = now() WHERE id = $4`,
+			req.ForwardingEnabled, req.AutoReplyEnabled, req.ExternalForwardingAllowed, claims.OrgID,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update rules policy")
+			return
+		}
 	}
 
 	// Auto-poll settings (self-hosted only)

@@ -37,6 +37,21 @@ func seedOrg(t *testing.T, name, email, password string) (orgID, userID string) 
 	return orgID, userID
 }
 
+// seedUser creates an extra active user in an org, returns userID.
+func seedUser(t *testing.T, orgID, email, role string) string {
+	t.Helper()
+	ctx := context.Background()
+	var userID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO users (org_id, email, name, role, status, password_hash, email_verified)
+		 VALUES ($1, $2, $3, $4, 'active', 'x', true) RETURNING id`,
+		orgID, email, "Test User", role,
+	).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	return userID
+}
+
 // seedDomain creates a test domain, returns domainID.
 func seedDomain(t *testing.T, orgID, domainName string) string {
 	t.Helper()
@@ -104,6 +119,8 @@ func cleanupOrg(t *testing.T, orgID string) {
 		"drafts",
 		"attachments",
 		"alias_users",
+		"forwarding_rules",
+		"auto_replies",
 		"emails",
 		"threads",
 		"aliases",
