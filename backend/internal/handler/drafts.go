@@ -428,18 +428,19 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Push to Redis queue (outside transaction — best-effort)
-	if err := h.RDB.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
-		slog.Error("draft: redis lpush failed", "job_id", jobID, "error", err)
-	}
+	// Push to Redis queue (outside transaction — best-effort). A non-zero
+	// undo window parks the job in the delay set first.
+	undoSeconds, _ := h.Store.GetUndoSendSeconds(ctx, claims.UserID)
+	enqueueSend(ctx, h.RDB, jobID, undoSeconds)
 
-	slog.Info("draft: queued send", "email_id", emailID, "thread_id", finalThreadID, "job_id", jobID, "draft_id", id, "kind", kind)
+	slog.Info("draft: queued send", "email_id", emailID, "thread_id", finalThreadID, "job_id", jobID, "draft_id", id, "kind", kind, "undo_seconds", undoSeconds)
 
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
-		"email_id":  emailID,
-		"thread_id": finalThreadID,
-		"job_id":    jobID,
-		"status":    "queued",
+		"email_id":     emailID,
+		"thread_id":    finalThreadID,
+		"job_id":       jobID,
+		"status":       "queued",
+		"undo_seconds": undoSeconds,
 	})
 }
 

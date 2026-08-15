@@ -10,7 +10,15 @@ import { usePreferences } from "@/contexts/preferences-context";
 import { api, uploadFileWithProgress } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
-import type { User } from "@/lib/types";
+import type { Draft, User } from "@/lib/types";
+
+interface SendResult {
+  email_id: string;
+  thread_id: string;
+  job_id: string;
+  status: string;
+  undo_seconds?: number;
+}
 import { TipTapEditor } from "@/components/tiptap-editor";
 import { RecipientInput } from "@/components/recipient-input";
 import { Button } from "@/components/ui/button";
@@ -57,7 +65,7 @@ interface MyAlias {
 }
 
 export function FloatingComposeWindow() {
-  const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose, registerFlush } =
+  const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose, registerFlush, openDraft } =
     useEmailWindow();
   const { activeDomain } = useDomains();
   const { stripTrackingParams, warnNoSubject } = usePreferences();
@@ -407,6 +415,7 @@ export function FloatingComposeWindow() {
     // Combine user's text with quoted text for the actual send
     const fullHtml = composeData?.quotedHtml ? bodyHtml + composeData.quotedHtml : bodyHtml;
 
+    let sendResult: SendResult | undefined;
     try {
       if (draftId) {
         // Update draft then send it. Threading context rides along so a
@@ -425,7 +434,7 @@ export function FloatingComposeWindow() {
         if (composeData?.inReplyTo) sendPatch.in_reply_to = composeData.inReplyTo;
         if (composeData?.references?.length) sendPatch.references = composeData.references;
         await api.patch(`/api/drafts/${draftId}`, sendPatch);
-        await api.post(`/api/drafts/${draftId}/send`);
+        sendResult = await api.post<SendResult>(`/api/drafts/${draftId}/send`);
       } else {
         const payload: Record<string, unknown> = {
           from: effectiveFrom,
@@ -448,12 +457,70 @@ export function FloatingComposeWindow() {
         if (composeData?.references?.length) {
           payload.references = composeData.references;
         }
-        await api.post("/api/emails/send", payload);
+        sendResult = await api.post<SendResult>("/api/emails/send", payload);
       }
-      toast.success("Email sent", {
-        description: to.join(", "),
-        id: "compose-send",
-      });
+
+      const undoSeconds = sendResult?.undo_seconds ?? 0;
+      if (undoSeconds > 0 && sendResult?.email_id) {
+        // Snapshot the compose fields: an undo reopens them as a draft.
+        const snapshot = {
+          emailId: sendResult.email_id,
+          domainId: activeDomain?.id ?? "",
+          kind: (composeData?.kind ?? "compose") as Draft["kind"],
+          threadId: composeData?.replyToThreadId,
+          subject,
+          from: effectiveFrom,
+          to: [...to],
+          cc: [...cc],
+          bcc: [...bcc],
+          bodyHtml,
+          bodyPlain,
+          attachmentIds: attachments.map((a) => a.id),
+          inReplyTo: composeData?.inReplyTo,
+          references: composeData?.references,
+        };
+        toast.success("Email sent", {
+          description: to.join(", "),
+          id: "compose-send",
+          duration: undoSeconds * 1000,
+          action: {
+            label: "Undo",
+            onClick: async () => {
+              try {
+                const res = await api.post<{ status: string; draft_id: string }>(
+                  `/api/emails/${snapshot.emailId}/cancel-send`
+                );
+                toast.success("Send undone", { id: "compose-send" });
+                openDraft({
+                  id: res.draft_id || snapshot.emailId,
+                  domain_id: snapshot.domainId,
+                  thread_id: snapshot.threadId,
+                  kind: snapshot.kind,
+                  subject: snapshot.subject,
+                  from_address: snapshot.from,
+                  to_addresses: snapshot.to,
+                  cc_addresses: snapshot.cc,
+                  bcc_addresses: snapshot.bcc,
+                  body_html: snapshot.bodyHtml,
+                  body_plain: snapshot.bodyPlain,
+                  attachment_ids: snapshot.attachmentIds,
+                  in_reply_to: snapshot.inReplyTo,
+                  references_header: snapshot.references?.join(" "),
+                  created_at: "",
+                  updated_at: "",
+                });
+              } catch {
+                toast.error("Too late to undo — the email already left", { id: "compose-send" });
+              }
+            },
+          },
+        });
+      } else {
+        toast.success("Email sent", {
+          description: to.join(", "),
+          id: "compose-send",
+        });
+      }
       closeCompose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send");

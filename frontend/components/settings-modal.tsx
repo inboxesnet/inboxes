@@ -401,8 +401,26 @@ function PrivacyCard() {
   );
 }
 
-function ComposeCard() {
+function ComposeCard({ initialUndoSeconds }: { initialUndoSeconds?: number }) {
   const { warnNoSubject, updatePreference } = usePreferences();
+  const queryClient = useQueryClient();
+  const [undoSeconds, setUndoSeconds] = useState<number>(initialUndoSeconds ?? 10);
+
+  useEffect(() => {
+    if (initialUndoSeconds !== undefined) setUndoSeconds(initialUndoSeconds);
+  }, [initialUndoSeconds]);
+
+  async function handleUndoChange(value: number) {
+    const previous = undoSeconds;
+    setUndoSeconds(value);
+    try {
+      await api.patch("/api/users/me", { undo_send_seconds: value });
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.me() });
+    } catch {
+      setUndoSeconds(previous);
+      toast.error("Failed to save undo window");
+    }
+  }
 
   return (
     <Card>
@@ -410,7 +428,7 @@ function ComposeCard() {
         <CardTitle>Compose</CardTitle>
         <CardDescription>Control send behavior when composing emails</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         <label className="flex items-center gap-3 cursor-pointer">
           <input
             type="checkbox"
@@ -423,6 +441,23 @@ function ComposeCard() {
             <p className="text-xs text-muted-foreground">Ask for confirmation before sending an email with no subject line</p>
           </div>
         </label>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Undo send</p>
+            <p className="text-xs text-muted-foreground">Hold each send for a few seconds so you can undo it</p>
+          </div>
+          <select
+            className="h-8 rounded-md border bg-background px-2 text-sm"
+            value={undoSeconds}
+            aria-label="Undo send window"
+            onChange={(e) => handleUndoChange(Number(e.target.value))}
+          >
+            <option value={0}>Off</option>
+            <option value={5}>5 seconds</option>
+            <option value={10}>10 seconds</option>
+            <option value={30}>30 seconds</option>
+          </select>
+        </div>
       </CardContent>
     </Card>
   );
@@ -1530,7 +1565,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                     <PrivacyCard />
 
                     {/* Compose */}
-                    <ComposeCard />
+                    <ComposeCard initialUndoSeconds={user?.undo_send_seconds} />
 
                     {/* Sync */}
                     <Card>

@@ -9,6 +9,7 @@ export interface User {
   created_at: string;
   has_webhook?: boolean;
   signature_html?: string;
+  undo_send_seconds?: number;
 }
 
 export interface Org {

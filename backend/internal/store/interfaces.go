@@ -62,6 +62,8 @@ type AuthStore interface {
 	SetVerificationCode(ctx context.Context, userID, code string, expires time.Time) error
 	GetUserByEmail(ctx context.Context, email string) (id, orgID, name, role, status, passwordHash string, emailVerified bool, err error)
 	UpdateSignature(ctx context.Context, userID, signatureHTML string) error
+	GetUndoSendSeconds(ctx context.Context, userID string) (int, error)
+	SetUndoSendSeconds(ctx context.Context, userID string, seconds int) error
 	GetOnboardingCompleted(ctx context.Context, orgID string) (bool, error)
 	SetResetToken(ctx context.Context, email, token string, expires time.Time) (rowsAffected int64, err error)
 	ResetPassword(ctx context.Context, passwordHash, token string) (userID string, err error)

@@ -9,9 +9,12 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
+	"time"
 	"unicode"
 
+	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/redis/go-redis/v9"
 )
 
 // writeResendError logs a Resend API failure and surfaces the real Resend
@@ -101,6 +104,25 @@ func validateEmail(email string) error {
 		return fmt.Errorf("invalid email format")
 	}
 	return nil
+}
+
+// enqueueSend pushes a send job to the worker queue now, or parks it in the
+// undo-send delay set for delaySeconds. A failed delay write falls back to an
+// immediate push so a send can never be lost.
+func enqueueSend(ctx context.Context, rdb *redis.Client, jobID string, delaySeconds int) {
+	if delaySeconds > 0 {
+		err := rdb.ZAdd(ctx, queue.DelayedJobsSet, redis.Z{
+			Score:  float64(time.Now().Add(time.Duration(delaySeconds) * time.Second).Unix()),
+			Member: jobID,
+		}).Err()
+		if err == nil {
+			return
+		}
+		slog.Error("send: delay zadd failed, sending immediately", "job_id", jobID, "error", err)
+	}
+	if err := rdb.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
+		slog.Error("send: redis lpush failed", "job_id", jobID, "error", err)
+	}
 }
 
 // validateNewPassword enforces complexity rules and rejects passwords

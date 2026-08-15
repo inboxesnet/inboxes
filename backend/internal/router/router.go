@@ -219,6 +219,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			// Emails
 			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/emails/send", emails.Send)
 			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/emails/{id}/retry", emails.Retry)
+			r.Post("/api/emails/{id}/cancel-send", emails.CancelSend)
 			r.Get("/api/emails/search", emails.Search)
 
 			// Bounce block list

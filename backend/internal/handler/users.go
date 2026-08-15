@@ -244,20 +244,35 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	var req struct {
-		Name string `json:"name"`
+		Name            *string `json:"name"`
+		UndoSendSeconds *int    `json:"undo_send_seconds"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if err := validateLength(req.Name, "name", 255); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+
+	if req.Name != nil {
+		if err := validateLength(*req.Name, "name", 255); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := h.Store.UpdateUserName(r.Context(), claims.UserID, *req.Name); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update profile")
+			return
+		}
 	}
 
-	if err := h.Store.UpdateUserName(r.Context(), claims.UserID, req.Name); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update profile")
-		return
+	if req.UndoSendSeconds != nil {
+		valid := map[int]bool{0: true, 5: true, 10: true, 30: true}
+		if !valid[*req.UndoSendSeconds] {
+			writeError(w, http.StatusBadRequest, "undo_send_seconds must be 0, 5, 10, or 30")
+			return
+		}
+		if err := h.Store.SetUndoSendSeconds(r.Context(), claims.UserID, *req.UndoSendSeconds); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update undo window")
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

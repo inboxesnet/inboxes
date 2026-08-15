@@ -201,13 +201,14 @@ func (s *PgStore) GetMe(ctx context.Context, userID string) (map[string]any, err
 	var id, email, name, role, status, signatureHTML string
 	var createdAt time.Time
 	var isOwner, hasWebhook bool
+	var undoSendSeconds int
 	err := s.q.QueryRow(ctx,
-		`SELECT u.id, u.email, u.name, u.role, u.status, u.created_at, u.is_owner, u.signature_html,
+		`SELECT u.id, u.email, u.name, u.role, u.status, u.created_at, u.is_owner, u.signature_html, u.undo_send_seconds,
 		        (o.resend_webhook_id IS NOT NULL AND o.resend_webhook_id != '') AS has_webhook
 		 FROM users u
 		 JOIN orgs o ON o.id = u.org_id
 		 WHERE u.id = $1`,
-		userID).Scan(&id, &email, &name, &role, &status, &createdAt, &isOwner, &signatureHTML, &hasWebhook)
+		userID).Scan(&id, &email, &name, &role, &status, &createdAt, &isOwner, &signatureHTML, &undoSendSeconds, &hasWebhook)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +216,22 @@ func (s *PgStore) GetMe(ctx context.Context, userID string) (map[string]any, err
 		"id": id, "email": email, "name": name, "role": role,
 		"status": status, "created_at": createdAt, "is_owner": isOwner,
 		"has_webhook": hasWebhook, "signature_html": signatureHTML,
+		"undo_send_seconds": undoSendSeconds,
 	}, nil
+}
+
+func (s *PgStore) GetUndoSendSeconds(ctx context.Context, userID string) (int, error) {
+	var seconds int
+	err := s.q.QueryRow(ctx,
+		`SELECT undo_send_seconds FROM users WHERE id = $1`, userID).Scan(&seconds)
+	return seconds, err
+}
+
+func (s *PgStore) SetUndoSendSeconds(ctx context.Context, userID string, seconds int) error {
+	_, err := s.q.Exec(ctx,
+		`UPDATE users SET undo_send_seconds = $1, updated_at = now() WHERE id = $2`,
+		seconds, userID)
+	return err
 }
 
 func (s *PgStore) UpdateSignature(ctx context.Context, userID, signatureHTML string) error {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
+	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
@@ -260,17 +263,17 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Push to Redis queue (outside transaction — best-effort; stale recovery cron handles failures)
-	if err := h.RDB.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
-		slog.Error("email: redis lpush failed", "job_id", jobID, "error", err)
-	}
+	undoSeconds, _ := h.Store.GetUndoSendSeconds(ctx, claims.UserID)
+	enqueueSend(ctx, h.RDB, jobID, undoSeconds)
 
-	slog.Info("email: queued", "email_id", emailID, "thread_id", threadID, "job_id", jobID)
+	slog.Info("email: queued", "email_id", emailID, "thread_id", threadID, "job_id", jobID, "undo_seconds", undoSeconds)
 
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
-		"email_id":  emailID,
-		"thread_id": threadID,
-		"job_id":    jobID,
-		"status":    "queued",
+		"email_id":     emailID,
+		"thread_id":    threadID,
+		"job_id":       jobID,
+		"status":       "queued",
+		"undo_seconds": undoSeconds,
 	})
 }
 
@@ -404,4 +407,148 @@ func (h *EmailHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		"job_id":   jobID,
 		"status":   "queued",
 	})
+}
+
+// CancelSend undoes a send that still sits in its undo window. It cancels
+// the pending job, removes the queued email, and hands back a draft so the
+// user can edit and resend.
+func (h *EmailHandler) CancelSend(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	emailID := chi.URLParam(r, "id")
+	ctx := r.Context()
+
+	// The email must belong to the caller: undo restores a private draft.
+	var threadID, domainID string
+	var emailUserID string
+	err := h.Store.Q().QueryRow(ctx,
+		`SELECT user_id, thread_id, domain_id FROM emails
+		 WHERE id = $1 AND org_id = $2 AND direction = 'outbound' AND status = 'queued'`,
+		emailID, claims.OrgID,
+	).Scan(&emailUserID, &threadID, &domainID)
+	if err != nil {
+		writeError(w, http.StatusConflict, "too late to undo — the email already left")
+		return
+	}
+	if emailUserID != claims.UserID {
+		writeError(w, http.StatusForbidden, "only the sender can undo a send")
+		return
+	}
+
+	var jobID string
+	var draftID *string
+	err = h.Store.Q().QueryRow(ctx,
+		`SELECT id, draft_id FROM email_jobs WHERE email_id = $1 AND job_type = 'send'
+		 ORDER BY created_at DESC LIMIT 1`,
+		emailID,
+	).Scan(&jobID, &draftID)
+	if err != nil {
+		writeError(w, http.StatusConflict, "too late to undo — the email already left")
+		return
+	}
+
+	// The conditional update is the undo gate: it wins only while the job
+	// is still pending. A running or completed job means the send started.
+	res, err := h.Store.Q().Exec(ctx,
+		`UPDATE email_jobs SET status = 'cancelled', error_message = 'cancelled by undo', updated_at = now()
+		 WHERE id = $1 AND status = 'pending'`,
+		jobID,
+	)
+	if err != nil || res.RowsAffected() == 0 {
+		writeError(w, http.StatusConflict, "too late to undo — the email already left")
+		return
+	}
+
+	// Best-effort: pull the job out of the delay set before the dispatcher
+	// moves it. The cancelled status guards the race either way.
+	h.RDB.ZRem(ctx, queue.DelayedJobsSet, jobID)
+
+	// A draft-based send still has its draft (the worker deletes it only
+	// after a successful send). A direct send needs a recovery draft.
+	restoredDraftID := ""
+	if draftID != nil && *draftID != "" {
+		restoredDraftID = *draftID
+	} else {
+		if id := createDraftFromEmail(ctx, h.Store, emailID); id != "" {
+			restoredDraftID = id
+		}
+	}
+
+	// Remove the queued email row; drop the thread too when this was its
+	// only email (a fresh compose creates a thread per send). Clear the
+	// cancelled job's references first so the deletes pass the FKs.
+	if _, err := h.Store.Q().Exec(ctx,
+		`UPDATE email_jobs SET email_id = NULL, thread_id = NULL WHERE email_id = $1`, emailID); err != nil {
+		slog.Error("email undo: clear job refs failed", "email_id", emailID, "error", err)
+	}
+	if _, err := h.Store.Q().Exec(ctx, `DELETE FROM emails WHERE id = $1 AND org_id = $2`, emailID, claims.OrgID); err != nil {
+		slog.Error("email undo: delete email failed", "email_id", emailID, "error", err)
+	}
+	var remaining int
+	if err := h.Store.Q().QueryRow(ctx, `SELECT count(*) FROM emails WHERE thread_id = $1`, threadID).Scan(&remaining); err == nil && remaining == 0 {
+		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM thread_labels WHERE thread_id = $1`, threadID); err != nil {
+			slog.Error("email undo: delete thread labels failed", "thread_id", threadID, "error", err)
+		}
+		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM threads WHERE id = $1 AND org_id = $2`, threadID, claims.OrgID); err != nil {
+			slog.Error("email undo: delete empty thread failed", "thread_id", threadID, "error", err)
+		}
+	}
+
+	if h.Bus != nil {
+		h.Bus.Publish(ctx, event.Event{
+			EventType: event.EmailStatusUpdated,
+			OrgID:     claims.OrgID,
+			DomainID:  domainID,
+			ThreadID:  threadID,
+			Payload: map[string]interface{}{
+				"email_id": emailID,
+				"status":   "cancelled",
+			},
+		})
+	}
+
+	slog.Info("email undo: send cancelled", "email_id", emailID, "job_id", jobID, "draft_id", restoredDraftID)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":   "cancelled",
+		"draft_id": restoredDraftID,
+	})
+}
+
+// createDraftFromEmail rebuilds a draft from a queued email (direct sends
+// have no draft to fall back to). Returns "" on failure.
+func createDraftFromEmail(ctx context.Context, st store.Store, emailID string) string {
+	var orgID, userID, domainID, fromAddr, subject, bodyHTML, bodyPlain string
+	var threadID, inReplyTo *string
+	var toJSON, ccJSON, bccJSON, attachmentIDs json.RawMessage
+
+	err := st.Q().QueryRow(ctx,
+		`SELECT org_id, user_id, domain_id, from_address, to_addresses, cc_addresses, bcc_addresses,
+		 subject, body_html, body_plain, thread_id, in_reply_to, COALESCE(attachment_ids, '[]')
+		 FROM emails WHERE id = $1`,
+		emailID,
+	).Scan(&orgID, &userID, &domainID, &fromAddr, &toJSON, &ccJSON, &bccJSON,
+		&subject, &bodyHTML, &bodyPlain, &threadID, &inReplyTo, &attachmentIDs)
+	if err != nil {
+		slog.Error("email undo: draft rebuild query failed", "email_id", emailID, "error", err)
+		return ""
+	}
+
+	kind := "compose"
+	if inReplyTo != nil && *inReplyTo != "" {
+		kind = "reply"
+	}
+
+	var draftID string
+	err = st.Q().QueryRow(ctx,
+		`INSERT INTO drafts (org_id, user_id, domain_id, thread_id, kind, subject, from_address,
+		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain, attachment_ids)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		 RETURNING id`,
+		orgID, userID, domainID, threadID, kind, subject, fromAddr,
+		toJSON, ccJSON, bccJSON, bodyHTML, bodyPlain, attachmentIDs,
+	).Scan(&draftID)
+	if err != nil {
+		slog.Error("email undo: draft rebuild insert failed", "email_id", emailID, "error", err)
+		return ""
+	}
+	return draftID
 }

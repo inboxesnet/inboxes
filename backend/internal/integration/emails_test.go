@@ -5,7 +5,11 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/inboxes/backend/internal/handler"
 )
 
 func TestEmailInsertAndRetrieve(t *testing.T) {
@@ -231,5 +235,137 @@ func TestCannotSendAsUnassignedAlias(t *testing.T) {
 	}
 	if canSend {
 		t.Fatal("expected CanSendAs=false for unassigned alias")
+	}
+}
+
+func TestCancelSend_UndoWithinWindow(t *testing.T) {
+	orgID, userID := seedOrg(t, "undo-org", "undo@test.io", "Password1")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, "undo.test")
+	threadID := seedThread(t, orgID, userID, domainID, "Undo Me")
+
+	ctx := context.Background()
+	toJSON := []byte(`["dest@example.com"]`)
+	emailID, err := testStore.InsertEmail(ctx, threadID, userID, orgID, domainID,
+		"outbound", "me@undo.test", toJSON, []byte(`[]`), []byte(`[]`),
+		"Undo Me", "<p>body</p>", "body", "queued", "", nil)
+	if err != nil {
+		t.Fatalf("InsertEmail failed: %v", err)
+	}
+	jobID, err := testStore.CreateEmailJob(ctx, orgID, userID, domainID, "send", emailID, threadID, []byte(`{}`), nil)
+	if err != nil {
+		t.Fatalf("CreateEmailJob failed: %v", err)
+	}
+
+	h := &handler.EmailHandler{Store: testStore, RDB: testRDB, Bus: testBus()}
+	req := httptest.NewRequest(http.MethodPost, "/api/emails/"+emailID+"/cancel-send", nil)
+	req = withChiParam(req, "id", emailID)
+	req = withClaims(req, userID, orgID, "admin")
+	w := httptest.NewRecorder()
+	h.CancelSend(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cancel-send: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Status  string `json:"status"`
+		DraftID string `json:"draft_id"`
+	}
+	parseJSON(t, w, &resp)
+	if resp.Status != "cancelled" {
+		t.Errorf("expected status cancelled, got %q", resp.Status)
+	}
+	if resp.DraftID == "" {
+		t.Error("expected a recovery draft id for a direct send")
+	}
+
+	// The job must be cancelled and the email row gone.
+	var jobStatus string
+	if err := testPool.QueryRow(ctx, "SELECT status FROM email_jobs WHERE id = $1", jobID).Scan(&jobStatus); err != nil {
+		t.Fatalf("job lookup: %v", err)
+	}
+	if jobStatus != "cancelled" {
+		t.Errorf("expected job cancelled, got %q", jobStatus)
+	}
+	var emailCount int
+	testPool.QueryRow(ctx, "SELECT count(*) FROM emails WHERE id = $1", emailID).Scan(&emailCount)
+	if emailCount != 0 {
+		t.Error("expected queued email deleted after undo")
+	}
+
+	// The draft must carry the original content.
+	var draftSubject string
+	if err := testPool.QueryRow(ctx, "SELECT subject FROM drafts WHERE id = $1", resp.DraftID).Scan(&draftSubject); err != nil {
+		t.Fatalf("draft lookup: %v", err)
+	}
+	if draftSubject != "Undo Me" {
+		t.Errorf("expected draft subject 'Undo Me', got %q", draftSubject)
+	}
+}
+
+func TestCancelSend_TooLateWhenRunning(t *testing.T) {
+	orgID, userID := seedOrg(t, "undo-late-org", "undo-late@test.io", "Password1")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, "undo-late.test")
+	threadID := seedThread(t, orgID, userID, domainID, "Too Late")
+
+	ctx := context.Background()
+	emailID, err := testStore.InsertEmail(ctx, threadID, userID, orgID, domainID,
+		"outbound", "me@undo-late.test", []byte(`["dest@example.com"]`), []byte(`[]`), []byte(`[]`),
+		"Too Late", "<p>body</p>", "body", "queued", "", nil)
+	if err != nil {
+		t.Fatalf("InsertEmail failed: %v", err)
+	}
+	jobID, err := testStore.CreateEmailJob(ctx, orgID, userID, domainID, "send", emailID, threadID, []byte(`{}`), nil)
+	if err != nil {
+		t.Fatalf("CreateEmailJob failed: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, "UPDATE email_jobs SET status='running' WHERE id = $1", jobID); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+
+	h := &handler.EmailHandler{Store: testStore, RDB: testRDB, Bus: testBus()}
+	req := httptest.NewRequest(http.MethodPost, "/api/emails/"+emailID+"/cancel-send", nil)
+	req = withChiParam(req, "id", emailID)
+	req = withClaims(req, userID, orgID, "admin")
+	w := httptest.NewRecorder()
+	h.CancelSend(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for a running job, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The email must survive.
+	var emailCount int
+	testPool.QueryRow(ctx, "SELECT count(*) FROM emails WHERE id = $1", emailID).Scan(&emailCount)
+	if emailCount != 1 {
+		t.Error("email must not be deleted when undo is too late")
+	}
+}
+
+func TestCancelSend_OnlySenderCanUndo(t *testing.T) {
+	orgID, userID := seedOrg(t, "undo-authz-org", "undo-authz@test.io", "Password1")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, "undo-authz.test")
+	threadID := seedThread(t, orgID, userID, domainID, "Not Yours")
+
+	ctx := context.Background()
+	emailID, err := testStore.InsertEmail(ctx, threadID, userID, orgID, domainID,
+		"outbound", "me@undo-authz.test", []byte(`["dest@example.com"]`), []byte(`[]`), []byte(`[]`),
+		"Not Yours", "<p>body</p>", "body", "queued", "", nil)
+	if err != nil {
+		t.Fatalf("InsertEmail failed: %v", err)
+	}
+	if _, err := testStore.CreateEmailJob(ctx, orgID, userID, domainID, "send", emailID, threadID, []byte(`{}`), nil); err != nil {
+		t.Fatalf("CreateEmailJob failed: %v", err)
+	}
+
+	h := &handler.EmailHandler{Store: testStore, RDB: testRDB, Bus: testBus()}
+	req := httptest.NewRequest(http.MethodPost, "/api/emails/"+emailID+"/cancel-send", nil)
+	req = withChiParam(req, "id", emailID)
+	req = withClaims(req, "other-user-id", orgID, "admin")
+	w := httptest.NewRecorder()
+	h.CancelSend(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for a different user, got %d: %s", w.Code, w.Body.String())
 	}
 }

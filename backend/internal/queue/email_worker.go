@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/inboxes/backend/internal/event"
@@ -15,6 +16,10 @@ import (
 )
 
 const emailJobsQueue = "email:jobs"
+
+// DelayedJobsSet is the Redis sorted set for undo-send delayed jobs.
+// Score = unix time when the job becomes due.
+const DelayedJobsSet = "email:jobs:delayed"
 
 type EmailWorker struct {
 	store     store.Store
@@ -41,6 +46,47 @@ func (w *EmailWorker) Run(ctx context.Context) {
 		}
 
 		w.runOnce(ctx)
+	}
+}
+
+// RunDelayedDispatcher moves due jobs from the undo-send delay set onto the
+// main queue. It ticks every second so the undo window stays accurate.
+func (w *EmailWorker) RunDelayedDispatcher(ctx context.Context) {
+	slog.Info("email worker: delayed dispatcher started")
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("email worker: delayed dispatcher stopped")
+			return
+		case <-ticker.C:
+			w.dispatchDue(ctx)
+		}
+	}
+}
+
+func (w *EmailWorker) dispatchDue(ctx context.Context) {
+	defer util.RecoverWorker("email-delayed-dispatcher")
+
+	now := time.Now().Unix()
+	jobIDs, err := w.rdb.ZRangeByScore(ctx, DelayedJobsSet, &redis.ZRangeBy{
+		Min: "-inf", Max: strconv.FormatInt(now, 10),
+	}).Result()
+	if err != nil || len(jobIDs) == 0 {
+		return
+	}
+	for _, jobID := range jobIDs {
+		// ZRem first: only the winner of the remove enqueues, so a job can
+		// never be enqueued twice, and a cancelled job (already removed by
+		// the cancel handler) is never enqueued at all.
+		removed, err := w.rdb.ZRem(ctx, DelayedJobsSet, jobID).Result()
+		if err != nil || removed == 0 {
+			continue
+		}
+		if err := w.rdb.LPush(ctx, emailJobsQueue, jobID).Err(); err != nil {
+			slog.Error("email worker: delayed dispatch lpush failed", "job_id", jobID, "error", err)
+		}
 	}
 }
 

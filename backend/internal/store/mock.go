@@ -28,6 +28,8 @@ type MockStore struct {
 	SetVerificationCodeFn    func(ctx context.Context, userID, code string, expires time.Time) error
 	GetUserByEmailFn         func(ctx context.Context, email string) (id, orgID, name, role, status, passwordHash string, emailVerified bool, err error)
 	UpdateSignatureFn        func(ctx context.Context, userID, signatureHTML string) error
+	GetUndoSendSecondsFn     func(ctx context.Context, userID string) (int, error)
+	SetUndoSendSecondsFn     func(ctx context.Context, userID string, seconds int) error
 	GetOnboardingCompletedFn func(ctx context.Context, orgID string) (bool, error)
 	SetResetTokenFn          func(ctx context.Context, email, token string, expires time.Time) (int64, error)
 	ResetPasswordFn          func(ctx context.Context, passwordHash, token string) (string, error)
@@ -278,6 +280,20 @@ func (m *MockStore) CreateOrgAndAdmin(ctx context.Context, orgName, email, name,
 func (m *MockStore) SetVerificationCode(ctx context.Context, userID, code string, expires time.Time) error {
 	if m.SetVerificationCodeFn != nil {
 		return m.SetVerificationCodeFn(ctx, userID, code, expires)
+	}
+	return nil
+}
+
+func (m *MockStore) GetUndoSendSeconds(ctx context.Context, userID string) (int, error) {
+	if m.GetUndoSendSecondsFn != nil {
+		return m.GetUndoSendSecondsFn(ctx, userID)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) SetUndoSendSeconds(ctx context.Context, userID string, seconds int) error {
+	if m.SetUndoSendSecondsFn != nil {
+		return m.SetUndoSendSecondsFn(ctx, userID, seconds)
 	}
 	return nil
 }

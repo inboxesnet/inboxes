@@ -97,6 +97,7 @@ func main() {
 	// Email worker
 	emailWorker := queue.NewEmailWorker(st, rdb, resendSvc, bus, orgLimiterMap, cfg.StripeKey)
 	util.SafeGo("email-worker", func() { emailWorker.Run(ctx) })
+	util.SafeGo("email-delayed-dispatcher", func() { emailWorker.RunDelayedDispatcher(ctx) })
 	util.SafeGo("email-stale-recovery", func() { emailWorker.RunStaleRecovery(ctx) })
 	util.SafeGo("send-reconciler", func() { emailWorker.RunReconciler(ctx, cfg.SendReconcileInterval) })
 

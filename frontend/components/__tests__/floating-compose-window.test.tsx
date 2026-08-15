@@ -414,6 +414,53 @@ describe("FloatingComposeWindow", () => {
     resolvePost!({});
   });
 
+  it("send with an undo window shows the Undo toast", async () => {
+    const { toast } = await import("sonner");
+    vi.mocked(api.post).mockResolvedValue({
+      email_id: "e1",
+      thread_id: "t1",
+      job_id: "j1",
+      status: "queued",
+      undo_seconds: 10,
+    });
+    mockComposeData = { toAddresses: ["test@example.com"] };
+    render(<FloatingComposeWindow />);
+
+    fireEvent.click(screen.getAllByText("Send")[0]);
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "Email sent",
+        expect.objectContaining({
+          duration: 10000,
+          action: expect.objectContaining({ label: "Undo" }),
+        })
+      );
+    });
+  });
+
+  it("send without an undo window shows a plain toast", async () => {
+    const { toast } = await import("sonner");
+    vi.mocked(api.post).mockResolvedValue({
+      email_id: "e1",
+      thread_id: "t1",
+      job_id: "j1",
+      status: "queued",
+      undo_seconds: 0,
+    });
+    mockComposeData = { toAddresses: ["test@example.com"] };
+    render(<FloatingComposeWindow />);
+
+    fireEvent.click(screen.getAllByText("Send")[0]);
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "Email sent",
+        expect.not.objectContaining({ action: expect.anything() })
+      );
+    });
+  });
+
   it("discard opens confirmation dialog", () => {
     render(<FloatingComposeWindow />);
     // The trash/discard button should exist
