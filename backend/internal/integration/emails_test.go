@@ -70,7 +70,7 @@ func TestEmailSearchByKeyword(t *testing.T) {
 
 	ctx := context.Background()
 
-	results, err := testStore.SearchEmails(ctx, orgID, "payment", "", "admin", nil)
+	results, _, err := testStore.SearchEmails(ctx, orgID, "payment", "", "", "admin", nil, 1, 50)
 	if err != nil {
 		t.Fatalf("SearchEmails failed: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestEmailSearchEmpty(t *testing.T) {
 
 	ctx := context.Background()
 
-	results, err := testStore.SearchEmails(ctx, orgID, "xyzzynonexistent99", "", "admin", nil)
+	results, _, err := testStore.SearchEmails(ctx, orgID, "xyzzynonexistent99", "", "", "admin", nil, 1, 50)
 	if err != nil {
 		t.Fatalf("SearchEmails failed: %v", err)
 	}

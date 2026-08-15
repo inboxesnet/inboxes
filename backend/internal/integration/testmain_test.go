@@ -31,6 +31,9 @@ var (
 var testEncKeyBase64 = base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
 
 func TestMain(m *testing.M) {
+	// Tests must not call the external HIBP API.
+	os.Setenv("HIBP_CHECK_DISABLED", "true")
+
 	ctx := context.Background()
 
 	dbURL := os.Getenv("TEST_DATABASE_URL")

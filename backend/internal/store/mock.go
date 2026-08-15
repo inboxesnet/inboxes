@@ -127,6 +127,7 @@ type MockStore struct {
 	// ---- Labels ----
 	ListOrgLabelsFn  func(ctx context.Context, orgID string) ([]map[string]any, error)
 	CreateOrgLabelFn func(ctx context.Context, orgID, name string) (string, error)
+	ReorderOrgLabelsFn func(ctx context.Context, orgID string, order []DomainOrder) error
 	RenameOrgLabelFn func(ctx context.Context, labelID, orgID, newName string) (string, error)
 	DeleteOrgLabelFn func(ctx context.Context, labelID, orgID string) (string, error)
 
@@ -930,6 +931,13 @@ func (m *MockStore) CreateOrgLabel(ctx context.Context, orgID, name string) (str
 		return m.CreateOrgLabelFn(ctx, orgID, name)
 	}
 	return "", nil
+}
+
+func (m *MockStore) ReorderOrgLabels(ctx context.Context, orgID string, order []DomainOrder) error {
+	if m.ReorderOrgLabelsFn != nil {
+		return m.ReorderOrgLabelsFn(ctx, orgID, order)
+	}
+	return nil
 }
 
 func (m *MockStore) RenameOrgLabel(ctx context.Context, labelID, orgID, newName string) (string, error) {

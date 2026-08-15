@@ -265,7 +265,17 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 				}
 				return tx.SetTrashExpiry(ctx, req.ThreadIDs, claims.OrgID)
 			case "spam":
-				return tx.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, "spam")
+				// Spam also restores from trash (same as the single-thread path).
+				if err := tx.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, "spam"); err != nil {
+					return err
+				}
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "trash"); err != nil {
+					return err
+				}
+				_, err := tx.Q().Exec(ctx,
+					`UPDATE threads SET trash_expires_at = NULL, updated_at = now()
+					 WHERE id = ANY($1::uuid[]) AND org_id = $2`, req.ThreadIDs, claims.OrgID)
+				return err
 			case "archive":
 				// Archive is a destination: it also restores from trash/spam.
 				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "inbox"); err != nil {
@@ -458,7 +468,17 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 			}
 			return tx.SetTrashExpiry(ctx, []string{threadID}, claims.OrgID)
 		case "spam":
-			return tx.AddLabel(ctx, threadID, claims.OrgID, "spam")
+			// Spam is a destination: it also restores from trash, so the
+			// trash collector cannot purge a thread the user reclassified.
+			if err := tx.AddLabel(ctx, threadID, claims.OrgID, "spam"); err != nil {
+				return err
+			}
+			if err := tx.RemoveLabel(ctx, threadID, "trash"); err != nil {
+				return err
+			}
+			_, err := tx.Q().Exec(ctx, "UPDATE threads SET trash_expires_at = NULL, updated_at = now() WHERE id = $1 AND org_id = $2",
+				threadID, claims.OrgID)
+			return err
 		case "archive":
 			// Archive is a destination: it also restores from trash/spam.
 			if err := tx.RemoveLabel(ctx, threadID, "inbox"); err != nil {

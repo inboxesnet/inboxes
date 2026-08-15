@@ -130,6 +130,8 @@ vi.mock("lucide-react", () => {
     Wrench: icon("wrench"),
     Building2: icon("building"),
     Tag: icon("tag"),
+    ChevronUp: icon("chevron-up"),
+    ChevronDown: icon("chevron-down"),
   };
 });
 
@@ -582,6 +584,48 @@ describe("SettingsModal", () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Important/).length).toBeGreaterThan(0);
       expect(screen.getAllByText(/Follow-up/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("labels tab — move down sends a reorder request", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/api/users/me") {
+        return Promise.resolve({
+          id: "u1", org_id: "org1", email: "admin@test.com",
+          name: "Admin User", role: "admin", status: "active", is_owner: true,
+          created_at: "2026-01-01T00:00:00Z",
+        });
+      }
+      if (url === "/api/domains/all") return Promise.resolve([]);
+      if (url === "/api/labels") {
+        return Promise.resolve([
+          { id: "l1", name: "Important" },
+          { id: "l2", name: "Follow-up" },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    vi.mocked(api.patch).mockResolvedValue({});
+
+    render(<SettingsModal {...defaultProps} />);
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Labels/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /Labels/ }));
+    await waitFor(() => {
+      expect(screen.getAllByText(/Important/).length).toBeGreaterThan(0);
+    });
+
+    const downButtons = screen.getAllByTitle("Move down");
+    fireEvent.click(downButtons[0]);
+
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith("/api/labels/reorder", {
+        order: [
+          { id: "l2", order: 0 },
+          { id: "l1", order: 1 },
+        ],
+      });
     });
   });
 

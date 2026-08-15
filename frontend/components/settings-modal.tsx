@@ -23,7 +23,7 @@ import { usePreferences } from "@/contexts/preferences-context";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn, validatePassword } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
-import { Check, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
 
 export type Tab = "profile" | "domains" | "team" | "aliases" | "labels" | "organization" | "billing" | "system" | "jobs";
 
@@ -1146,6 +1146,26 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       setError(err instanceof ApiError ? err.message : "Failed to create label");
     } finally {
       setCreatingLabel(false);
+    }
+  }
+
+  async function handleReorderLabel(labelId: string, direction: "up" | "down") {
+    const idx = customLabels.findIndex((l) => l.id === labelId);
+    if (idx < 0) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= customLabels.length) return;
+
+    const updated = [...customLabels];
+    [updated[idx], updated[swapIdx]] = [updated[swapIdx], updated[idx]];
+    setCustomLabels(updated);
+
+    try {
+      await api.patch("/api/labels/reorder", {
+        order: updated.map((l, i) => ({ id: l.id, order: i })),
+      });
+    } catch (err) {
+      setLabelsError(err instanceof ApiError ? err.message : "Failed to reorder labels");
+      setCustomLabels(customLabels);
     }
   }
 
@@ -2365,7 +2385,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                           <p className="text-sm text-muted-foreground">No custom labels yet.</p>
                         ) : (
                           <div className="divide-y">
-                            {customLabels.map((label) => (
+                            {customLabels.map((label, labelIdx) => (
                               <div key={label.id} className="flex items-center justify-between py-2.5">
                                 {editingLabelId === label.id ? (
                                   <form
@@ -2392,6 +2412,26 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                                   </div>
                                 )}
                                 <div className="flex items-center gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    disabled={labelIdx === 0}
+                                    title="Move up"
+                                    onClick={() => handleReorderLabel(label.id, "up")}
+                                  >
+                                    <ChevronUp className="h-3.5 w-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    disabled={labelIdx === customLabels.length - 1}
+                                    title="Move down"
+                                    onClick={() => handleReorderLabel(label.id, "down")}
+                                  >
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                  </Button>
                                   <Button
                                     variant="ghost"
                                     size="icon"

@@ -66,6 +66,24 @@ func (h *LabelHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "name": req.Name})
 }
 
+func (h *LabelHandler) Reorder(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+
+	var req struct {
+		Order []store.DomainOrder `json:"order"`
+	}
+	if err := readJSON(r, &req); err != nil || len(req.Order) == 0 {
+		writeError(w, http.StatusBadRequest, "order is required")
+		return
+	}
+
+	if err := h.Store.ReorderOrgLabels(r.Context(), claims.OrgID, req.Order); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reorder labels")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *LabelHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	labelID := chi.URLParam(r, "id")

@@ -531,7 +531,7 @@ func TestThreadSearch(t *testing.T) {
 
 	ctx := context.Background()
 
-	results, err := testStore.SearchEmails(ctx, orgID, "invoice", "", "admin", nil)
+	results, _, err := testStore.SearchEmails(ctx, orgID, "invoice", "", "", "admin", nil, 1, 50)
 	if err != nil {
 		t.Fatalf("SearchEmails failed: %v", err)
 	}
@@ -884,7 +884,7 @@ func TestThreadSearchMemberAliasScoped(t *testing.T) {
 
 	// Search as member with alias scope - should only find the visible thread
 	aliasAddrs := []string{"team-srch@thread-srchscope.test"}
-	results, err := testStore.SearchEmails(ctx, orgID, "invoice", "", "member", aliasAddrs)
+	results, _, err := testStore.SearchEmails(ctx, orgID, "invoice", "", "", "member", aliasAddrs, 1, 50)
 	if err != nil {
 		t.Fatalf("SearchEmails as member failed: %v", err)
 	}
@@ -908,11 +908,90 @@ func TestThreadSearchMemberAliasScoped(t *testing.T) {
 	}
 
 	// Admin should see both threads
-	adminResults, err := testStore.SearchEmails(ctx, orgID, "invoice", "", "admin", nil)
+	adminResults, _, err := testStore.SearchEmails(ctx, orgID, "invoice", "", "", "admin", nil, 1, 50)
 	if err != nil {
 		t.Fatalf("SearchEmails as admin failed: %v", err)
 	}
 	if len(adminResults) != 2 {
 		t.Fatalf("expected 2 search results for admin, got %d", len(adminResults))
+	}
+}
+
+func TestThreadMoveToSpamRestoresFromTrash(t *testing.T) {
+	orgID, userID := seedOrg(t, "thread-spamtrash-org", "thread-spamtrash@test.io", "Password1")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, "thread-spamtrash.test")
+	threadID := seedThread(t, orgID, userID, domainID, "Trash Then Spam")
+
+	ctx := context.Background()
+
+	// Put the thread in trash with an expiry.
+	if err := testStore.AddLabel(ctx, threadID, orgID, "trash"); err != nil {
+		t.Fatalf("AddLabel trash failed: %v", err)
+	}
+	if err := testStore.SetTrashExpiry(ctx, []string{threadID}, orgID); err != nil {
+		t.Fatalf("SetTrashExpiry failed: %v", err)
+	}
+
+	// Move to spam via the handler.
+	h := &handler.ThreadHandler{Store: testStore, Bus: testBus()}
+	req := httptest.NewRequest(http.MethodPatch, "/api/threads/"+threadID+"/move", jsonBody(map[string]string{"label": "spam"}))
+	req = withChiParam(req, "id", threadID)
+	req = withClaims(req, userID, orgID, "admin")
+	w := httptest.NewRecorder()
+	h.Move(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("move to spam: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The trash label and expiry must be gone.
+	if testStore.HasLabel(ctx, threadID, "trash") {
+		t.Fatal("expected trash label removed after move to spam")
+	}
+	if !testStore.HasLabel(ctx, threadID, "spam") {
+		t.Fatal("expected spam label after move to spam")
+	}
+	var expires *string
+	if err := testPool.QueryRow(ctx, "SELECT trash_expires_at::text FROM threads WHERE id = $1", threadID).Scan(&expires); err != nil {
+		t.Fatalf("query trash_expires_at: %v", err)
+	}
+	if expires != nil {
+		t.Fatalf("expected trash_expires_at cleared, got %v", *expires)
+	}
+}
+
+func TestThreadBulkSpamRestoresFromTrash(t *testing.T) {
+	orgID, userID := seedOrg(t, "thread-bulkspam-org", "thread-bulkspam@test.io", "Password1")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, "thread-bulkspam.test")
+	tid1 := seedThread(t, orgID, userID, domainID, "Bulk Spam 1")
+	tid2 := seedThread(t, orgID, userID, domainID, "Bulk Spam 2")
+	threadIDs := []string{tid1, tid2}
+
+	ctx := context.Background()
+	if err := testStore.BulkAddLabel(ctx, threadIDs, orgID, "trash"); err != nil {
+		t.Fatalf("BulkAddLabel trash failed: %v", err)
+	}
+	if err := testStore.SetTrashExpiry(ctx, threadIDs, orgID); err != nil {
+		t.Fatalf("SetTrashExpiry failed: %v", err)
+	}
+
+	h := &handler.ThreadHandler{Store: testStore, Bus: testBus()}
+	req := httptest.NewRequest(http.MethodPatch, "/api/threads/bulk",
+		jsonBody(map[string]any{"thread_ids": threadIDs, "action": "move", "label": "spam"}))
+	req = withClaims(req, userID, orgID, "admin")
+	w := httptest.NewRecorder()
+	h.BulkAction(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("bulk move to spam: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	for _, tid := range threadIDs {
+		if testStore.HasLabel(ctx, tid, "trash") {
+			t.Fatalf("thread %s still has trash label after bulk spam", tid)
+		}
+		if !testStore.HasLabel(ctx, tid, "spam") {
+			t.Fatalf("thread %s missing spam label after bulk spam", tid)
+		}
 	}
 }

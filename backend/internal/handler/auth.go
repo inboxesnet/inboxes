@@ -96,7 +96,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validatePassword(req.Password); err != nil {
+	if err := validateNewPassword(r.Context(), req.Password); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -351,7 +351,7 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "token and password are required")
 		return
 	}
-	if err := validatePassword(req.Password); err != nil {
+	if err := validateNewPassword(r.Context(), req.Password); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -389,7 +389,7 @@ func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "token and password are required")
 		return
 	}
-	if err := validatePassword(req.Password); err != nil {
+	if err := validateNewPassword(r.Context(), req.Password); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

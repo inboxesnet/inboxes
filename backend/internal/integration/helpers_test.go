@@ -12,9 +12,15 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// testBus builds a real event bus against the test Postgres and Redis.
+func testBus() *event.Bus {
+	return event.NewBus(testPool, testRDB)
+}
 
 // seedOrg creates a test org + admin user, returns orgID, userID.
 func seedOrg(t *testing.T, name, email, password string) (orgID, userID string) {
@@ -58,7 +64,7 @@ func seedThread(t *testing.T, orgID, userID, domainID, subject string) string {
 	t.Helper()
 	ctx := context.Background()
 	participants, _ := json.Marshal([]string{"test@example.com"})
-	threadID, err := testStore.CreateThread(ctx, orgID, userID, domainID, subject, participants, "Test snippet")
+	threadID, err := testStore.CreateThread(ctx, orgID, userID, domainID, subject, participants, "Test snippet", "test@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}

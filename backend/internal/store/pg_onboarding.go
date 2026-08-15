@@ -245,6 +245,19 @@ func (s *PgStore) SetupAddress(ctx context.Context, orgID, userID, address, addr
 		); err != nil {
 			return fmt.Errorf("mark unclaimed: %w", err)
 		}
+		// Park the alias: the sync phase auto-assigns it to the admin, so a
+		// skip must remove those assignments. The alias stays active but has
+		// no users until someone claims it.
+		if _, err := s.q.Exec(ctx,
+			`DELETE FROM alias_users
+			 WHERE alias_id IN (
+				SELECT id FROM aliases
+				WHERE org_id = $1 AND domain_id = $2 AND address = $3
+			 )`,
+			orgID, domainID, address,
+		); err != nil {
+			return fmt.Errorf("park skipped alias: %w", err)
+		}
 	}
 
 	return nil

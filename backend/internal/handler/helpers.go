@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +101,15 @@ func validateEmail(email string) error {
 		return fmt.Errorf("invalid email format")
 	}
 	return nil
+}
+
+// validateNewPassword enforces complexity rules and rejects passwords
+// found in known breaches (HIBP k-anonymity check, fail-open).
+func validateNewPassword(ctx context.Context, password string) error {
+	if err := validatePassword(password); err != nil {
+		return err
+	}
+	return service.CheckPwnedPassword(ctx, password)
 }
 
 // validatePassword enforces password complexity requirements.

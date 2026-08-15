@@ -49,7 +49,7 @@ func TestIsResendErr_NilError(t *testing.T) {
 
 func TestNewDomainHeartbeat_DefaultInterval(t *testing.T) {
 	t.Parallel()
-	dh := NewDomainHeartbeat(nil, nil, nil, 0)
+	dh := NewDomainHeartbeat(nil, nil, nil, nil, 0, "")
 	if dh.Interval != 6*time.Hour {
 		t.Errorf("Interval: got %v, want %v", dh.Interval, 6*time.Hour)
 	}
@@ -57,7 +57,7 @@ func TestNewDomainHeartbeat_DefaultInterval(t *testing.T) {
 
 func TestNewDomainHeartbeat_CustomInterval(t *testing.T) {
 	t.Parallel()
-	dh := NewDomainHeartbeat(nil, nil, nil, 2*time.Hour)
+	dh := NewDomainHeartbeat(nil, nil, nil, nil, 2*time.Hour, "")
 	if dh.Interval != 2*time.Hour {
 		t.Errorf("Interval: got %v, want %v", dh.Interval, 2*time.Hour)
 	}

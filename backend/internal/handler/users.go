@@ -274,7 +274,7 @@ func (h *UserHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validatePassword(req.NewPassword); err != nil {
+	if err := validateNewPassword(r.Context(), req.NewPassword); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

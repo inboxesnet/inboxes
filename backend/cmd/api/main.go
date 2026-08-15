@@ -105,7 +105,7 @@ func main() {
 	util.SafeGo("trash-collector", func() { trashCollector.Run(ctx) })
 
 	// Domain heartbeat (checks Resend periodically)
-	domainHeartbeat := worker.NewDomainHeartbeat(pool, resendSvc, bus, cfg.DomainHeartbeatInterval)
+	domainHeartbeat := worker.NewDomainHeartbeat(pool, resendSvc, encSvc, bus, cfg.DomainHeartbeatInterval, cfg.PublicURL)
 	util.SafeGo("domain-heartbeat", func() { domainHeartbeat.Run(ctx) })
 
 	// Event pruner (removes events older than retention period)

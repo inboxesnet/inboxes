@@ -142,7 +142,7 @@ func (h *SetupHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "email and password are required")
 		return
 	}
-	if err := validatePassword(req.Password); err != nil {
+	if err := validateNewPassword(r.Context(), req.Password); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

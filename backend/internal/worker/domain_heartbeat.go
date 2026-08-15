@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/inboxes/backend/internal/event"
@@ -16,19 +17,23 @@ import (
 type DomainHeartbeat struct {
 	DB        *pgxpool.Pool
 	ResendSvc *service.ResendService
+	EncSvc    *service.EncryptionService
 	Bus       *event.Bus
 	Interval  time.Duration
+	PublicURL string
 }
 
-func NewDomainHeartbeat(db *pgxpool.Pool, resendSvc *service.ResendService, bus *event.Bus, interval time.Duration) *DomainHeartbeat {
+func NewDomainHeartbeat(db *pgxpool.Pool, resendSvc *service.ResendService, encSvc *service.EncryptionService, bus *event.Bus, interval time.Duration, publicURL string) *DomainHeartbeat {
 	if interval <= 0 {
 		interval = 6 * time.Hour
 	}
 	return &DomainHeartbeat{
 		DB:        db,
 		ResendSvc: resendSvc,
+		EncSvc:    encSvc,
 		Bus:       bus,
 		Interval:  interval,
+		PublicURL: publicURL,
 	}
 }
 
@@ -83,6 +88,89 @@ func (dh *DomainHeartbeat) checkAll(ctx context.Context) {
 	for _, orgID := range orgIDs {
 		dh.checkOrg(ctx, orgID)
 	}
+
+	dh.repairWebhooks(ctx)
+}
+
+// repairWebhooks registers a Resend webhook for orgs that have an API key
+// but no stored webhook secret. This covers the onboarding path where the
+// webhook step was skipped or its call failed silently. Localhost public
+// URLs are skipped: Resend cannot reach them.
+func (dh *DomainHeartbeat) repairWebhooks(ctx context.Context) {
+	if dh.EncSvc == nil || dh.PublicURL == "" ||
+		strings.Contains(dh.PublicURL, "localhost") || strings.Contains(dh.PublicURL, "127.0.0.1") {
+		return
+	}
+
+	rows, err := dh.DB.Query(ctx,
+		`SELECT id FROM orgs
+		 WHERE resend_api_key_encrypted IS NOT NULL AND deleted_at IS NULL
+		 AND api_key_status != 'invalid'
+		 AND (resend_webhook_secret_encrypted IS NULL OR resend_webhook_secret_encrypted = '')`)
+	if err != nil {
+		slog.Error("domain heartbeat: failed to list orgs for webhook repair", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	var orgIDs []string
+	for rows.Next() {
+		var orgID string
+		if rows.Scan(&orgID) == nil {
+			orgIDs = append(orgIDs, orgID)
+		}
+	}
+	rows.Close()
+
+	for _, orgID := range orgIDs {
+		dh.repairOrgWebhook(ctx, orgID)
+	}
+}
+
+func (dh *DomainHeartbeat) repairOrgWebhook(ctx context.Context, orgID string) {
+	webhookURL := dh.PublicURL + "/api/webhooks/resend/" + orgID
+
+	data, err := dh.ResendSvc.Fetch(ctx, orgID, "POST", "/webhooks", map[string]interface{}{
+		"endpoint": webhookURL,
+		"events": []string{
+			"email.sent",
+			"email.delivered",
+			"email.bounced",
+			"email.complained",
+			"email.received",
+		},
+	})
+	if err != nil {
+		slog.Warn("domain heartbeat: webhook auto-repair failed", "org_id", orgID, "error", err)
+		return
+	}
+
+	var webhookResp struct {
+		ID     string `json:"id"`
+		Secret string `json:"signing_secret"`
+	}
+	if err := json.Unmarshal(data, &webhookResp); err != nil || webhookResp.Secret == "" {
+		slog.Warn("domain heartbeat: webhook auto-repair parse failed", "org_id", orgID, "error", err)
+		return
+	}
+
+	encSecret, encIV, encTag, err := dh.EncSvc.Encrypt(webhookResp.Secret)
+	if err != nil {
+		slog.Error("domain heartbeat: webhook secret encrypt failed", "org_id", orgID, "error", err)
+		return
+	}
+
+	if _, err := dh.DB.Exec(ctx,
+		`UPDATE orgs SET resend_webhook_id = $1,
+		 resend_webhook_secret = NULL,
+		 resend_webhook_secret_encrypted = $2, resend_webhook_secret_iv = $3, resend_webhook_secret_tag = $4,
+		 updated_at = now() WHERE id = $5`,
+		webhookResp.ID, encSecret, encIV, encTag, orgID); err != nil {
+		slog.Error("domain heartbeat: webhook auto-repair store failed", "org_id", orgID, "error", err)
+		return
+	}
+
+	slog.Info("domain heartbeat: webhook auto-repaired", "org_id", orgID, "webhook_id", webhookResp.ID)
 }
 
 func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {

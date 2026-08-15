@@ -270,6 +270,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			// Labels
 			r.Get("/api/labels", labels.List)
 			r.Post("/api/labels", labels.Create)
+			r.Patch("/api/labels/reorder", labels.Reorder)
 			r.Patch("/api/labels/{id}", labels.Rename)
 			r.Delete("/api/labels/{id}", labels.Delete)
 

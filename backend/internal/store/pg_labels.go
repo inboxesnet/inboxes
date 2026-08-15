@@ -7,12 +7,23 @@ import (
 
 func (s *PgStore) ListOrgLabels(ctx context.Context, orgID string) ([]map[string]any, error) {
 	rows, err := s.q.Query(ctx,
-		`SELECT id, name, created_at FROM org_labels WHERE org_id = $1 ORDER BY name`,
+		`SELECT id, name, created_at, display_order FROM org_labels WHERE org_id = $1 ORDER BY display_order, name`,
 		orgID)
 	if err != nil {
 		return nil, err
 	}
 	return scanMaps(rows)
+}
+
+func (s *PgStore) ReorderOrgLabels(ctx context.Context, orgID string, order []DomainOrder) error {
+	for _, item := range order {
+		if _, err := s.q.Exec(ctx,
+			`UPDATE org_labels SET display_order = $1 WHERE id = $2 AND org_id = $3`,
+			item.Order, item.ID, orgID); err != nil {
+			slog.Error("labels: reorder update failed", "label_id", item.ID, "error", err)
+		}
+	}
+	return nil
 }
 
 func (s *PgStore) CreateOrgLabel(ctx context.Context, orgID, name string) (string, error) {

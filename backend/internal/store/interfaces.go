@@ -197,6 +197,7 @@ type AliasStore interface {
 type LabelStore interface {
 	ListOrgLabels(ctx context.Context, orgID string) ([]map[string]any, error)
 	CreateOrgLabel(ctx context.Context, orgID, name string) (string, error)
+	ReorderOrgLabels(ctx context.Context, orgID string, order []DomainOrder) error
 	RenameOrgLabel(ctx context.Context, labelID, orgID, newName string) (oldName string, err error)
 	DeleteOrgLabel(ctx context.Context, labelID, orgID string) (labelName string, err error)
 }
