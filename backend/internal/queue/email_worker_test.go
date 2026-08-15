@@ -76,6 +76,13 @@ func TestShouldSkipJob_FailedUnderMaxRetries(t *testing.T) {
 	}
 }
 
+func TestShouldSkipJob_Cancelled(t *testing.T) {
+	t.Parallel()
+	if !shouldSkipJob("cancelled", 0, 3) {
+		t.Error("expected true for cancelled status — an undone send must never run")
+	}
+}
+
 func TestShouldSkipJob_Pending(t *testing.T) {
 	t.Parallel()
 	if shouldSkipJob("pending", 0, 3) {

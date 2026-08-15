@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/event"
@@ -237,6 +238,26 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
 
+	// Optional schedule: {"scheduled_at": "2026-08-16T08:00:00Z"} parks the
+	// send job until that time. An empty body sends now.
+	var sendReq struct {
+		ScheduledAt *time.Time `json:"scheduled_at"`
+	}
+	readJSON(r, &sendReq) // body is optional — ignore parse errors
+	var scheduledAt *time.Time
+	if sendReq.ScheduledAt != nil {
+		t := sendReq.ScheduledAt.UTC()
+		if t.Before(time.Now().Add(time.Minute)) {
+			writeError(w, http.StatusBadRequest, "scheduled_at must be at least 1 minute in the future")
+			return
+		}
+		if t.After(time.Now().Add(30 * 24 * time.Hour)) {
+			writeError(w, http.StatusBadRequest, "scheduled_at must be within 30 days")
+			return
+		}
+		scheduledAt = &t
+	}
+
 	// Idempotency: reject if a send job already exists for this draft
 	alreadySending, err := h.Store.CheckSendJobExists(ctx, id)
 	if err != nil {
@@ -395,14 +416,19 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Store email with status='queued', keeping the threading context
+		// Store email with status='queued' (or 'scheduled'), keeping the
+		// threading context
 		var refsJSON []byte
 		if referencesHeader != "" {
 			refsJSON, _ = json.Marshal(strings.Fields(referencesHeader))
 		}
+		emailStatus := "queued"
+		if scheduledAt != nil {
+			emailStatus = "scheduled"
+		}
 		var err error
 		emailID, err = tx.InsertEmail(ctx, finalThreadID, claims.UserID, claims.OrgID, domainID,
-			"outbound", fromAddr, toJSON, ccJSON, bccJSON, subject, bodyHTML, bodyPlain, "queued", inReplyTo, refsJSON)
+			"outbound", fromAddr, toJSON, ccJSON, bccJSON, subject, bodyHTML, bodyPlain, emailStatus, inReplyTo, refsJSON)
 		if err != nil {
 			slog.Error("draft: insert email failed", "error", err)
 			return err
@@ -421,10 +447,34 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
+		if scheduledAt != nil {
+			if _, err := tx.Q().Exec(ctx,
+				`UPDATE email_jobs SET run_after = $1 WHERE id = $2`, *scheduledAt, jobID); err != nil {
+				return fmt.Errorf("set run_after: %w", err)
+			}
+			if _, err := tx.Q().Exec(ctx,
+				`UPDATE drafts SET scheduled_send_at = $1 WHERE id = $2`, *scheduledAt, id); err != nil {
+				slog.Error("draft: set scheduled_send_at failed", "draft_id", id, "error", err)
+			}
+		}
+
 		return nil
 	})
 	if txErr != nil {
 		writeError(w, http.StatusInternalServerError, "failed to send email")
+		return
+	}
+
+	if scheduledAt != nil {
+		// The scheduler worker releases the job when run_after comes due.
+		slog.Info("draft: scheduled send", "email_id", emailID, "job_id", jobID, "draft_id", id, "scheduled_at", *scheduledAt)
+		writeJSON(w, http.StatusAccepted, map[string]interface{}{
+			"email_id":     emailID,
+			"thread_id":    finalThreadID,
+			"job_id":       jobID,
+			"status":       "scheduled",
+			"scheduled_at": scheduledAt.Format(time.RFC3339),
+		})
 		return
 	}
 
@@ -442,6 +492,68 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		"status":       "queued",
 		"undo_seconds": undoSeconds,
 	})
+}
+
+// CancelSchedule cancels a scheduled send and keeps the draft editable.
+func (h *DraftHandler) CancelSchedule(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	draftID := chi.URLParam(r, "id")
+	ctx := r.Context()
+
+	// The draft must belong to the caller.
+	var draftOwner string
+	if err := h.Store.Q().QueryRow(ctx,
+		`SELECT user_id FROM drafts WHERE id = $1 AND org_id = $2`, draftID, claims.OrgID,
+	).Scan(&draftOwner); err != nil || draftOwner != claims.UserID {
+		writeError(w, http.StatusNotFound, "draft not found")
+		return
+	}
+
+	var jobID string
+	var emailID *string
+	err := h.Store.Q().QueryRow(ctx,
+		`SELECT id, email_id FROM email_jobs
+		 WHERE draft_id = $1 AND job_type = 'send' AND status = 'pending' AND run_after IS NOT NULL
+		 ORDER BY created_at DESC LIMIT 1`,
+		draftID,
+	).Scan(&jobID, &emailID)
+	if err != nil {
+		writeError(w, http.StatusConflict, "no scheduled send found for this draft")
+		return
+	}
+
+	res, err := h.Store.Q().Exec(ctx,
+		`UPDATE email_jobs SET status = 'cancelled', error_message = 'schedule cancelled', updated_at = now()
+		 WHERE id = $1 AND status = 'pending'`, jobID)
+	if err != nil || res.RowsAffected() == 0 {
+		writeError(w, http.StatusConflict, "too late to cancel — the email already left")
+		return
+	}
+
+	// Remove the parked email row; the draft keeps the content.
+	if emailID != nil {
+		var threadID string
+		h.Store.Q().QueryRow(ctx, `SELECT thread_id FROM emails WHERE id = $1`, *emailID).Scan(&threadID)
+		h.Store.Q().Exec(ctx, `UPDATE email_jobs SET email_id = NULL, thread_id = NULL WHERE email_id = $1`, *emailID)
+		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM emails WHERE id = $1 AND org_id = $2`, *emailID, claims.OrgID); err != nil {
+			slog.Error("draft: cancel-schedule email delete failed", "email_id", *emailID, "error", err)
+		}
+		if threadID != "" {
+			var remaining int
+			if err := h.Store.Q().QueryRow(ctx, `SELECT count(*) FROM emails WHERE thread_id = $1`, threadID).Scan(&remaining); err == nil && remaining == 0 {
+				h.Store.Q().Exec(ctx, `DELETE FROM thread_labels WHERE thread_id = $1`, threadID)
+				h.Store.Q().Exec(ctx, `DELETE FROM threads WHERE id = $1 AND org_id = $2`, threadID, claims.OrgID)
+			}
+		}
+	}
+
+	if _, err := h.Store.Q().Exec(ctx,
+		`UPDATE drafts SET scheduled_send_at = NULL, updated_at = now() WHERE id = $1`, draftID); err != nil {
+		slog.Error("draft: clear scheduled_send_at failed", "draft_id", draftID, "error", err)
+	}
+
+	slog.Info("draft: schedule cancelled", "draft_id", draftID, "job_id", jobID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 func itoa(i int) string {

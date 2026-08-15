@@ -31,6 +31,7 @@ import {
   Send,
   Trash2,
   Paperclip,
+  CalendarClock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -39,6 +40,39 @@ interface AttachmentMeta {
   id: string;
   filename: string;
   size: number;
+}
+
+// schedulePresets builds the scheduled-send choices relative to now.
+function schedulePresets(): { label: string; when: Date }[] {
+  const now = new Date();
+  const tomorrowMorning = new Date(now);
+  tomorrowMorning.setDate(tomorrowMorning.getDate() + 1);
+  tomorrowMorning.setHours(8, 0, 0, 0);
+
+  const tomorrowAfternoon = new Date(now);
+  tomorrowAfternoon.setDate(tomorrowAfternoon.getDate() + 1);
+  tomorrowAfternoon.setHours(13, 0, 0, 0);
+
+  const monday = new Date(now);
+  const daysUntilMonday = ((8 - monday.getDay()) % 7) || 7;
+  monday.setDate(monday.getDate() + daysUntilMonday);
+  monday.setHours(8, 0, 0, 0);
+
+  return [
+    { label: "Tomorrow morning", when: tomorrowMorning },
+    { label: "Tomorrow afternoon", when: tomorrowAfternoon },
+    { label: "Monday morning", when: monday },
+  ];
+}
+
+function formatWhen(d: Date): string {
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 // htmlToPlain reduces signature HTML to a text form for the plain part.
@@ -88,6 +122,9 @@ export function FloatingComposeWindow() {
   const [bodyHtml, setBodyHtml] = useState("");
   const [bodyPlain, setBodyPlain] = useState("");
   const [showCcBcc, setShowCcBcc] = useState(false);
+  const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
+  const [customWhen, setCustomWhen] = useState("");
+  const scheduleMenuRef = useRef<HTMLDivElement>(null);
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
   const [error, setError] = useState("");
@@ -178,6 +215,18 @@ export function FloatingComposeWindow() {
       }
     }
   }, [composeState, composeData]);
+
+  // Close the schedule menu on outside click
+  useEffect(() => {
+    if (!scheduleMenuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (scheduleMenuRef.current && !scheduleMenuRef.current.contains(e.target as Node)) {
+        setScheduleMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [scheduleMenuOpen]);
 
   // Warn before unload if compose has unsaved changes
   useEffect(() => {
@@ -531,6 +580,112 @@ export function FloatingComposeWindow() {
     // Don't reset sendingRef on success — compose window closes
   }
 
+  async function handleScheduleSend(when: Date) {
+    setScheduleMenuOpen(false);
+    setError("");
+    if (to.length === 0) {
+      setError("To is required");
+      return;
+    }
+    if (!subject) {
+      setError("A subject is required to schedule a send");
+      return;
+    }
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    setSending(true);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (saveAbortRef.current) saveAbortRef.current.abort();
+
+    const fullHtml = composeData?.quotedHtml ? bodyHtml + composeData.quotedHtml : bodyHtml;
+    try {
+      await saveDraft();
+      const id = draftIdRef.current;
+      if (!id) throw new Error("Failed to save the draft");
+
+      const sendPatch: Record<string, unknown> = {
+        subject,
+        from_address: effectiveFrom,
+        to_addresses: to,
+        cc_addresses: cc,
+        bcc_addresses: bcc,
+        body_html: fullHtml,
+        body_plain: bodyPlain,
+        attachment_ids: attachments.map((a) => a.id),
+      };
+      if (composeData?.replyToThreadId) sendPatch.thread_id = composeData.replyToThreadId;
+      if (composeData?.inReplyTo) sendPatch.in_reply_to = composeData.inReplyTo;
+      if (composeData?.references?.length) sendPatch.references = composeData.references;
+      await api.patch(`/api/drafts/${id}`, sendPatch);
+      await api.post(`/api/drafts/${id}/send`, { scheduled_at: when.toISOString() });
+
+      toast.success(`Send scheduled for ${formatWhen(when)}`, { id: "compose-send" });
+      closeCompose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to schedule send");
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }
+
+  function scheduleControl() {
+    return (
+      <div className="relative" ref={scheduleMenuRef}>
+        <button
+          type="button"
+          onClick={() => setScheduleMenuOpen((v) => !v)}
+          disabled={sending}
+          className="p-1.5 rounded hover:bg-muted text-muted-foreground disabled:opacity-50"
+          title="Schedule send"
+          aria-label="Schedule send"
+        >
+          <CalendarClock className="h-4 w-4" />
+        </button>
+        {scheduleMenuOpen && (
+          <div className="absolute bottom-full right-0 mb-1 z-50 bg-popover text-popover-foreground border rounded-md shadow-md py-1 min-w-[220px]">
+            {schedulePresets().map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => handleScheduleSend(p.when)}
+                className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between gap-3"
+              >
+                <span>{p.label}</span>
+                <span className="text-muted-foreground text-xs self-center">{formatWhen(p.when)}</span>
+              </button>
+            ))}
+            <div className="my-1 border-t" />
+            <div className="px-3 py-2 space-y-2">
+              <input
+                type="datetime-local"
+                value={customWhen}
+                onChange={(e) => setCustomWhen(e.target.value)}
+                className="w-full h-8 rounded-md border bg-background px-2 text-sm"
+                aria-label="Custom send time"
+              />
+              <Button
+                type="button"
+                size="sm"
+                className="w-full"
+                disabled={!customWhen}
+                onClick={() => {
+                  const when = new Date(customWhen);
+                  if (Number.isNaN(when.getTime()) || when.getTime() < Date.now() + 60_000) {
+                    setError("Pick a time at least 1 minute in the future");
+                    return;
+                  }
+                  handleScheduleSend(when);
+                }}
+              >
+                Schedule
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (composeState === "closed") return null;
 
   // Minimized state
@@ -621,6 +776,7 @@ export function FloatingComposeWindow() {
           >
             {uploading ? <Spinner className="h-4 w-4" /> : <Paperclip className="h-4 w-4" />}
           </button>
+          {scheduleControl()}
           <Button type="submit" size="sm" form="compose-form" disabled={sending}>
             {sending ? <Spinner className="mr-1 h-3 w-3" /> : <Send className="mr-1 h-3 w-3" />}
             Send
@@ -879,10 +1035,13 @@ export function FloatingComposeWindow() {
             quotedHtml={composeData?.quotedHtml}
             stripTracking={stripTrackingParams}
             toolbarLeft={
-              <Button type="submit" size="sm" disabled={sending} className="mx-1 shrink-0">
-                {sending ? <Spinner className="mr-1 h-3 w-3" /> : <Send className="mr-1 h-3 w-3" />}
-                Send
-              </Button>
+              <div className="flex items-center shrink-0">
+                <Button type="submit" size="sm" disabled={sending} className="mx-1 shrink-0">
+                  {sending ? <Spinner className="mr-1 h-3 w-3" /> : <Send className="mr-1 h-3 w-3" />}
+                  Send
+                </Button>
+                {scheduleControl()}
+              </div>
             }
             toolbarRight={
               <div className="flex items-center">

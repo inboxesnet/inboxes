@@ -29,6 +29,7 @@ const EMPTY_MESSAGES: Record<Label, string> = {
   drafts: "No drafts",
   archive: "No archived messages",
   starred: "No starred messages",
+  snoozed: "No snoozed conversations",
   trash: "Trash is empty",
   spam: "No spam messages",
   failed: "No failed sends",
@@ -314,6 +315,29 @@ function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
     );
   }, [bulkMutation, label, domainId]);
 
+  const handleSnooze = useCallback(
+    async (until: string | null) => {
+      const ids = Array.from(selection.selectedIds);
+      if (ids.length === 0) return;
+      try {
+        await Promise.all(
+          ids.map((id) => api.patch(`/api/threads/${id}/snooze`, { until }))
+        );
+        toast.success(
+          until
+            ? `Snoozed ${ids.length} conversation${ids.length === 1 ? "" : "s"} until ${new Date(until).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`
+            : "Unsnoozed"
+        );
+        selection.clearSelection();
+        qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+        qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+      } catch {
+        toast.error("Failed to snooze");
+      }
+    },
+    [selection.selectedIds, selection.clearSelection, qc]
+  );
+
   const handleEmptyFolder = useCallback(() => {
     bulkMutation.mutate(
       {
@@ -429,6 +453,7 @@ function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
         onRefresh={handleRefresh}
         onMarkAllRead={!isSearching && label !== "trash" && label !== "spam" && label !== "drafts" ? handleMarkAllRead : undefined}
         onEmptyFolder={!isSearching && (label === "trash" || label === "spam") ? handleEmptyFolder : undefined}
+        onSnooze={!isSearching && label !== "drafts" ? handleSnooze : undefined}
         page={page}
         total={isSearching ? searchTotal : total}
         limit={isSearching ? searchLimit : LIMIT}

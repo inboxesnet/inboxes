@@ -37,6 +37,7 @@ import {
   Keyboard,
   Info,
   XCircle,
+  Clock,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -53,6 +54,7 @@ const LABELS: { key: Label; label: string; icon: React.ReactNode }[] = [
   { key: "drafts", label: "Drafts", icon: <FileText className="h-4 w-4" /> },
   { key: "archive", label: "Archive", icon: <Archive className="h-4 w-4" /> },
   { key: "starred", label: "Starred", icon: <Star className="h-4 w-4" /> },
+  { key: "snoozed", label: "Snoozed", icon: <Clock className="h-4 w-4" /> },
   { key: "spam", label: "Spam", icon: <AlertTriangle className="h-4 w-4" /> },
   { key: "trash", label: "Trash", icon: <Trash2 className="h-4 w-4" /> },
 ];
@@ -199,7 +201,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
   const { data: labelCounts } = useQuery({
     queryKey: queryKeys.domains.labelCounts(activeDomain?.id ?? ""),
     queryFn: () =>
-      api.get<{ drafts: number; spam: number; failed: number; labels: Record<string, number> }>(
+      api.get<{ drafts: number; spam: number; failed: number; snoozed: number; labels: Record<string, number> }>(
         `/api/threads/counts?domain_id=${activeDomain?.id}`
       ),
     enabled: !!activeDomain,
@@ -295,6 +297,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
       else if (f.key === "drafts") count = labelCounts?.drafts || 0;
       else if (f.key === "spam") count = labelCounts?.spam || 0;
       else if (f.key === "failed") count = labelCounts?.failed || 0;
+      else if (f.key === "snoozed") count = labelCounts?.snoozed || 0;
     }
 
     return (

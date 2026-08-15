@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/event"
@@ -729,6 +730,69 @@ func (h *ThreadHandler) Trash(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "updated"})
+}
+
+// Snooze hides a thread from the inbox until a wake time. A null or empty
+// "until" clears the snooze immediately.
+func (h *ThreadHandler) Snooze(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	threadID := chi.URLParam(r, "id")
+	ctx := r.Context()
+
+	var req struct {
+		Until *time.Time `json:"until"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
+
+	evtType := event.ThreadUnsnoozed
+	payload := map[string]interface{}{"thread_id": threadID}
+
+	if req.Until == nil {
+		if _, err := h.Store.Q().Exec(ctx,
+			`UPDATE threads SET snoozed_until = NULL, updated_at = now() WHERE id = $1 AND org_id = $2`,
+			threadID, claims.OrgID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to unsnooze thread")
+			return
+		}
+	} else {
+		until := req.Until.UTC()
+		if until.Before(time.Now().Add(time.Minute)) {
+			writeError(w, http.StatusBadRequest, "until must be at least 1 minute in the future")
+			return
+		}
+		if until.After(time.Now().Add(365 * 24 * time.Hour)) {
+			writeError(w, http.StatusBadRequest, "until must be within 1 year")
+			return
+		}
+		if _, err := h.Store.Q().Exec(ctx,
+			`UPDATE threads SET snoozed_until = $1, updated_at = now() WHERE id = $2 AND org_id = $3`,
+			until, threadID, claims.OrgID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to snooze thread")
+			return
+		}
+		evtType = event.ThreadSnoozed
+		payload["snoozed_until"] = until.Format(time.RFC3339)
+	}
+
+	h.Bus.Publish(ctx, event.Event{
+		EventType: evtType,
+		OrgID:     claims.OrgID,
+		UserID:    claims.UserID,
+		DomainID:  domainID,
+		ThreadID:  threadID,
+		Payload:   payload,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"message": "ok"})
 }
 
 func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {

@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useEmailWindow } from "@/contexts/email-window-context";
 import { Spinner } from "@/components/ui/spinner";
-import { FileText, Trash2 } from "lucide-react";
+import { CalendarClock, FileText, Trash2 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import type { Draft } from "@/lib/types";
@@ -49,6 +49,21 @@ export default function DraftsPage() {
       }
     },
     [currentDraftId, closeCompose, qc, domainId]
+  );
+
+  const handleCancelSchedule = useCallback(
+    async (draftId: string, e?: React.MouseEvent) => {
+      if (e) e.stopPropagation();
+      try {
+        await api.post(`/api/drafts/${draftId}/cancel-schedule`);
+        toast.success("Schedule cancelled — the draft stays editable");
+        qc.invalidateQueries({ queryKey: ["drafts", domainId] });
+      } catch {
+        toast.error("Too late to cancel — the email already left");
+        qc.invalidateQueries({ queryKey: ["drafts", domainId] });
+      }
+    },
+    [qc, domainId]
   );
 
   // Keyboard navigation for drafts
@@ -123,6 +138,16 @@ export default function DraftsPage() {
                     <span className="text-sm font-medium truncate">
                       {draft.subject || "(no subject)"}
                     </span>
+                    {draft.scheduled_send_at && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-0.5 text-[11px] shrink-0">
+                        <CalendarClock className="h-3 w-3" />
+                        {new Date(draft.scheduled_send_at).toLocaleString(undefined, {
+                          weekday: "short",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground truncate">
                     To: {(draft.to_addresses || []).join(", ") || "(no recipients)"}
@@ -131,6 +156,15 @@ export default function DraftsPage() {
                 <span className="text-xs text-muted-foreground shrink-0">
                   {formatRelativeTime(draft.updated_at)}
                 </span>
+                {draft.scheduled_send_at && (
+                  <button
+                    onClick={(e) => handleCancelSchedule(draft.id, e)}
+                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 shrink-0"
+                    title="Cancel the scheduled send"
+                  >
+                    Cancel schedule
+                  </button>
+                )}
                 <button
                   onClick={(e) => handleDelete(draft.id, e)}
                   className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive shrink-0"

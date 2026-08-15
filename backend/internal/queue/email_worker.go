@@ -435,7 +435,8 @@ func (w *EmailWorker) recoverStaleJobs(ctx context.Context) {
 func (w *EmailWorker) recoverOrphanedJobs(ctx context.Context) {
 	rows, err := w.store.Q().Query(ctx,
 		`SELECT id FROM email_jobs
-		 WHERE status = 'pending' AND updated_at < now() - interval '5 minutes'`,
+		 WHERE status = 'pending' AND updated_at < now() - interval '5 minutes'
+		 AND (run_after IS NULL OR run_after <= now())`,
 	)
 	if err != nil {
 		slog.Error("email worker: orphan recovery query failed", "error", err)
@@ -457,9 +458,11 @@ func (w *EmailWorker) recoverOrphanedJobs(ctx context.Context) {
 
 // --- Extracted pure functions for testability ---
 
-// shouldSkipJob returns true when a job should not be processed.
+// shouldSkipJob returns true when a job should not be processed. Cancelled
+// jobs must never run: an undo can race the delayed dispatcher, and the
+// job's stored payload could still send after its email row is gone.
 func shouldSkipJob(status string, retryCount, maxRetries int) bool {
-	return status == "completed" || (status == "failed" && retryCount >= maxRetries)
+	return status == "completed" || status == "cancelled" || (status == "failed" && retryCount >= maxRetries)
 }
 
 // isRetryableFailure determines whether the error allows retrying.

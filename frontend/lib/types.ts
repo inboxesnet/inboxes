@@ -45,6 +45,7 @@ export interface Thread {
   last_sender: string;
   original_to: string;
   trash_expires_at?: string;
+  snoozed_until?: string;
   created_at: string;
   emails?: Email[];
 }
@@ -56,7 +57,7 @@ export interface ThreadListResponse {
 }
 
 // Label type for view routing (URL segment, not thread data)
-export type Label = "inbox" | "sent" | "drafts" | "archive" | "starred" | "trash" | "spam" | "failed" | "deleted_forever";
+export type Label = "inbox" | "sent" | "drafts" | "archive" | "starred" | "snoozed" | "trash" | "spam" | "failed" | "deleted_forever";
 
 export function hasLabel(thread: { labels?: string[] }, label: string): boolean {
   return thread.labels?.includes(label) ?? false;
@@ -157,6 +158,7 @@ export interface Draft {
   attachment_ids?: string[];
   in_reply_to?: string;
   references_header?: string;
+  scheduled_send_at?: string;
   created_at: string;
   updated_at: string;
 }

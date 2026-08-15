@@ -124,6 +124,7 @@ vi.mock("lucide-react", () => {
     Inbox: icon("inbox"),
     Send: icon("send"),
     XCircle: icon("x-circle"),
+    Clock: icon("clock"),
     FileText: icon("file-text"),
     Archive: icon("archive"),
     Star: icon("star"),

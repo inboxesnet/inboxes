@@ -422,7 +422,7 @@ func (h *EmailHandler) CancelSend(w http.ResponseWriter, r *http.Request) {
 	var emailUserID string
 	err := h.Store.Q().QueryRow(ctx,
 		`SELECT user_id, thread_id, domain_id FROM emails
-		 WHERE id = $1 AND org_id = $2 AND direction = 'outbound' AND status = 'queued'`,
+		 WHERE id = $1 AND org_id = $2 AND direction = 'outbound' AND status IN ('queued', 'scheduled')`,
 		emailID, claims.OrgID,
 	).Scan(&emailUserID, &threadID, &domainID)
 	if err != nil {

@@ -26,6 +26,7 @@ vi.mock("lucide-react", () => {
     Tag: icon("tag"),
     BellOff: icon("bell-off"),
     FolderInput: icon("folder-input"),
+    Clock: icon("clock"),
   };
 });
 
@@ -299,6 +300,55 @@ describe("ThreadToolbar", () => {
       />
     );
     expect(screen.queryByTitle("Refresh")).not.toBeInTheDocument();
+  });
+
+  it("snooze dropdown shows presets and calls onSnooze", () => {
+    const onSnooze = vi.fn();
+    render(
+      <ThreadToolbar
+        {...baseProps}
+        selectedIds={new Set(["t1"])}
+        hasSelection={true}
+        onSnooze={onSnooze}
+      />
+    );
+    fireEvent.click(screen.getByTitle("Snooze"));
+    expect(screen.getByText("Later today")).toBeInTheDocument();
+    expect(screen.getByText("Tomorrow")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Tomorrow"));
+    expect(onSnooze).toHaveBeenCalledTimes(1);
+    const arg = onSnooze.mock.calls[0][0];
+    expect(typeof arg).toBe("string");
+    expect(new Date(arg).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("snoozed view offers Unsnooze", () => {
+    const onSnooze = vi.fn();
+    render(
+      <ThreadToolbar
+        {...baseProps}
+        label={"snoozed" as never}
+        selectedIds={new Set(["t1"])}
+        hasSelection={true}
+        onSnooze={onSnooze}
+      />
+    );
+    fireEvent.click(screen.getByTitle("Snooze again or unsnooze"));
+    fireEvent.click(screen.getByText("Unsnooze"));
+    expect(onSnooze).toHaveBeenCalledWith(null);
+  });
+
+  it("no snooze button in trash view", () => {
+    render(
+      <ThreadToolbar
+        {...baseProps}
+        label="trash"
+        selectedIds={new Set(["t1"])}
+        hasSelection={true}
+        onSnooze={vi.fn()}
+      />
+    );
+    expect(screen.queryByTitle("Snooze")).not.toBeInTheDocument();
   });
 
   it("spam button visible in inbox view", () => {

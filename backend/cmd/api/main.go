@@ -109,6 +109,9 @@ func main() {
 	domainHeartbeat := worker.NewDomainHeartbeat(pool, resendSvc, encSvc, bus, cfg.DomainHeartbeatInterval, cfg.PublicURL)
 	util.SafeGo("domain-heartbeat", func() { domainHeartbeat.Run(ctx) })
 
+	scheduler := worker.NewScheduler(pool, rdb, bus, cfg.SchedulerInterval)
+	util.SafeGo("scheduler", func() { scheduler.Run(ctx) })
+
 	// Event pruner (removes events older than retention period)
 	eventPruner := worker.NewEventPruner(pool, cfg.EventRetentionDays, cfg.EventPrunerInterval)
 	util.SafeGo("event-pruner", func() { eventPruner.Run(ctx) })

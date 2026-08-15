@@ -26,6 +26,8 @@ const (
 	ThreadSpammed   = "thread.spammed"
 	ThreadMoved     = "thread.moved"
 	ThreadDeleted   = "thread.deleted"
+	ThreadSnoozed   = "thread.snoozed"
+	ThreadUnsnoozed = "thread.unsnoozed"
 	ThreadBulkAction = "thread.bulk_action"
 
 	SyncCompleted = "sync.completed"

@@ -65,7 +65,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex2 WHERE tex2.thread_id = t.id AND tex2.label IN ('trash','spam'))`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
-			t.trash_expires_at
+			t.trash_expires_at, t.snoozed_until
 			FROM threads t
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label = 'inbox')
@@ -79,12 +79,29 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
-			t.trash_expires_at
+			t.trash_expires_at, t.snoozed_until
 			FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
 			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
 		args = append(args, orgID, label)
 		argIdx = 3
+
+	case "snoozed":
+		// Virtual view: threads with an active snooze. Not backed by a
+		// thread_labels row.
+		countQuery = `SELECT COUNT(*) FROM threads t
+			WHERE t.org_id = $1 AND t.deleted_at IS NULL
+			AND t.snoozed_until IS NOT NULL AND t.snoozed_until > now()
+			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
+		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
+			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
+			t.trash_expires_at, t.snoozed_until
+			FROM threads t
+			WHERE t.org_id = $1 AND t.deleted_at IS NULL
+			AND t.snoozed_until IS NOT NULL AND t.snoozed_until > now()
+			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
+		args = append(args, orgID)
+		argIdx = 2
 
 	case "failed":
 		// Virtual view: threads with at least one failed or bounced outbound
@@ -95,7 +112,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced'))`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
-			t.trash_expires_at
+			t.trash_expires_at, t.snoozed_until
 			FROM threads t
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
@@ -110,13 +127,20 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
-			t.trash_expires_at
+			t.trash_expires_at, t.snoozed_until
 			FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
 			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		args = append(args, orgID, label)
 		argIdx = 3
+	}
+
+	// An active snooze hides a thread from the inbox until it wakes.
+	if label == "inbox" {
+		snoozeFilter := " AND (t.snoozed_until IS NULL OR t.snoozed_until <= now())"
+		countQuery += snoozeFilter
+		query += snoozeFilter
 	}
 
 	if domainID != "" {
@@ -162,13 +186,13 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 	for rows.Next() {
 		var id, oID, userID, dID, subject, snippet, lastSender string
 		var originalTo *string
-		var trashExpiresAt *time.Time
+		var trashExpiresAt, snoozedUntil *time.Time
 		var participants json.RawMessage
 		var lastMessageAt, createdAt time.Time
 		var messageCount, unreadCount int
 
 		err := rows.Scan(&id, &oID, &userID, &dID, &subject, &participants,
-			&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &trashExpiresAt)
+			&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &trashExpiresAt, &snoozedUntil)
 		if err != nil {
 			continue
 		}
@@ -189,6 +213,9 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 		}
 		if trashExpiresAt != nil {
 			t["trash_expires_at"] = *trashExpiresAt
+		}
+		if snoozedUntil != nil {
+			t["snoozed_until"] = *snoozedUntil
 		}
 		threads = append(threads, t)
 		threadIDs = append(threadIDs, id)
@@ -490,6 +517,13 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
 		args = append(args, orgID, label)
 		argIdx = 3
+	case "snoozed":
+		query = `SELECT t.id FROM threads t
+			WHERE t.org_id = $1 AND t.deleted_at IS NULL
+			AND t.snoozed_until IS NOT NULL AND t.snoozed_until > now()
+			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
+		args = append(args, orgID)
+		argIdx = 2
 	default:
 		query = `SELECT t.id FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
@@ -497,6 +531,10 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		args = append(args, orgID, label)
 		argIdx = 3
+	}
+
+	if label == "inbox" {
+		query += " AND (t.snoozed_until IS NULL OR t.snoozed_until <= now())"
 	}
 
 	if domainID != "" {
@@ -657,6 +695,18 @@ func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, r
 		return nil, err
 	}
 	result["spam"] = spamUnread
+
+	var snoozedCount int
+	if err := s.q.QueryRow(ctx,
+		`SELECT COUNT(DISTINCT t.id) FROM threads t
+		 WHERE t.org_id = $1 AND t.domain_id = $2 AND t.deleted_at IS NULL
+		 AND t.snoozed_until IS NOT NULL AND t.snoozed_until > now()
+		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`+aliasFilter,
+		baseArgs...,
+	).Scan(&snoozedCount); err != nil {
+		return nil, err
+	}
+	result["snoozed"] = snoozedCount
 
 	var failedCount int
 	if err := s.q.QueryRow(ctx,

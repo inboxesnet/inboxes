@@ -19,6 +19,7 @@ import {
   Tag,
   BellOff,
   FolderInput,
+  Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -42,6 +43,7 @@ interface ThreadToolbarProps {
   onRefresh: () => void;
   onMarkAllRead?: () => void;
   onEmptyFolder?: () => void;
+  onSnooze?: (until: string | null) => void;
   page: number;
   total: number;
   limit: number;
@@ -53,6 +55,32 @@ interface ThreadToolbarProps {
 interface CustomLabel {
   id: string;
   name: string;
+}
+
+// snoozePresets builds the snooze choices relative to now.
+function snoozePresets(): { label: string; hint: string; until: Date }[] {
+  const now = new Date();
+  const fmtTime = (d: Date) =>
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const fmtDay = (d: Date) =>
+    d.toLocaleDateString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" } as Intl.DateTimeFormatOptions);
+
+  const laterToday = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(8, 0, 0, 0);
+
+  const nextWeek = new Date(now);
+  const daysUntilMonday = ((8 - nextWeek.getDay()) % 7) || 7;
+  nextWeek.setDate(nextWeek.getDate() + daysUntilMonday);
+  nextWeek.setHours(8, 0, 0, 0);
+
+  return [
+    { label: "Later today", hint: fmtTime(laterToday), until: laterToday },
+    { label: "Tomorrow", hint: fmtTime(tomorrow), until: tomorrow },
+    { label: "Next week", hint: fmtDay(nextWeek), until: nextWeek },
+  ];
 }
 
 export function ThreadToolbar({
@@ -72,6 +100,7 @@ export function ThreadToolbar({
   onRefresh,
   onMarkAllRead,
   onEmptyFolder,
+  onSnooze,
   page,
   total,
   limit,
@@ -83,15 +112,17 @@ export function ThreadToolbar({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [labelDropdownOpen, setLabelDropdownOpen] = useState(false);
   const [moveDropdownOpen, setMoveDropdownOpen] = useState(false);
+  const [snoozeDropdownOpen, setSnoozeDropdownOpen] = useState(false);
   const [customLabels, setCustomLabels] = useState<CustomLabel[]>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
   const moveDropdownRef = useRef<HTMLDivElement>(null);
+  const snoozeDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!dropdownOpen && !labelDropdownOpen && !moveDropdownOpen) return;
+    if (!dropdownOpen && !labelDropdownOpen && !moveDropdownOpen && !snoozeDropdownOpen) return;
     function handleClick(e: MouseEvent) {
       if (dropdownOpen && dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
@@ -102,10 +133,13 @@ export function ThreadToolbar({
       if (moveDropdownOpen && moveDropdownRef.current && !moveDropdownRef.current.contains(e.target as Node)) {
         setMoveDropdownOpen(false);
       }
+      if (snoozeDropdownOpen && snoozeDropdownRef.current && !snoozeDropdownRef.current.contains(e.target as Node)) {
+        setSnoozeDropdownOpen(false);
+      }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [dropdownOpen, labelDropdownOpen, moveDropdownOpen]);
+  }, [dropdownOpen, labelDropdownOpen, moveDropdownOpen, snoozeDropdownOpen]);
 
   useEffect(() => {
     if ((labelDropdownOpen || moveDropdownOpen) && customLabels.length === 0) {
@@ -335,6 +369,51 @@ export function ThreadToolbar({
                 </div>
               )}
             </div>
+
+            {/* Snooze dropdown */}
+            {onSnooze && label !== "trash" && label !== "spam" && (
+              <div className="relative" ref={snoozeDropdownRef}>
+                <button
+                  title={label === "snoozed" ? "Snooze again or unsnooze" : "Snooze"}
+                  onClick={() => setSnoozeDropdownOpen((v) => !v)}
+                  disabled={isPending}
+                  className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  <Clock className="h-4 w-4" />
+                </button>
+                {snoozeDropdownOpen && (
+                  <div className="absolute top-full left-0 mt-1 z-50 bg-popover border rounded-md shadow-md py-1 min-w-[190px]">
+                    {snoozePresets().map((p) => (
+                      <button
+                        key={p.label}
+                        onClick={() => {
+                          onSnooze(p.until.toISOString());
+                          setSnoozeDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground flex justify-between gap-3"
+                      >
+                        <span>{p.label}</span>
+                        <span className="text-muted-foreground text-xs self-center">{p.hint}</span>
+                      </button>
+                    ))}
+                    {label === "snoozed" && (
+                      <>
+                        <div className="my-1 border-t" />
+                        <button
+                          onClick={() => {
+                            onSnooze(null);
+                            setSnoozeDropdownOpen(false);
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                        >
+                          Unsnooze
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Label dropdown */}
             <div className="relative" ref={labelDropdownRef}>

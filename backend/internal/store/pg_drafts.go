@@ -10,7 +10,7 @@ import (
 func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string) ([]map[string]any, error) {
 	query := `SELECT id, domain_id, thread_id, kind, subject, from_address,
 		to_addresses, cc_addresses, bcc_addresses, body_html, body_plain,
-		created_at, updated_at, COALESCE(attachment_ids, '[]'), in_reply_to, references_header
+		created_at, updated_at, COALESCE(attachment_ids, '[]'), in_reply_to, references_header, scheduled_send_at
 		FROM drafts WHERE user_id = $1 AND org_id = $2`
 	args := []any{userID, orgID}
 
@@ -33,10 +33,11 @@ func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string
 		var threadID *string
 		var toAddr, ccAddr, bccAddr, attIDs json.RawMessage
 		var createdAt, updatedAt time.Time
+		var scheduledSendAt *time.Time
 
 		err := rows.Scan(&id, &domID, &threadID, &kind, &subject, &fromAddr,
 			&toAddr, &ccAddr, &bccAddr, &bodyHTML, &bodyPlain,
-			&createdAt, &updatedAt, &attIDs, &inReplyTo, &referencesHeader)
+			&createdAt, &updatedAt, &attIDs, &inReplyTo, &referencesHeader, &scheduledSendAt)
 		if err != nil {
 			continue
 		}
@@ -58,6 +59,9 @@ func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string
 			"references_header": referencesHeader,
 			"created_at":     createdAt,
 			"updated_at":     updatedAt,
+		}
+		if scheduledSendAt != nil {
+			draft["scheduled_send_at"] = *scheduledSendAt
 		}
 		drafts = append(drafts, draft)
 	}

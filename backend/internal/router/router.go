@@ -212,6 +212,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Patch("/api/threads/{id}/archive", threads.Archive)
 			r.Patch("/api/threads/{id}/trash", threads.Trash)
 			r.Patch("/api/threads/{id}/spam", threads.Spam)
+			r.Patch("/api/threads/{id}/snooze", threads.Snooze)
 			r.Patch("/api/threads/{id}/mute", threads.Mute)
 			r.Patch("/api/threads/{id}/move", threads.Move)
 			r.Delete("/api/threads/{id}", threads.Delete)
@@ -267,6 +268,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Post("/api/drafts", drafts.Create)
 			r.Patch("/api/drafts/{id}", drafts.Update)
 			r.Delete("/api/drafts/{id}", drafts.Delete)
+			r.Post("/api/drafts/{id}/cancel-schedule", drafts.CancelSchedule)
 			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/drafts/{id}/send", drafts.Send)
 
 			// Labels

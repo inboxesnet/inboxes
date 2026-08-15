@@ -380,6 +380,15 @@ export function WSSync() {
           break;
         }
 
+        case "thread.snoozed":
+        case "thread.unsnoozed": {
+          // Snooze state changes which views hold the thread; a refetch of
+          // lists and counts keeps every open tab consistent.
+          qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+          qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+          break;
+        }
+
         case "thread.archived":
         case "thread.trashed":
         case "thread.spammed":

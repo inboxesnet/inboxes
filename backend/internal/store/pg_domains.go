@@ -67,6 +67,7 @@ func (s *PgStore) GetUnreadCounts(ctx context.Context, orgID string, role string
 		 JOIN thread_labels tl ON tl.thread_id = t.id
 		 JOIN domains d ON d.id = t.domain_id
 		 WHERE d.org_id = $1 AND tl.label = 'inbox' AND t.deleted_at IS NULL
+		 AND (t.snoozed_until IS NULL OR t.snoozed_until <= now())
 		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 	args := []interface{}{orgID}
 
