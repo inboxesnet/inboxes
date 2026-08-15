@@ -528,8 +528,53 @@ describe("WSSync event handling", () => {
     });
 
     expect(toast.warning).toHaveBeenCalledWith(
-      expect.stringContaining("cancelled")
+      expect.stringContaining("cancelled"),
+      expect.objectContaining({ id: "plan-changed" })
     );
+  });
+
+  it("plan.changed — past_due warns about the failed payment", async () => {
+    const { toast } = await import("sonner");
+    await mountWSSync();
+
+    fireEvent({
+      event: "plan.changed",
+      payload: { plan: "past_due" },
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(
+      expect.stringContaining("Payment failed"),
+      expect.objectContaining({ id: "plan-changed" })
+    );
+  });
+
+  it("plan.changed — free announces read-only mode", async () => {
+    const { toast } = await import("sonner");
+    await mountWSSync();
+
+    fireEvent({
+      event: "plan.changed",
+      payload: { plan: "free" },
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("read-only"),
+      expect.objectContaining({ id: "plan-changed" })
+    );
+  });
+
+  it("plan.changed — invalidates the billing query", async () => {
+    await mountWSSync();
+
+    fireEvent({
+      event: "plan.changed",
+      payload: { plan: "pro" },
+    });
+
+    const billingInvalidate = invalidateQueriesCalls.find(
+      (c) => JSON.stringify(c.queryKey) === JSON.stringify(["billing"])
+    );
+    expect(billingInvalidate).toBeTruthy();
   });
 
   // ── domain.disconnected ──

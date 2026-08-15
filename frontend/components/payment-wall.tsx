@@ -7,11 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { CreditCard } from "lucide-react";
-import type { User } from "@/lib/types";
+import type { BillingInfo, User } from "@/lib/types";
 
 export function PaymentWall() {
   const [open, setOpen] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [billing, setBilling] = useState<BillingInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const checkoutInFlight = useRef(false);
   const [polling, setPolling] = useState(false);
@@ -53,6 +54,7 @@ export function PaymentWall() {
       if (polling) return;
       setOpen(true);
       api.get<User>("/api/users/me").then(setUser).catch(() => { toast.error("Failed to load user info"); });
+      api.get<BillingInfo>("/api/billing").then(setBilling).catch(() => {});
     }
     window.addEventListener("payment-required", handlePaymentRequired);
     return () => window.removeEventListener("payment-required", handlePaymentRequired);
@@ -64,6 +66,12 @@ export function PaymentWall() {
     checkoutInFlight.current = true;
     setLoading(true);
     try {
+      if (billing?.plan === "past_due") {
+        // A failed payment is fixed in the Stripe portal, not with a new checkout
+        const res = await api.post<{ url: string }>("/api/billing/portal");
+        window.location.href = res.url;
+        return;
+      }
       const res = await api.post<{ url: string }>("/api/billing/checkout");
       const parsed = new URL(res.url);
       if (parsed.protocol !== "https:" || parsed.hostname !== "checkout.stripe.com") throw new Error("Invalid checkout URL");
@@ -97,15 +105,37 @@ export function PaymentWall() {
           <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
             <CreditCard className="h-6 w-6 text-primary" />
           </div>
-          <h2 className="text-lg font-semibold">Upgrade Required</h2>
+          <h2 className="text-lg font-semibold">
+            {billing?.plan === "past_due"
+              ? "Payment Failed"
+              : billing?.read_only
+                ? "Plan Expired"
+                : "Upgrade Required"}
+          </h2>
           {user?.role === "admin" ? (
             <>
               <p className="text-sm text-muted-foreground">
-                Your workspace needs an active subscription to use this feature.
+                {billing?.plan === "past_due"
+                  ? "The last payment failed. Update your payment method to keep full access."
+                  : billing?.read_only
+                    ? "Your plan expired. The workspace is read-only until you reactivate."
+                    : "Your workspace needs an active subscription to use this feature."}
               </p>
               <Button onClick={handleUpgrade} disabled={loading} className="w-full">
-                {loading ? "Redirecting..." : "Upgrade to Pro"}
+                {loading
+                  ? "Redirecting..."
+                  : billing?.plan === "past_due"
+                    ? "Update payment method"
+                    : billing?.read_only || billing?.plan === "cancelled"
+                      ? "Reactivate subscription"
+                      : "Upgrade to Pro"}
               </Button>
+              <a
+                href="/billing"
+                className="text-xs text-muted-foreground underline underline-offset-4"
+              >
+                View billing details
+              </a>
             </>
           ) : (
             <p className="text-sm text-muted-foreground">

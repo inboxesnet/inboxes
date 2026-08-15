@@ -15,7 +15,7 @@ export default function ErrorBoundary({
   }, [error]);
 
   return (
-    <div className="flex flex-col items-center justify-center h-dvh gap-4 px-4 text-center">
+    <div className="flex flex-col items-center justify-center h-full gap-4 px-4 text-center">
       <h2 className="text-lg font-semibold">Something went wrong</h2>
       <p className="text-sm text-muted-foreground max-w-md">
         An unexpected error occurred. Please try again.

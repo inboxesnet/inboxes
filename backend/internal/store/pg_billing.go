@@ -7,14 +7,14 @@ import (
 
 func (s *PgStore) GetBillingInfo(ctx context.Context, orgID string) (map[string]any, error) {
 	var plan string
-	var planExpiresAt *time.Time
+	var planExpiresAt, lapsedAt *time.Time
 	var stripeSubID *string
 	var stripeCustomerID *string
 
 	err := s.q.QueryRow(ctx,
-		"SELECT plan, plan_expires_at, stripe_subscription_id, stripe_customer_id FROM orgs WHERE id = $1",
+		"SELECT plan, plan_expires_at, lapsed_at, stripe_subscription_id, stripe_customer_id FROM orgs WHERE id = $1",
 		orgID,
-	).Scan(&plan, &planExpiresAt, &stripeSubID, &stripeCustomerID)
+	).Scan(&plan, &planExpiresAt, &lapsedAt, &stripeSubID, &stripeCustomerID)
 	if err != nil {
 		return nil, err
 	}
@@ -22,6 +22,7 @@ func (s *PgStore) GetBillingInfo(ctx context.Context, orgID string) (map[string]
 	result := map[string]any{
 		"plan":                   plan,
 		"plan_expires_at":        planExpiresAt,
+		"lapsed_at":              lapsedAt,
 		"stripe_subscription_id": stripeSubID,
 		"stripe_customer_id":     stripeCustomerID,
 	}

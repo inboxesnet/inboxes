@@ -66,6 +66,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	billing := &handler.BillingHandler{
 		Store:               st,
 		Bus:                 bus,
+		ResendSvc:           resendSvc,
 		StripeKey:           stripeKey,
 		StripePriceID:       cfg.StripePriceID,
 		StripeWebhookSecret: cfg.StripeWebhookSecret,

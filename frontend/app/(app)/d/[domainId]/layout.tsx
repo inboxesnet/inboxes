@@ -126,7 +126,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-dvh">
+      <div className="flex items-center justify-center h-full">
         <Spinner className="h-8 w-8" />
       </div>
     );
@@ -139,7 +139,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
       onDragEnd={handleDragEnd}
       accessibility={{ screenReaderInstructions: { draggable: "Drag to move between folders, or press V to open the move dialog" } }}
     >
-      <div className="flex h-dvh">
+      <div className="flex h-full">
         {/* Skip to main content — accessibility */}
         <a
           href="#main-content"

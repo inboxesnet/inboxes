@@ -22,4 +22,8 @@ export const queryKeys = {
     list: () => [...queryKeys.domains.all, "list"] as const,
     unreadCounts: () => [...queryKeys.domains.all, "unreadCounts"] as const,
   },
+  billing: {
+    all: ["billing"] as const,
+    info: () => [...queryKeys.billing.all, "info"] as const,
+  },
 };

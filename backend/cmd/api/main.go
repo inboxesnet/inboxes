@@ -112,7 +112,7 @@ func main() {
 	util.SafeGo("event-pruner", func() { eventPruner.Run(ctx) })
 
 	// Grace period worker (transitions expired cancelled/past_due plans to free)
-	gracePeriodWorker := worker.NewGracePeriodWorker(pool, bus, cfg.GracePeriodInterval)
+	gracePeriodWorker := worker.NewGracePeriodWorker(pool, bus, resendSvc, cfg.AppURL, cfg.GracePeriodInterval)
 	util.SafeGo("grace-period", func() { gracePeriodWorker.Run(ctx) })
 
 	// Stripe event dedup pruner (removes events older than 7 days)

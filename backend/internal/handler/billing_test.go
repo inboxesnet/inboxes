@@ -440,3 +440,77 @@ func TestGetBilling_FreePlan(t *testing.T) {
 		t.Errorf("plan_expires_at: got %v, want nil", body["plan_expires_at"])
 	}
 }
+
+func TestGetBilling_LapsedOrgIsReadOnly(t *testing.T) {
+	t.Parallel()
+	lapsed := time.Now().Add(-24 * time.Hour)
+	h := &BillingHandler{
+		Store: &store.MockStore{
+			GetBillingInfoFn: func(ctx context.Context, orgID string) (map[string]any, error) {
+				return map[string]any{
+					"plan":                   "free",
+					"plan_expires_at":        (*time.Time)(nil),
+					"lapsed_at":              &lapsed,
+					"stripe_subscription_id": (*string)(nil),
+				}, nil
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/billing", nil)
+	req = withClaims(req, "user-1", "org-1", "admin")
+	rec := httptest.NewRecorder()
+
+	h.GetBilling(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["plan"] != "free" {
+		t.Errorf("plan: got %q, want %q", body["plan"], "free")
+	}
+	if body["read_only"] != true {
+		t.Errorf("read_only: got %v, want true", body["read_only"])
+	}
+}
+
+func TestGetBilling_PastDueExpiredMasksAsFree(t *testing.T) {
+	t.Parallel()
+	pastExpiry := time.Now().Add(-1 * time.Hour)
+	h := &BillingHandler{
+		Store: &store.MockStore{
+			GetBillingInfoFn: func(ctx context.Context, orgID string) (map[string]any, error) {
+				return map[string]any{
+					"plan":                   "past_due",
+					"plan_expires_at":        &pastExpiry,
+					"lapsed_at":              (*time.Time)(nil),
+					"stripe_subscription_id": (*string)(nil),
+				}, nil
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/billing", nil)
+	req = withClaims(req, "user-1", "org-1", "admin")
+	rec := httptest.NewRecorder()
+
+	h.GetBilling(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["plan"] != "free" {
+		t.Errorf("plan: got %q, want %q (expired grace must mask as free)", body["plan"], "free")
+	}
+	if body["read_only"] != true {
+		t.Errorf("read_only: got %v, want true", body["read_only"])
+	}
+}

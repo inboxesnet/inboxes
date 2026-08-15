@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
+	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
 	"github.com/stripe/stripe-go/v84"
 	billingportalSession "github.com/stripe/stripe-go/v84/billingportal/session"
@@ -23,6 +24,7 @@ import (
 type BillingHandler struct {
 	Store               store.Store
 	Bus                 *event.Bus
+	ResendSvc           *service.ResendService
 	StripeKey           string
 	StripePriceID       string
 	StripeWebhookSecret string
@@ -186,17 +188,23 @@ func (h *BillingHandler) GetBilling(w http.ResponseWriter, r *http.Request) {
 
 	plan, _ := billingInfo["plan"].(string)
 	planExpiresAt, _ := billingInfo["plan_expires_at"].(*time.Time)
+	lapsedAt, _ := billingInfo["lapsed_at"].(*time.Time)
 	stripeSubID, _ := billingInfo["stripe_subscription_id"].(*string)
 
 	// If grace period has expired, report as "free" to the client
 	effectivePlan := plan
-	if plan == "cancelled" && planExpiresAt != nil && planExpiresAt.Before(time.Now()) {
+	if (plan == "cancelled" || plan == "past_due") && planExpiresAt != nil && planExpiresAt.Before(time.Now()) {
 		effectivePlan = "free"
 	}
+
+	// A lapsed org keeps read-only access to its mail.
+	readOnly := effectivePlan == "free" && (lapsedAt != nil || plan != "free")
 
 	resp := map[string]interface{}{
 		"plan":            effectivePlan,
 		"plan_expires_at": planExpiresAt,
+		"lapsed_at":       lapsedAt,
+		"read_only":       readOnly,
 		"billing_enabled": true,
 	}
 
@@ -310,7 +318,7 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 				updateQ := `UPDATE orgs SET plan = $1, updated_at = now() WHERE stripe_customer_id = $2`
 				// Clear plan_expires_at when restoring to pro
 				if plan == "pro" {
-					updateQ = `UPDATE orgs SET plan = $1, plan_expires_at = NULL, updated_at = now() WHERE stripe_customer_id = $2`
+					updateQ = `UPDATE orgs SET plan = $1, plan_expires_at = NULL, lapsed_at = NULL, expiry_notice_sent_at = NULL, updated_at = now() WHERE stripe_customer_id = $2`
 				}
 				tag, err := h.Store.Q().Exec(ctx, updateQ, plan, sub.Customer.ID)
 				if err != nil {
@@ -355,7 +363,7 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 		}
 		if sub.Customer != nil {
 			tag, err := h.Store.Q().Exec(ctx,
-				`UPDATE orgs SET plan = 'pro', plan_expires_at = NULL, updated_at = now() WHERE stripe_customer_id = $1`,
+				`UPDATE orgs SET plan = 'pro', plan_expires_at = NULL, lapsed_at = NULL, expiry_notice_sent_at = NULL, updated_at = now() WHERE stripe_customer_id = $1`,
 				sub.Customer.ID,
 			)
 			if err != nil {
@@ -375,7 +383,7 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 		}
 		if inv.Customer != nil {
 			tag, err := h.Store.Q().Exec(ctx,
-				`UPDATE orgs SET plan = 'pro', plan_expires_at = NULL
+				`UPDATE orgs SET plan = 'pro', plan_expires_at = NULL, lapsed_at = NULL, expiry_notice_sent_at = NULL
 				 WHERE stripe_customer_id = $1`,
 				inv.Customer.ID,
 			)
@@ -424,7 +432,7 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 		}
 		if inv.Customer != nil {
 			tag, err := h.Store.Q().Exec(ctx,
-				`UPDATE orgs SET plan = 'pro', plan_expires_at = NULL
+				`UPDATE orgs SET plan = 'pro', plan_expires_at = NULL, lapsed_at = NULL, expiry_notice_sent_at = NULL
 				 WHERE stripe_customer_id = $1`,
 				inv.Customer.ID,
 			)
@@ -447,7 +455,33 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 			break
 		}
 		if inv.Customer != nil {
-			slog.Warn("stripe: payment action required", "customer_id", inv.Customer.ID)
+			// The payment needs customer authentication (3DS/SCA). Move the
+			// org to past_due with a grace period, tell the app, and email
+			// the admins a link to complete the authentication.
+			tag, err := h.Store.Q().Exec(ctx,
+				`UPDATE orgs SET plan = 'past_due',
+				        plan_expires_at = COALESCE(plan_expires_at, $1),
+				        updated_at = now()
+				 WHERE stripe_customer_id = $2 AND plan != 'past_due'`,
+				time.Now().Add(14*24*time.Hour), inv.Customer.ID,
+			)
+			if err != nil {
+				slog.Error("stripe: update org after payment action required", "error", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if tag.RowsAffected() > 0 {
+				h.publishPlanChanged(ctx, inv.Customer.ID, "past_due")
+			}
+			payURL := inv.HostedInvoiceURL
+			if payURL == "" {
+				payURL = h.AppURL + "/billing"
+			}
+			h.notifyOrgAdminsByCustomer(ctx, inv.Customer.ID,
+				"Your payment needs authentication",
+				"<p>Your bank asks you to authenticate the last payment for Inboxes.</p>"+
+					"<p><a href=\""+payURL+"\">Complete the authentication</a> to keep your subscription active.</p>"+
+					"<p>If you do not complete it, your workspace will change to the free plan after the grace period.</p>")
 		}
 
 	case "invoice.marked_uncollectible":
@@ -535,7 +569,9 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 // updateOrgByCustomer updates an org's plan and subscription by Stripe customer ID.
 func (h *BillingHandler) updateOrgByCustomer(ctx context.Context, w http.ResponseWriter, customerID, plan, subID string, expiry *time.Time) {
 	tag, err := h.Store.Q().Exec(ctx,
-		`UPDATE orgs SET stripe_subscription_id = $1, plan = $2, plan_expires_at = NULL
+		`UPDATE orgs SET stripe_subscription_id = $1, plan = $2, plan_expires_at = NULL,
+		        lapsed_at = CASE WHEN $2 = 'pro' THEN NULL ELSE lapsed_at END,
+		        expiry_notice_sent_at = CASE WHEN $2 = 'pro' THEN NULL ELSE expiry_notice_sent_at END
 		 WHERE stripe_customer_id = $3`,
 		subID, plan, customerID,
 	)
@@ -567,6 +603,48 @@ func (h *BillingHandler) updateOrgByCustomerCancelled(ctx context.Context, w htt
 		slog.Warn("stripe: no org found for customer", "customer_id", customerID)
 	} else {
 		h.publishPlanChanged(ctx, customerID, "cancelled")
+	}
+}
+
+// notifyOrgAdminsByCustomer emails every active admin of the org that owns the
+// Stripe customer. Failures are logged only — billing state changes must not
+// depend on email delivery.
+func (h *BillingHandler) notifyOrgAdminsByCustomer(ctx context.Context, customerID, subject, html string) {
+	if h.ResendSvc == nil {
+		return
+	}
+	rows, err := h.Store.Q().Query(ctx,
+		`SELECT u.email FROM users u
+		 JOIN orgs o ON o.id = u.org_id
+		 WHERE o.stripe_customer_id = $1 AND u.role = 'admin' AND u.status = 'active'`,
+		customerID,
+	)
+	if err != nil {
+		slog.Error("billing: admin email lookup failed", "customer_id", customerID, "error", err)
+		return
+	}
+	defer rows.Close()
+	var emails []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err == nil && email != "" {
+			emails = append(emails, email)
+		}
+	}
+	if len(emails) == 0 {
+		return
+	}
+	from := h.ResendSvc.GetSystemFrom(ctx)
+	if from == "" {
+		from = "noreply@inboxes.net"
+	}
+	if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+		"from":    from,
+		"to":      emails,
+		"subject": subject,
+		"html":    html,
+	}); err != nil {
+		slog.Error("billing: admin notification email failed", "customer_id", customerID, "error", err)
 	}
 }
 

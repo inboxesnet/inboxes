@@ -1370,9 +1370,19 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-medium">Plan:</span>
                               <Badge variant={billingInfo.plan === "pro" ? "default" : "secondary"}>
-                                {billingInfo.plan === "pro" ? "Pro" : billingInfo.plan === "cancelled" ? "Cancelled" : "Free"}
+                                {billingInfo.plan === "pro" ? "Pro" : billingInfo.plan === "cancelled" ? "Cancelled" : billingInfo.plan === "past_due" ? "Payment failed" : "Free"}
                               </Badge>
                             </div>
+                            {billingInfo.plan === "past_due" && billingInfo.plan_expires_at && (
+                              <p className="text-sm text-muted-foreground">
+                                Full access until: {new Date(billingInfo.plan_expires_at).toLocaleDateString()}. Update your payment method to keep it.
+                              </p>
+                            )}
+                            {billingInfo.read_only && (
+                              <p className="text-sm text-destructive">
+                                The workspace is read-only. Reactivate to send mail again.
+                              </p>
+                            )}
                             {billingInfo.subscription && (
                               <>
                                 {billingInfo.subscription.cancel_at_period_end && (
@@ -1410,7 +1420,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                         )}
                       </CardContent>
                       <CardFooter className="flex-col items-start gap-2">
-                        {billingInfo?.plan === "pro" || (billingInfo?.plan === "cancelled" && billingInfo?.subscription) ? (
+                        {billingInfo?.plan === "pro" || billingInfo?.plan === "past_due" || (billingInfo?.plan === "cancelled" && billingInfo?.subscription) ? (
                           <Button onClick={handleManageBilling}>
                             Manage subscription
                           </Button>

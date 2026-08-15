@@ -257,14 +257,14 @@ export default function OnboardingPage() {
 
   if (!step) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center h-full">
         <Spinner className="h-8 w-8" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-muted/30 flex items-start justify-center pt-16 p-4">
+    <div className="min-h-full bg-muted/30 flex items-start justify-center pt-16 p-4">
       <div className="w-full max-w-2xl space-y-8">
         {billingSuccess && (
           <div className="bg-green-500/10 text-green-700 dark:text-green-400 text-sm text-center py-2 px-4 rounded-lg border border-green-500/20">

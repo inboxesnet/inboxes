@@ -178,8 +178,10 @@ export interface SyncJob {
 }
 
 export interface BillingInfo {
-  plan: "free" | "pro" | "cancelled";
+  plan: "free" | "pro" | "past_due" | "cancelled";
   plan_expires_at: string | null;
+  lapsed_at?: string | null;
+  read_only?: boolean;
   billing_enabled: boolean;
   subscription?: {
     status: string;

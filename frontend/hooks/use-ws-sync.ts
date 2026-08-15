@@ -727,11 +727,26 @@ export function WSSync() {
           const plan = msg.payload?.plan as string | undefined;
           if (plan === "cancelled") {
             toast.warning(
-              "Your subscription has been cancelled. Check Settings > Billing for details."
+              "Your subscription has been cancelled. Check Settings > Billing for details.",
+              { id: "plan-changed" }
+            );
+          } else if (plan === "past_due") {
+            toast.warning(
+              "Payment failed. Update your payment method to keep full access.",
+              { id: "plan-changed" }
+            );
+          } else if (plan === "free") {
+            toast.error(
+              "Your plan expired. The workspace is now read-only.",
+              { id: "plan-changed" }
             );
           } else if (plan === "pro") {
-            toast.success("Your subscription is now active!");
+            toast.success("Your subscription is now active!", {
+              id: "plan-changed",
+            });
           }
+          // Refresh the billing banner and anything a plan change gates
+          qc.invalidateQueries({ queryKey: queryKeys.billing.all });
           break;
         }
 

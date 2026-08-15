@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -225,6 +227,8 @@ func RequireOwner(db *pgxpool.Pool) func(http.Handler) http.Handler {
 
 // RequirePlan enforces an active subscription when Stripe is configured.
 // When stripeKey is empty (self-hosted), all requests pass through.
+// Lapsed orgs (downgraded after a grace period) keep read-only access:
+// GET and HEAD requests pass, all other methods get a 402.
 func RequirePlan(stripeKey string, db *pgxpool.Pool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,16 +244,24 @@ func RequirePlan(stripeKey string, db *pgxpool.Pool) func(http.Handler) http.Han
 			}
 
 			var plan string
-			var planExpiresAt *time.Time
+			var planExpiresAt, lapsedAt *time.Time
 			err := db.QueryRow(r.Context(),
-				"SELECT plan, plan_expires_at FROM orgs WHERE id = $1 AND deleted_at IS NULL", claims.OrgID,
-			).Scan(&plan, &planExpiresAt)
+				"SELECT plan, plan_expires_at, lapsed_at FROM orgs WHERE id = $1 AND deleted_at IS NULL", claims.OrgID,
+			).Scan(&plan, &planExpiresAt, &lapsedAt)
 			if err != nil {
-				http.Error(w, `{"error":"subscription_required"}`, http.StatusPaymentRequired)
+				writePlanRequired(w, "", nil, false)
 				return
 			}
 
-			if plan == "pro" || plan == "past_due" {
+			if plan == "pro" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// past_due keeps access until the grace period ends. A past_due
+			// org without an expiry (for example a paused subscription) also
+			// keeps access. cancelled keeps access only until the expiry.
+			inGrace := planExpiresAt == nil || planExpiresAt.After(time.Now())
+			if plan == "past_due" && inGrace {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -258,9 +270,32 @@ func RequirePlan(stripeKey string, db *pgxpool.Pool) func(http.Handler) http.Han
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusPaymentRequired)
-			w.Write([]byte(`{"error":"subscription_required"}`))
+			// Read-only mode for orgs that had a plan before. A cancelled org
+			// past its grace period counts as lapsed even before the grace
+			// period worker downgrades it.
+			lapsed := lapsedAt != nil || plan == "cancelled" || plan == "past_due"
+			if lapsed && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			writePlanRequired(w, plan, planExpiresAt, lapsed)
 		})
+	}
+}
+
+// writePlanRequired writes a 402 with enough detail for the frontend to route
+// the user to the correct billing state.
+func writePlanRequired(w http.ResponseWriter, plan string, planExpiresAt *time.Time, readOnly bool) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusPaymentRequired)
+	resp := map[string]interface{}{
+		"error":           "subscription_required",
+		"plan":            plan,
+		"plan_expires_at": planExpiresAt,
+		"read_only":       readOnly,
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Warn("middleware: write 402 response failed", "error", err)
 	}
 }
