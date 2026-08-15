@@ -214,6 +214,7 @@ All accept Go duration strings (e.g., `1h`, `5m`, `30s`).
 | `TRASH_COLLECTOR_ENABLED` | `false` | Set to `true` to enable the trash collector |
 | `EVENT_PRUNER_INTERVAL` | `6h` | How often to prune old WebSocket events |
 | `STATUS_RECOVERY_INTERVAL` | `5m` | How often to poll Resend for stale outbound email statuses |
+| `SEND_RECONCILE_INTERVAL` | `10m` | How often to sweep for stuck queued sends |
 | `STRIPE_EVENT_PRUNER_INTERVAL` | `6h` | How often to prune old Stripe dedup events |
 | `GRACE_PERIOD_INTERVAL` | `1h` | How often to check for expired plan grace periods |
 

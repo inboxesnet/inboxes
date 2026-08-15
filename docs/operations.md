@@ -39,8 +39,10 @@ The backend starts 9 background workers (plus 2 stale-recovery companions) along
 - **Initial delay:** 30 seconds after startup
 - **Behavior:**
   - Fetches domains from Resend for each org with an API key
-  - Marks domains `disconnected` if missing from Resend or API key is revoked (403)
-  - Self-heals: reconnects domains that reappear in Resend
+  - Marks domains `disconnected` if missing from Resend
+  - On a revoked API key (401/403): marks the org's key `invalid` and disconnects all its domains
+  - On success: marks the org's key `valid` (shown in Settings → Organization)
+  - Self-heals: reconnects domains that reappear in Resend, with the status Resend reports
   - Tracks SPF/DKIM verification status changes; publishes `domain.dns_degraded` events
   - Transient errors (5xx) are skipped -- no false disconnections
 
@@ -57,7 +59,10 @@ The backend starts 9 background workers (plus 2 stale-recovery companions) along
 - **Purpose:** Transitions orgs from `cancelled` or `past_due` plan to `free` after their grace period (`plan_expires_at`) has elapsed
 - **Interval:** `GRACE_PERIOD_INTERVAL` (default `1h`)
 - **Initial delay:** 1 minute after startup
-- **Behavior:** Publishes `plan.changed` events for each transitioned org
+- **Behavior:**
+  - Sends a warning email to org admins 3 days (72h) before the downgrade; sends it once per grace period
+  - On downgrade, sets `lapsed_at` so the org enters read-only mode (GET/HEAD allowed, writes blocked)
+  - Publishes `plan.changed` events for each transitioned org
 
 ### Stripe Event Pruner
 
@@ -68,12 +73,19 @@ The backend starts 9 background workers (plus 2 stale-recovery companions) along
 
 ### Status Recovery
 
-- **Purpose:** Polls Resend for the true status of outbound emails stuck in `received` state
+- **Purpose:** Polls Resend for the true status of outbound emails stuck in `received` or `sent` state
 - **Interval:** `STATUS_RECOVERY_INTERVAL` (default `5m`)
 - **Initial delay:** 2 minutes after startup
-- **Scope:** Outbound emails with `status = 'received'` older than 10 minutes but newer than 24 hours
+- **Scope:** Outbound emails with `status IN ('received','sent')` older than 10 minutes but newer than 24 hours; each email is re-checked at most every 30 minutes
 - **Batch size:** 50 emails per run
 - **Rate-limited:** Uses per-org Resend rate limiter
+
+### Send Reconciler
+
+- **Purpose:** Finds outbound emails stuck in `queued` with no pending or running send job (for example after a crash mid-send), marks them `failed`, and creates a recovery draft so the user can resend
+- **Interval:** `SEND_RECONCILE_INTERVAL` (default `10m`)
+- **Scope:** Outbound emails with `status = 'queued'` older than 15 minutes
+- **Behavior:** Publishes `email.status_updated` events for each recovered email
 
 ### Inbox Poller
 
@@ -241,6 +253,7 @@ All accept Go duration strings (e.g., `5m`, `1h`, `30s`). Values must be positiv
 | `EVENT_PRUNER_INTERVAL` | `6h` | How often to prune old events |
 | `EVENT_RETENTION_DAYS` | `90` | How long to keep events. Set to `0` to disable pruning |
 | `STATUS_RECOVERY_INTERVAL` | `5m` | How often to poll Resend for stale email statuses |
+| `SEND_RECONCILE_INTERVAL` | `10m` | How often to sweep for stuck queued sends |
 | `STRIPE_EVENT_PRUNER_INTERVAL` | `6h` | How often to prune old Stripe dedup records |
 | `GRACE_PERIOD_INTERVAL` | `1h` | How often to check for expired grace periods |
 

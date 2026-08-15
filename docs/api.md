@@ -311,6 +311,8 @@ Accessible even without an active plan (needed to subscribe).
 {
   "plan": "pro",
   "plan_expires_at": null,
+  "read_only": false,
+  "lapsed_at": null,
   "billing_enabled": true,
   "subscription": {
     "status": "active",
@@ -319,7 +321,7 @@ Accessible even without an active plan (needed to subscribe).
   }
 }
 ```
-`plan` values: `free`, `pro`, `past_due`, `cancelled`.
+`plan` values: `free`, `pro`, `past_due`, `cancelled`. An expired `past_due` or `cancelled` plan reports as `free` with `read_only: true`. A read-only org can make GET/HEAD requests; writes return `402` with `{"error": "subscription_required", "read_only": true}`.
 
 **POST /api/billing/checkout** response:
 ```json
@@ -490,6 +492,7 @@ Returns `{"webhook_skipped": true, "reason": "..."}` if `PUBLIC_URL` is localhos
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/threads` | List threads |
+| `GET` | `/api/threads/counts` | Per-label counts for the sidebar (drafts, spam unread, failed, custom labels) |
 | `PATCH` | `/api/threads/bulk` | Bulk action on multiple threads |
 | `GET` | `/api/threads/{id}` | Get thread with all emails |
 | `PATCH` | `/api/threads/{id}/read` | Mark thread as read |
@@ -563,6 +566,7 @@ Valid system labels: `inbox`, `trash`, `spam`, `archive`. Custom label names are
 | Method | Path | Rate Limit | Description |
 |--------|------|------------|-------------|
 | `POST` | `/api/emails/send` | 20/IP + 30/user per min | Send an email (queued via job system) |
+| `POST` | `/api/emails/{id}/retry` | 20/IP + 30/user per min | Re-queue a failed outbound email |
 | `GET` | `/api/emails/search` | -- | Search emails |
 
 **POST /api/emails/send** body:
@@ -590,11 +594,26 @@ Validates sender authorization, checks bounce block list, enforces 50-recipient 
 **GET /api/emails/search** query params:
 - `q` (required) -- search query
 - `domain_id` (optional) -- filter by domain
+- `label` (optional) -- restrict the search to one label/folder
+- `page` (optional, default 1) -- page number; page size is 50
+
+The query supports operators: `from:`, `to:`, `has:attachment`, `before:YYYY-MM-DD`, `after:YYYY-MM-DD`. Other terms match subject, body, and participants.
 
 Response:
 ```json
-{ "threads": [...] }
+{ "threads": [...], "total": 123, "page": 1, "limit": 50 }
 ```
+
+**POST /api/emails/{id}/retry**: Re-queues an outbound email in `failed`, `bounced`, or stuck `queued` state. Returns `202 Accepted` and publishes an `email.status_updated` event.
+
+### Bounces
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/bounces` | Any user | List blocked recipients for the org |
+| `DELETE` | `/api/bounces/{id}` | **Admin only** | Unblock a recipient |
+
+A hard bounce blocks only the recipient that bounced (not co-recipients). Blocks expire automatically after 30 days. An inbound email from a blocked address also unblocks it. The list response includes `expiry_days`.
 
 ### Domains
 
@@ -610,6 +629,8 @@ Response:
 | `PATCH` | `/api/domains/visibility` | **Admin only** | Show/hide domains in sidebar |
 | `GET` | `/api/domains/unread-counts` | Any user | Unread counts per domain |
 | `POST` | `/api/domains/sync` | Any user | Sync domain list from Resend |
+| `GET` | `/api/domains/discovered` | Any user | Domains found in the Resend account but not added yet |
+| `POST` | `/api/domains/discovered/{id}/dismiss` | Any user | Hide a discovered domain |
 
 **POST /api/domains** body:
 ```json
@@ -619,6 +640,7 @@ Response (201):
 ```json
 { "id": "uuid", "domain": "example.com", "resend_domain_id": "...", "status": "pending", "dns_records": [...] }
 ```
+When the domain already exists in the Resend account, the endpoint imports it with its current Resend status instead of creating a duplicate.
 
 **PATCH /api/domains/reorder** body:
 ```json

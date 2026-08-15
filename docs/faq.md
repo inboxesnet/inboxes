@@ -21,6 +21,24 @@ However, on the **receiving side**, BCC recipients will not see any indication t
 
 This behavior is consistent with how Gmail, Outlook, and other major email clients handle BCC.
 
+## What search operators can I use?
+
+The search bar supports these operators:
+
+| Operator | Example | Matches |
+|----------|---------|---------|
+| `from:` | `from:alice@example.com` | Sender address |
+| `to:` | `to:bob@example.com` | Recipient address |
+| `has:attachment` | `invoice has:attachment` | Emails with attachments |
+| `before:` | `before:2026-01-01` | Emails before a date |
+| `after:` | `after:2026-01-01` | Emails after a date |
+
+Plain terms match the subject, body, and participants. While a search is active, a scope chip lets you limit results to the current folder. Results paginate at 50 threads per page.
+
+## Why is a recipient "blocked", and how do I unblock them?
+
+When a send hard-bounces, Inboxes blocks that recipient to protect your domain reputation. Only the address that bounced is blocked — co-recipients on the same email are not. Blocks expire on their own after 30 days. To unblock earlier: Settings → Organization → Blocked Addresses → remove the address (admin only). An inbound email from a blocked address also unblocks it.
+
 ## I enabled desktop notifications but they're not showing up
 
 **Most likely cause:** You clicked "Enable" on the in-app prompt, but then clicked "Don't Allow" (or "Block") on the browser's permission dialog. Once denied, the browser permanently blocks notifications for the site and won't ask again.

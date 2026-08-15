@@ -62,6 +62,7 @@ When `STRIPE_KEY` is set (non-empty), the backend requires all of the following 
 | `TRASH_COLLECTOR_INTERVAL` | `1h` | How often to purge expired trash |
 | `EVENT_PRUNER_INTERVAL` | `6h` | How often to prune old events |
 | `STATUS_RECOVERY_INTERVAL` | `5m` | How often to poll Resend for stale outbound email statuses |
+| `SEND_RECONCILE_INTERVAL` | `10m` | How often to sweep for stuck queued sends and fail them with a recovery draft |
 | `GRACE_PERIOD_INTERVAL` | `1h` | How often to check for expired grace periods |
 | `STRIPE_EVENT_PRUNER_INTERVAL` | `6h` | How often to prune old Stripe dedup events |
 
