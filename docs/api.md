@@ -501,6 +501,7 @@ Returns `{"webhook_skipped": true, "reason": "..."}` if `PUBLIC_URL` is localhos
 | `PATCH` | `/api/threads/{id}/archive` | Move to archive |
 | `PATCH` | `/api/threads/{id}/trash` | Move to trash (30-day auto-purge) |
 | `PATCH` | `/api/threads/{id}/spam` | Mark as spam or not-spam |
+| `PATCH` | `/api/threads/{id}/snooze` | Snooze until a time, or unsnooze with `{"until": null}` |
 | `PATCH` | `/api/threads/{id}/mute` | Toggle mute |
 | `PATCH` | `/api/threads/{id}/move` | Move to a label/folder |
 | `DELETE` | `/api/threads/{id}` | Permanently delete (must be in trash) |
@@ -567,6 +568,7 @@ Valid system labels: `inbox`, `trash`, `spam`, `archive`. Custom label names are
 |--------|------|------------|-------------|
 | `POST` | `/api/emails/send` | 20/IP + 30/user per min | Send an email (queued via job system) |
 | `POST` | `/api/emails/{id}/retry` | 20/IP + 30/user per min | Re-queue a failed outbound email |
+| `POST` | `/api/emails/{id}/cancel-send` | -- | Undo a send inside the undo window (sender only) |
 | `GET` | `/api/emails/search` | -- | Search emails |
 
 **POST /api/emails/send** body:
@@ -760,7 +762,8 @@ Returns `204 No Content`.
 | `POST` | `/api/drafts` | -- | Create draft |
 | `PATCH` | `/api/drafts/{id}` | -- | Update draft |
 | `DELETE` | `/api/drafts/{id}` | -- | Delete draft |
-| `POST` | `/api/drafts/{id}/send` | 20/IP + 30/user per min | Send a draft |
+| `POST` | `/api/drafts/{id}/send` | 20/IP + 30/user per min | Send a draft. Body `{"scheduled_at": "..."}` schedules it (1 min to 30 days out) |
+| `POST` | `/api/drafts/{id}/cancel-schedule` | -- | Cancel a scheduled send; the draft stays |
 
 **GET /api/drafts** query params:
 - `domain_id` (optional) -- filter by domain
@@ -816,12 +819,36 @@ The draft is deleted by the worker after successful send.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/labels` | List custom labels |
+| `GET` | `/api/labels` | List custom labels (ordered by `display_order`) |
 | `POST` | `/api/labels` | Create label |
+| `PATCH` | `/api/labels/reorder` | Reorder labels: `{"order": [{"id": "...", "order": 0}, ...]}` |
 | `PATCH` | `/api/labels/{id}` | Rename label |
 | `DELETE` | `/api/labels/{id}` | Delete label |
 
 System labels (`inbox`, `sent`, `trash`, `spam`, `starred`, `archive`, `drafts`) and `alias:*` labels are reserved and cannot be used for custom labels.
+
+### Rules (Forwarding and Auto-Reply)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/forwarding-rules` | List rules (admins: all; members: for their aliases) |
+| `POST` | `/api/forwarding-rules` | Create: `{"alias_id": "...", "forward_to": "a@b.com"}` |
+| `PATCH` | `/api/forwarding-rules/{id}` | Enable or disable: `{"enabled": true}` |
+| `DELETE` | `/api/forwarding-rules/{id}` | Delete rule |
+| `GET` | `/api/auto-replies` | List auto-replies |
+| `POST` | `/api/auto-replies` | Upsert per alias: subject, body, optional `starts_at`/`ends_at` |
+| `DELETE` | `/api/auto-replies/{id}` | Delete auto-reply |
+
+Users manage rules only for aliases assigned to them; admins for any alias. The org policy flags (`forwarding_enabled`, `auto_reply_enabled`, `external_forwarding_allowed` on `/api/orgs/settings`) gate what rules can exist. Auto-replies send at most one reply per sender per 24 hours.
+
+### Signature and Undo Send
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PATCH` | `/api/users/me/signature` | Save the signature: `{"signature_html": "..."}` (sanitized server-side) |
+| `PATCH` | `/api/users/me` | Also accepts `{"undo_send_seconds": 0\|5\|10\|30}` |
+
+Send responses include `undo_seconds`. While the window is open, `POST /api/emails/{id}/cancel-send` undoes the send and returns a `draft_id`.
 
 **POST /api/labels** body:
 ```json

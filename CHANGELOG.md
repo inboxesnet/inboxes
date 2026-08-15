@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.2.0
+
+### Compose and sending
+
+- Per-user rich HTML signatures, auto-inserted on new messages and replies
+- Undo send: a 0/5/10/30 second hold with an Undo action on the send toast
+- Scheduled send: pick a preset or a custom time up to 30 days out; cancel
+  from the drafts list, which keeps the draft
+- The schedule state lives in Postgres, so a Redis restart cannot lose it
+
+### Inbox
+
+- Snooze: hide a thread until a wake time; a Snoozed sidebar view lists
+  active snoozes and a scheduler wakes them on time
+- Custom label ordering with up/down controls in settings
+
+### Rules
+
+- Forwarding rules: forward inbound alias mail to another address
+- Auto-replies: per-alias message with an optional time window, one reply
+  per sender per 24 hours
+- Org policy controls: admins allow or block forwarding, external targets,
+  and auto-replies; users manage rules only for their own aliases
+- Loop guards: automated senders are skipped, self-forwards rejected, and
+  rule sends carry an Auto-Submitted header
+
+### Fixes
+
+- A move to spam now also restores the thread from trash and clears the
+  purge timer
+- The onboarding "skip" now parks the alias instead of leaving it assigned
+- New passwords are checked against the Pwned Passwords breach list
+  (k-anonymity, fail-open; HIBP_CHECK_DISABLED=true turns it off)
+- The domain heartbeat auto-registers a missing Resend webhook
+- A cancelled send job can never run, even in a dispatch race
+
 ## v1.1.0
 
 ### Billing (commercial mode)

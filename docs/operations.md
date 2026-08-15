@@ -87,6 +87,25 @@ The backend starts 9 background workers (plus 2 stale-recovery companions) along
 - **Scope:** Outbound emails with `status = 'queued'` older than 15 minutes
 - **Behavior:** Publishes `email.status_updated` events for each recovered email
 
+### Scheduler
+
+- **Purpose:** Releases due scheduled send jobs (`email_jobs.run_after`) to the work queue, and wakes snoozed threads (`threads.snoozed_until`)
+- **Interval:** `SCHEDULER_INTERVAL` (default `30s`)
+- **Durability:** The schedule state lives in Postgres, so a Redis restart cannot lose or early-fire a scheduled email
+- **Behavior:** Publishes `thread.unsnoozed` events on wake
+
+### Undo-Send Dispatcher
+
+- **Purpose:** Holds each send in a Redis delay set for the sender's undo window (0-30s), then moves it to the work queue
+- **Interval:** ticks every second
+- **Behavior:** A cancelled job is skipped even when the dispatch races the undo
+
+### Inbound Rules Engine
+
+- **Purpose:** Runs forwarding rules and auto-replies after each inbound email is stored
+- **Guards:** Skips spam, bounces, and automated senders; auto-replies are rate limited to one per sender per rule per 24 hours; rule sends carry an `Auto-Submitted` header
+- **Policy:** Org flags `forwarding_enabled`, `auto_reply_enabled`, `external_forwarding_allowed` gate what users can configure
+
 ### Inbox Poller
 
 - **Purpose:** Auto-syncs inbound and sent emails from Resend for orgs that have `auto_poll_enabled = true` -- designed for self-hosted / no-webhook environments
@@ -254,6 +273,7 @@ All accept Go duration strings (e.g., `5m`, `1h`, `30s`). Values must be positiv
 | `EVENT_RETENTION_DAYS` | `90` | How long to keep events. Set to `0` to disable pruning |
 | `STATUS_RECOVERY_INTERVAL` | `5m` | How often to poll Resend for stale email statuses |
 | `SEND_RECONCILE_INTERVAL` | `10m` | How often to sweep for stuck queued sends |
+| `SCHEDULER_INTERVAL` | `30s` | How often to release scheduled sends and wake snoozed threads |
 | `STRIPE_EVENT_PRUNER_INTERVAL` | `6h` | How often to prune old Stripe dedup records |
 | `GRACE_PERIOD_INTERVAL` | `1h` | How often to check for expired grace periods |
 
