@@ -20,15 +20,10 @@ export interface Domain {
   org_id: string;
   domain: string;
   resend_domain_id: string;
-  status: "pending" | "not_started" | "verified" | "active";
-  mx_verified: boolean;
-  spf_verified: boolean;
-  dkim_verified: boolean;
-  catch_all_enabled: boolean;
+  status: "pending" | "verified" | "active" | "disconnected" | "deleted";
   display_order: number;
   dns_records: unknown;
   hidden: boolean;
-  verified_at: string | null;
   created_at: string;
 }
 

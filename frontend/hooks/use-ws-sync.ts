@@ -777,8 +777,10 @@ export function WSSync() {
           const domain = msg.payload?.domain as string | undefined;
           const degraded = msg.payload?.degraded as string[] | undefined;
           toast.warning(
-            `DNS records changed for ${domain || ""}: ${degraded?.join(", ") || "verification failed"}`
+            `DNS records changed for ${domain || ""}: ${degraded?.join(", ") || "verification failed"}. Check Settings > Domains.`,
+            { id: `dns-degraded-${domain || "unknown"}` }
           );
+          qc.invalidateQueries({ queryKey: queryKeys.domains.list() });
           break;
         }
       }

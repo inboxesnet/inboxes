@@ -86,7 +86,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	domainMap := make(map[string]string) // domain name -> domain ID
 	if len(domainNames) > 0 {
 		rows, err := w.store.Q().Query(ctx,
-			"SELECT id, domain FROM domains WHERE org_id = $1 AND domain = ANY($2) AND status = 'active' AND hidden = false",
+			"SELECT id, domain FROM domains WHERE org_id = $1 AND domain = ANY($2) AND status IN ('active', 'verified') AND hidden = false",
 			orgID, domainNames,
 		)
 		if err == nil {

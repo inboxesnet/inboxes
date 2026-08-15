@@ -64,7 +64,7 @@ func (h *DomainHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	respBytes, err := h.ResendSvc.Fetch(r.Context(), claims.OrgID, "POST", "/domains", bodyBytes)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "failed to create domain in Resend")
+		writeResendError(w, err, "failed to create domain in Resend")
 		return
 	}
 
@@ -107,10 +107,17 @@ func (h *DomainHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify via Resend
-	respBytes, err := h.ResendSvc.Fetch(r.Context(), claims.OrgID, "POST", "/domains/"+resendDomainID+"/verify", nil)
+	// Trigger the verification in Resend
+	if _, err := h.ResendSvc.Fetch(r.Context(), claims.OrgID, "POST", "/domains/"+resendDomainID+"/verify", nil); err != nil {
+		writeResendError(w, err, "failed to verify domain")
+		return
+	}
+
+	// Read the current status and records back. The verify call itself does
+	// not return the full state.
+	respBytes, err := h.ResendSvc.Fetch(r.Context(), claims.OrgID, "GET", "/domains/"+resendDomainID, nil)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "failed to verify domain")
+		writeResendError(w, err, "failed to read domain status")
 		return
 	}
 
@@ -124,16 +131,21 @@ func (h *DomainHandler) Verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update local record
-	if err := h.Store.UpdateDomainStatus(r.Context(), domainID, result.Status, result.Records); err != nil {
+	// Resend statuses like not_started and failed are not valid local enum
+	// values — normalize before the write, and fail loudly if the write fails.
+	localStatus := service.NormalizeDomainStatus(result.Status)
+	if err := h.Store.UpdateDomainStatus(r.Context(), domainID, localStatus, result.Records); err != nil {
 		slog.Error("domain: update after verify failed", "domain_id", domainID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save domain status")
+		return
 	}
 
-	slog.Info("domain: verified", "domain_id", domainID, "status", result.Status)
+	slog.Info("domain: verified", "domain_id", domainID, "status", localStatus, "resend_status", result.Status)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":      result.Status,
-		"dns_records": result.Records,
+		"status":        localStatus,
+		"resend_status": result.Status,
+		"dns_records":   result.Records,
 	})
 }
 
@@ -215,7 +227,7 @@ func (h *DomainHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	// Fetch domains from Resend
 	respBytes, err := h.ResendSvc.Fetch(r.Context(), claims.OrgID, "GET", "/domains", nil)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "failed to fetch domains from Resend")
+		writeResendError(w, err, "failed to fetch domains from Resend")
 		return
 	}
 
@@ -232,10 +244,11 @@ func (h *DomainHandler) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build store-compatible domain info slice
+	// Build store-compatible domain info slice. Normalize Resend statuses to
+	// valid local enum values so the upsert cannot fail on the enum.
 	resendDomains := make([]store.ResendDomainInfo, len(resendResp.Data))
 	for i, rd := range resendResp.Data {
-		resendDomains[i] = store.ResendDomainInfo{ID: rd.ID, Name: rd.Name, Status: rd.Status}
+		resendDomains[i] = store.ResendDomainInfo{ID: rd.ID, Name: rd.Name, Status: service.NormalizeDomainStatus(rd.Status)}
 	}
 
 	if err := h.Store.SyncDomains(r.Context(), claims.OrgID, resendDomains); err != nil {
@@ -257,6 +270,10 @@ func (h *DomainHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	domainID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
+	// Look up the Resend domain id before the delete, so the domain can also
+	// be removed from Resend and does not come back as "Found in Resend".
+	resendDomainID, _ := h.Store.GetResendDomainID(ctx, domainID, claims.OrgID)
+
 	txErr := h.Store.WithTx(ctx, func(tx store.Store) error {
 		rows, err := tx.SoftDeleteDomain(ctx, domainID, claims.OrgID)
 		if err != nil || rows == 0 {
@@ -271,6 +288,13 @@ func (h *DomainHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to delete domain")
 		}
 		return
+	}
+
+	// Best-effort Resend delete. A failure only logs — the local delete holds.
+	if resendDomainID != "" {
+		if _, err := h.ResendSvc.Fetch(ctx, claims.OrgID, "DELETE", "/domains/"+resendDomainID, nil); err != nil {
+			slog.Error("domain: delete from Resend failed", "domain_id", domainID, "resend_domain_id", resendDomainID, "error", err)
+		}
 	}
 
 	slog.Info("domain: soft-deleted with cascade", "domain_id", domainID, "admin", claims.UserID)

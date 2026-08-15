@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 )
 
@@ -128,7 +129,7 @@ func (s *PgStore) SyncDomains(ctx context.Context, orgID string, resendDomains [
 	}
 
 	localRows, err := s.q.Query(ctx,
-		`SELECT id, domain, status FROM domains WHERE org_id = $1`, orgID)
+		`SELECT id, domain, status FROM domains WHERE org_id = $1 AND status != 'deleted'`, orgID)
 	if err != nil {
 		return err
 	}
@@ -159,17 +160,19 @@ func (s *PgStore) SoftDeleteDomain(ctx context.Context, domainID, orgID string) 
 }
 
 func (s *PgStore) CascadeDeleteDomain(ctx context.Context, domainID string) error {
-	if _, err := s.q.Exec(ctx, `UPDATE aliases SET deleted_at = now() WHERE domain_id = $1 AND deleted_at IS NULL`, domainID); err != nil {
-		slog.Error("domain: cascade delete aliases failed", "domain_id", domainID, "error", err)
-	}
+	// Runs inside the delete transaction — any failure must roll back the
+	// whole delete, so errors are returned, not swallowed.
 	if _, err := s.q.Exec(ctx, `DELETE FROM alias_users WHERE alias_id IN (SELECT id FROM aliases WHERE domain_id = $1)`, domainID); err != nil {
-		slog.Error("domain: cascade delete alias_users failed", "domain_id", domainID, "error", err)
+		return fmt.Errorf("cascade delete alias_users: %w", err)
+	}
+	if _, err := s.q.Exec(ctx, `UPDATE aliases SET deleted_at = now() WHERE domain_id = $1 AND deleted_at IS NULL`, domainID); err != nil {
+		return fmt.Errorf("cascade delete aliases: %w", err)
 	}
 	if _, err := s.q.Exec(ctx, `UPDATE threads SET deleted_at = now(), updated_at = now() WHERE domain_id = $1 AND deleted_at IS NULL`, domainID); err != nil {
-		slog.Error("domain: cascade delete threads failed", "domain_id", domainID, "error", err)
+		return fmt.Errorf("cascade delete threads: %w", err)
 	}
 	if _, err := s.q.Exec(ctx, `DELETE FROM discovered_addresses WHERE domain_id = $1`, domainID); err != nil {
-		slog.Error("domain: cascade delete discovered_addresses failed", "domain_id", domainID, "error", err)
+		return fmt.Errorf("cascade delete discovered_addresses: %w", err)
 	}
 	return nil
 }

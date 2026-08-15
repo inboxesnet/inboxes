@@ -148,12 +148,14 @@ function SortableDomainIcon({
   domain,
   active,
   hasUnread,
+  status,
   onClick,
 }: {
   id: string;
   domain: string;
   active: boolean;
   hasUnread: boolean;
+  status?: string;
   onClick: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({
@@ -173,6 +175,7 @@ function SortableDomainIcon({
         domain={domain}
         active={active}
         hasUnread={hasUnread}
+        status={status}
         onClick={onClick}
       />
     </div>
@@ -319,6 +322,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
                   domain={d.domain}
                   active={activeDomain?.id === d.id}
                   hasUnread={(unreadCounts[d.id] || 0) > 0}
+                  status={d.status}
                   onClick={() => navigateToDomain(d.id)}
                 />
               ))}
@@ -420,6 +424,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
                   domain={d.domain}
                   active={activeDomain?.id === d.id}
                   hasUnread={(unreadCounts[d.id] || 0) > 0}
+                  status={d.status}
                   onClick={() => navigateToDomain(d.id)}
                 />
               ))}

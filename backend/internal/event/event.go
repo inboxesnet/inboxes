@@ -36,6 +36,7 @@ const (
 	DomainReconnected  = "domain.reconnected"
 	DomainNotFound     = "domain.not_found"
 	DomainDiscovered   = "domain.discovered"
+	DomainDnsDegraded  = "domain.dns_degraded"
 )
 
 type Event struct {

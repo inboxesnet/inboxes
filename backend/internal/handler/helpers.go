@@ -2,13 +2,43 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/mail"
 	"strings"
 	"unicode"
+
+	"github.com/inboxes/backend/internal/service"
 )
+
+// writeResendError logs a Resend API failure and surfaces the real Resend
+// message to the client where that is safe. The fallback text is used when
+// the error carries no usable message.
+func writeResendError(w http.ResponseWriter, err error, fallback string) {
+	var re *service.ResendError
+	if errors.As(err, &re) {
+		slog.Error("resend: request failed", "status", re.StatusCode, "body", re.Body)
+		switch {
+		case re.StatusCode == 401 || re.StatusCode == 403:
+			writeError(w, http.StatusBadGateway, "Resend rejected the API key. Check the key in Settings.")
+		case re.StatusCode == 429:
+			writeError(w, http.StatusTooManyRequests, "Resend rate limit reached. Try again in a moment.")
+		case re.StatusCode >= 400 && re.StatusCode < 500:
+			msg := re.Message()
+			if msg == "" {
+				msg = fallback
+			}
+			writeError(w, http.StatusBadRequest, msg)
+		default:
+			writeError(w, http.StatusBadGateway, fallback)
+		}
+		return
+	}
+	slog.Error("resend: request failed", "error", err)
+	writeError(w, http.StatusBadGateway, fallback)
+}
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

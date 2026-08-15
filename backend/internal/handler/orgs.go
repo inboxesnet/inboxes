@@ -38,6 +38,8 @@ func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		"name":                 settings["name"],
 		"onboarding_completed": settings["onboarding_completed"],
 		"has_api_key":          settings["has_api_key"],
+		"api_key_status":       settings["api_key_status"],
+		"api_key_checked_at":   settings["api_key_checked_at"],
 		"billing_enabled":      h.StripeKey != "",
 		"resend_rps":           settings["resend_rps"],
 	}
@@ -109,6 +111,13 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.APIKey != "" {
+		// Validate the key against Resend before it is stored. A bad key
+		// would otherwise disconnect every domain on the next heartbeat.
+		if _, err := service.ResendDirectFetch(req.APIKey, "GET", "/domains", nil); err != nil {
+			slog.Warn("org: rejected invalid Resend API key", "org_id", claims.OrgID, "error", err)
+			writeError(w, http.StatusBadRequest, "Resend rejected this API key. Check that the key is a full-access key.")
+			return
+		}
 		ciphertext, iv, tag, err := h.EncSvc.Encrypt(req.APIKey)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to encrypt API key")
@@ -117,6 +126,9 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if err := h.Store.UpdateOrgAPIKey(r.Context(), claims.OrgID, ciphertext, iv, tag); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update API key")
 			return
+		}
+		if err := h.Store.SetAPIKeyStatus(r.Context(), claims.OrgID, "valid"); err != nil {
+			slog.Error("org: failed to record api key status", "org_id", claims.OrgID, "error", err)
 		}
 		h.ResendSvc.InvalidateOrgKeyCache(claims.OrgID)
 	}

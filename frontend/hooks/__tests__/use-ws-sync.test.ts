@@ -655,10 +655,12 @@ describe("WSSync event handling", () => {
     });
 
     expect(toast.warning).toHaveBeenCalledWith(
-      expect.stringContaining("test.com")
+      expect.stringContaining("test.com"),
+      expect.objectContaining({ id: "dns-degraded-test.com" })
     );
     expect(toast.warning).toHaveBeenCalledWith(
-      expect.stringContaining("SPF")
+      expect.stringContaining("SPF"),
+      expect.anything()
     );
   });
 

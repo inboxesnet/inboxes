@@ -138,6 +138,7 @@ type MockStore struct {
 
 	// ---- Orgs ----
 	GetOrgSettingsFn            func(ctx context.Context, orgID string) (map[string]any, error)
+	SetAPIKeyStatusFn           func(ctx context.Context, orgID, status string) error
 	UpdateOrgNameFn             func(ctx context.Context, orgID, name string) error
 	UpdateOrgAPIKeyFn           func(ctx context.Context, orgID string, ciphertext, iv, tag string) error
 	UpdateOrgRPSFn              func(ctx context.Context, orgID string, rps int) error
@@ -986,6 +987,13 @@ func (m *MockStore) GetOrgSettings(ctx context.Context, orgID string) (map[strin
 		return m.GetOrgSettingsFn(ctx, orgID)
 	}
 	return map[string]any{}, nil
+}
+
+func (m *MockStore) SetAPIKeyStatus(ctx context.Context, orgID, status string) error {
+	if m.SetAPIKeyStatusFn != nil {
+		return m.SetAPIKeyStatusFn(ctx, orgID, status)
+	}
+	return nil
 }
 
 func (m *MockStore) UpdateOrgName(ctx context.Context, orgID, name string) error {

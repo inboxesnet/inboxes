@@ -215,6 +215,7 @@ type OrgStore interface {
 	GetOrgSettings(ctx context.Context, orgID string) (map[string]any, error)
 	UpdateOrgName(ctx context.Context, orgID, name string) error
 	UpdateOrgAPIKey(ctx context.Context, orgID string, ciphertext, iv, tag string) error
+	SetAPIKeyStatus(ctx context.Context, orgID, status string) error
 	UpdateOrgRPS(ctx context.Context, orgID string, rps int) error
 	UpdateOrgAutoPoll(ctx context.Context, orgID string, enabled bool) error
 	UpdateOrgAutoPollInterval(ctx context.Context, orgID string, interval int) error

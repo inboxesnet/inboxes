@@ -467,9 +467,10 @@ func (w *EmailWorker) markDomainDisconnected(ctx context.Context, jobID string, 
 		return
 	}
 
+	var domainName string
 	tag, err := w.store.Q().Exec(ctx,
 		`UPDATE domains SET status = 'disconnected', updated_at = now()
-		 WHERE id = $1 AND status != 'disconnected'`,
+		 WHERE id = $1 AND status NOT IN ('disconnected', 'deleted')`,
 		domainID,
 	)
 	if err != nil {
@@ -479,6 +480,17 @@ func (w *EmailWorker) markDomainDisconnected(ctx context.Context, jobID string, 
 	if tag.RowsAffected() > 0 {
 		slog.Warn("email worker: domain marked disconnected due to send failure",
 			"domain_id", domainID, "org_id", orgID, "reason", sendErr.Error())
+		// Tell the frontend — without this event the domain list stays stale
+		// and the user sees no toast.
+		if w.bus != nil {
+			_ = w.store.Q().QueryRow(ctx, `SELECT domain FROM domains WHERE id = $1`, domainID).Scan(&domainName)
+			w.bus.Publish(ctx, event.Event{
+				EventType: event.DomainDisconnected,
+				OrgID:     orgID,
+				DomainID:  domainID,
+				Payload:   map[string]interface{}{"domain": domainName},
+			})
+		}
 	}
 }
 

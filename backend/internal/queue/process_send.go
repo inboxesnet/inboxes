@@ -41,8 +41,9 @@ func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID stri
 		 WHERE e.id = $1`,
 		emailID,
 	).Scan(&domainStatus); err == nil {
-		if domainStatus == "disconnected" || domainStatus == "pending" {
-			return fmt.Errorf("domain is %s, cannot send email", domainStatus)
+		if domainStatus == "disconnected" || domainStatus == "pending" || domainStatus == "deleted" {
+			// Not retryable — the domain state will not fix itself mid-job.
+			return &nonRetryableError{fmt.Errorf("domain is %s, cannot send email", domainStatus)}
 		}
 	}
 

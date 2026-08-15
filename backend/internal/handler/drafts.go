@@ -256,6 +256,17 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check the domain status up front, like the direct send path does.
+	// Without this check the job fails later in the worker, near-silently.
+	if domainID != "" {
+		if domainStatus, err := h.Store.GetDomainStatus(ctx, domainID, claims.OrgID); err == nil {
+			if domainStatus == "disconnected" || domainStatus == "pending" || domainStatus == "deleted" {
+				writeError(w, http.StatusBadRequest, "cannot send email: domain is "+domainStatus)
+				return
+			}
+		}
+	}
+
 	// If the draft targets an existing thread, verify it belongs to the caller's org.
 	if threadID != nil && *threadID != "" {
 		if _, err := h.Store.GetThreadDomainID(ctx, *threadID, claims.OrgID); err != nil {

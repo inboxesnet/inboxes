@@ -166,7 +166,7 @@ func (p *InboxPoller) pollOrg(ctx context.Context, orgID string) {
 	// Load visible domain names to filter Resend results (skip hidden domains)
 	visibleDomains := make(map[string]bool)
 	dRows, dErr := p.Store.Q().Query(ctx,
-		"SELECT domain FROM domains WHERE org_id = $1 AND hidden = false AND status = 'active'", orgID)
+		"SELECT domain FROM domains WHERE org_id = $1 AND hidden = false AND status IN ('active', 'verified')", orgID)
 	if dErr != nil {
 		slog.Error("inbox poller: failed to load domains", "org_id", orgID, "error", dErr)
 		return
@@ -312,7 +312,7 @@ func (p *InboxPoller) pollOrgSent(ctx context.Context, orgID string) {
 	// Load visible domain names to filter Resend results (skip hidden domains)
 	visibleDomains := make(map[string]bool)
 	dRows, dErr := p.Store.Q().Query(ctx,
-		"SELECT domain FROM domains WHERE org_id = $1 AND hidden = false AND status = 'active'", orgID)
+		"SELECT domain FROM domains WHERE org_id = $1 AND hidden = false AND status IN ('active', 'verified')", orgID)
 	if dErr != nil {
 		slog.Error("inbox poller: failed to load domains (sent)", "org_id", orgID, "error", dErr)
 		return

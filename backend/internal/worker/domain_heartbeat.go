@@ -64,7 +64,7 @@ func (dh *DomainHeartbeat) Run(ctx context.Context) {
 func (dh *DomainHeartbeat) checkAll(ctx context.Context) {
 	// Get all orgs that have an API key configured
 	rows, err := dh.DB.Query(ctx,
-		`SELECT id FROM orgs WHERE resend_api_key_encrypted IS NOT NULL`)
+		`SELECT id FROM orgs WHERE resend_api_key_encrypted IS NOT NULL AND deleted_at IS NULL`)
 	if err != nil {
 		slog.Error("domain heartbeat: failed to list orgs", "error", err)
 		return
@@ -96,11 +96,13 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 				"org_id", orgID, "status", resendErr.StatusCode)
 			return
 		}
-		// 403 = API key revoked. Mark all domains disconnected.
-		if ok := isResendErr(err, &resendErr); ok && resendErr.StatusCode == 403 {
+		// 401/403 = API key revoked or invalid. Mark all domains disconnected
+		// and record the key status so the UI can show it.
+		if ok := isResendErr(err, &resendErr); ok && (resendErr.StatusCode == 401 || resendErr.StatusCode == 403) {
+			dh.setAPIKeyStatus(ctx, orgID, "invalid")
 			tag, err := dh.DB.Exec(ctx,
 				`UPDATE domains SET status = 'disconnected', updated_at = now()
-				 WHERE org_id = $1 AND status != 'disconnected'`, orgID)
+				 WHERE org_id = $1 AND status NOT IN ('disconnected', 'deleted')`, orgID)
 			if err != nil {
 				slog.Error("heartbeat: failed to mark domains disconnected", "error", err, "org_id", orgID)
 			} else if tag.RowsAffected() > 0 {
@@ -119,6 +121,9 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 		slog.Warn("domain heartbeat: failed to fetch domains", "org_id", orgID, "error", err)
 		return
 	}
+
+	// The key works — record that.
+	dh.setAPIKeyStatus(ctx, orgID, "valid")
 
 	var resendResp struct {
 		Data []struct {
@@ -160,9 +165,10 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 		resendDomains[d.Name] = info
 	}
 
-	// Check local domains against Resend
+	// Check local domains against Resend. Deleted domains stay deleted —
+	// the heartbeat must never resurrect them.
 	localRows, err := dh.DB.Query(ctx,
-		`SELECT id, domain, status FROM domains WHERE org_id = $1`, orgID)
+		`SELECT id, domain, status FROM domains WHERE org_id = $1 AND status != 'deleted'`, orgID)
 	if err != nil {
 		slog.Error("domain heartbeat: failed to list local domains", "org_id", orgID, "error", err)
 		return
@@ -196,9 +202,14 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 				},
 			})
 		} else if inResend && status == "disconnected" {
-			// Domain reappeared in Resend — mark active (self-healing)
+			// Domain reappeared in Resend — mark it with the status Resend
+			// reports (self-healing). Only a verified domain becomes active.
+			newStatus := "pending"
+			if info.status == "verified" || info.status == "active" {
+				newStatus = "active"
+			}
 			if _, err := dh.DB.Exec(ctx,
-				`UPDATE domains SET status = 'active', updated_at = now() WHERE id = $1`, id); err != nil {
+				`UPDATE domains SET status = $1, updated_at = now() WHERE id = $2`, newStatus, id); err != nil {
 				slog.Error("heartbeat: failed to reconnect domain", "error", err, "domain_id", id)
 			}
 			slog.Info("domain heartbeat: domain reconnected",
@@ -222,9 +233,20 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 			if !info.dkim {
 				degraded = append(degraded, "DKIM")
 			}
-			if len(degraded) > 0 {
+			// Only alert for domains that were verified before. A pending
+			// domain has incomplete DNS by definition.
+			if len(degraded) > 0 && (status == "active" || status == "verified") {
 				slog.Warn("domain heartbeat: DNS verification missing",
 					"org_id", orgID, "domain_id", id, "domain", domain, "missing", degraded)
+				dh.Bus.Publish(ctx, event.Event{
+					EventType: event.DomainDnsDegraded,
+					OrgID:     orgID,
+					DomainID:  id,
+					Payload: map[string]interface{}{
+						"domain":   domain,
+						"degraded": degraded,
+					},
+				})
 			}
 		}
 	}
@@ -261,6 +283,16 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 		 )`,
 		orgID,
 	)
+}
+
+// setAPIKeyStatus records the Resend key health on the org. Only changed
+// values are written, to keep updated_at meaningful.
+func (dh *DomainHeartbeat) setAPIKeyStatus(ctx context.Context, orgID, status string) {
+	if _, err := dh.DB.Exec(ctx,
+		`UPDATE orgs SET api_key_status = $1, api_key_checked_at = now() WHERE id = $2`,
+		status, orgID); err != nil {
+		slog.Error("heartbeat: failed to update api key status", "error", err, "org_id", orgID)
+	}
 }
 
 func isResendErr(err error, target **service.ResendError) bool {

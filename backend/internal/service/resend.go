@@ -38,6 +38,32 @@ func (e *ResendError) IsRetryable() bool {
 	return e.StatusCode == 429 || e.StatusCode == 409 || e.StatusCode >= 500
 }
 
+// Message extracts the human-readable message from the Resend error body.
+// Returns an empty string when the body has no message field.
+func (e *ResendError) Message() string {
+	var parsed struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(e.Body), &parsed); err != nil {
+		return ""
+	}
+	return parsed.Message
+}
+
+// NormalizeDomainStatus maps a Resend domain status to a local domain_status
+// enum value. Resend reports: not_started, pending, verified, failed,
+// temporary_failure. The local enum has: pending, verified, active,
+// disconnected, deleted. A verified Resend domain is fully usable, so it maps
+// to active (the status every send/fetch/poll path gates on).
+func NormalizeDomainStatus(resendStatus string) string {
+	switch resendStatus {
+	case "verified", "active":
+		return "active"
+	default:
+		return "pending"
+	}
+}
+
 // IsDomainError returns true when the error indicates the domain or API key
 // is no longer valid — the domain should be marked disconnected.
 // Matches: 403 (invalid_api_key), 422 with domain-specific error codes.

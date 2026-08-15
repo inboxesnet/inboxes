@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"log/slog"
+	"time"
 )
 
 func (s *PgStore) GetOrgSettings(ctx context.Context, orgID string) (map[string]any, error) {
@@ -12,12 +13,14 @@ func (s *PgStore) GetOrgSettings(ctx context.Context, orgID string) (map[string]
 	var resendRPS int
 	var autoPollEnabled bool
 	var autoPollInterval int
+	var apiKeyStatus string
+	var apiKeyCheckedAt *time.Time
 
 	err := s.q.QueryRow(ctx,
 		`SELECT name, onboarding_completed, (resend_api_key_encrypted IS NOT NULL) as has_key, resend_rps,
-		        auto_poll_enabled, auto_poll_interval
+		        auto_poll_enabled, auto_poll_interval, api_key_status, api_key_checked_at
 		 FROM orgs WHERE id = $1`, orgID,
-	).Scan(&name, &onboardingCompleted, &hasAPIKey, &resendRPS, &autoPollEnabled, &autoPollInterval)
+	).Scan(&name, &onboardingCompleted, &hasAPIKey, &resendRPS, &autoPollEnabled, &autoPollInterval, &apiKeyStatus, &apiKeyCheckedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +32,17 @@ func (s *PgStore) GetOrgSettings(ctx context.Context, orgID string) (map[string]
 		"resend_rps":           resendRPS,
 		"auto_poll_enabled":    autoPollEnabled,
 		"auto_poll_interval":   autoPollInterval,
+		"api_key_status":       apiKeyStatus,
+		"api_key_checked_at":   apiKeyCheckedAt,
 	}, nil
+}
+
+// SetAPIKeyStatus records the Resend key health on the org.
+func (s *PgStore) SetAPIKeyStatus(ctx context.Context, orgID, status string) error {
+	_, err := s.q.Exec(ctx,
+		`UPDATE orgs SET api_key_status = $1, api_key_checked_at = now() WHERE id = $2`,
+		status, orgID)
+	return err
 }
 
 func (s *PgStore) UpdateOrgName(ctx context.Context, orgID, name string) error {

@@ -73,7 +73,7 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 
 	var domainID string
 	if err := w.store.Q().QueryRow(ctx,
-		"SELECT id FROM domains WHERE org_id = $1 AND domain = $2 AND status = 'active' AND hidden = false",
+		"SELECT id FROM domains WHERE org_id = $1 AND domain = $2 AND status IN ('active', 'verified') AND hidden = false",
 		orgID, parts[1],
 	).Scan(&domainID); err != nil {
 		w.bus.Publish(ctx, event.Event{

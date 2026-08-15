@@ -373,6 +373,8 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   // Organization settings state
   const [orgName, setOrgName] = useState("");
   const [orgResendKey, setOrgResendKey] = useState("");
+  const [apiKeyStatus, setApiKeyStatus] = useState("unknown");
+  const [apiKeyCheckedAt, setApiKeyCheckedAt] = useState<string | null>(null);
   const [orgResendRPS, setOrgResendRPS] = useState(2);
   const [orgLoading, setOrgLoading] = useState(false);
   const [savingOrg, setSavingOrg] = useState(false);
@@ -516,6 +518,34 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     }
   }
 
+  // Auto-recheck pending domains every 15s while the Domains tab is open,
+  // so a DNS change flips the status without a manual Verify click.
+  useEffect(() => {
+    if (activeTab !== "domains") return;
+    const pending = allDomains.filter((d) => d.status === "pending");
+    if (pending.length === 0) return;
+    const interval = setInterval(async () => {
+      for (const d of pending) {
+        try {
+          const result = await api.post<{ status: string; dns_records: unknown }>(`/api/domains/${d.id}/verify`);
+          if (result.status !== d.status) {
+            setAllDomains((prev) =>
+              prev.map((x) => x.id === d.id ? { ...x, status: result.status as Domain["status"], dns_records: result.dns_records } : x)
+            );
+            if (result.status === "active" || result.status === "verified") {
+              toast.success(`Domain ${d.domain} is verified.`);
+              refreshDomains();
+            }
+          }
+        } catch {
+          // Quiet — this is a background recheck.
+        }
+      }
+    }, 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, allDomains]);
+
   async function handleVerifyDomain(domainId: string) {
     setError("");
     setSuccess("");
@@ -583,7 +613,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   function handleDeleteDomain(domainId: string) {
     setConfirmAction({
       title: "Remove domain",
-      description: "Remove this domain? Emails and aliases will be preserved but the domain will be hidden.",
+      description: "Remove this domain? This also removes it from Resend, deactivates its aliases and their user assignments, and hides its emails from the app.",
       confirmLabel: "Remove",
       destructive: true,
       onConfirm: () => doDeleteDomain(domainId),
@@ -1026,9 +1056,11 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   async function loadOrgSettings() {
     setOrgLoading(true);
     try {
-      const data = await api.get<{ name: string; has_api_key: boolean; resend_rps: number; auto_poll_enabled?: boolean; auto_poll_interval?: number }>("/api/orgs/settings");
+      const data = await api.get<{ name: string; has_api_key: boolean; api_key_status?: string; api_key_checked_at?: string | null; resend_rps: number; auto_poll_enabled?: boolean; auto_poll_interval?: number }>("/api/orgs/settings");
       setOrgName(data.name || "");
       setOrgResendKey(data.has_api_key ? "********" : "");
+      setApiKeyStatus(data.api_key_status || "unknown");
+      setApiKeyCheckedAt(data.api_key_checked_at || null);
       setOrgResendRPS(data.resend_rps || 2);
       if (data.auto_poll_enabled !== undefined) setAutoPollEnabled(data.auto_poll_enabled);
       if (data.auto_poll_interval !== undefined) setAutoPollMinutes(Math.round(data.auto_poll_interval / 60));
@@ -1562,7 +1594,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                         {allDomains.map((d, idx) => {
                           const active = visibleIds.has(d.id);
                           const dnsRecords = Array.isArray(d.dns_records) ? d.dns_records as { type: string; name: string; value: string; status?: string }[] : [];
-                          const needsVerify = d.status === "pending" || d.status === "not_started";
+                          const needsVerify = d.status === "pending" || d.status === "disconnected";
                           return (
                             <div key={d.id} className={`rounded-lg border p-3 space-y-2 transition-colors ${active ? "border-primary bg-primary/5" : "border-muted opacity-70"}`}>
                               <div className="flex items-center justify-between">
@@ -1586,7 +1618,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                                     </div>
                                   </button>
                                   <span className="font-medium text-sm">{d.domain}</span>
-                                  <Badge variant={d.status === "active" ? "default" : d.status === "verified" ? "secondary" : "outline"}>
+                                  <Badge variant={d.status === "active" ? "default" : d.status === "verified" ? "secondary" : d.status === "disconnected" ? "destructive" : "outline"}>
                                     {d.status}
                                   </Badge>
                                 </div>
@@ -2268,7 +2300,15 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                               />
                             </div>
                             <div className="space-y-2">
-                              <label className="text-sm font-medium">Resend API Key</label>
+                              <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium">Resend API Key</label>
+                                {apiKeyStatus === "invalid" && (
+                                  <Badge variant="destructive">Key invalid</Badge>
+                                )}
+                                {apiKeyStatus === "valid" && (
+                                  <Badge variant="secondary">Key OK</Badge>
+                                )}
+                              </div>
                               <Input
                                 type="password"
                                 value={orgResendKey}
@@ -2277,7 +2317,13 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                               />
                               <p className="text-xs text-muted-foreground">
                                 Enter a new key to replace the existing one. Leave unchanged to keep current key.
+                                {apiKeyCheckedAt && ` Last checked ${new Date(apiKeyCheckedAt).toLocaleString()}.`}
                               </p>
+                              {apiKeyStatus === "invalid" && (
+                                <p className="text-xs text-destructive">
+                                  Resend rejected this key. Sending and receiving are stopped until you save a valid key.
+                                </p>
+                              )}
                             </div>
                             <div className="space-y-2">
                               <label className="text-sm font-medium">Resend API Rate Limit</label>
