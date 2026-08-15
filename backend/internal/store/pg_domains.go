@@ -191,6 +191,14 @@ func (s *PgStore) ListDiscoveredDomains(ctx context.Context, orgID string) ([]ma
 	return scanMaps(rows)
 }
 
+func (s *PgStore) DismissDiscoveredDomainByName(ctx context.Context, orgID, domain string) error {
+	_, err := s.q.Exec(ctx,
+		`UPDATE discovered_domains SET dismissed = true WHERE org_id = $1 AND lower(domain) = lower($2)`,
+		orgID, domain,
+	)
+	return err
+}
+
 func (s *PgStore) DismissDiscoveredDomain(ctx context.Context, id, orgID string) error {
 	_, err := s.q.Exec(ctx,
 		`UPDATE discovered_domains SET dismissed = true WHERE id = $1 AND org_id = $2`,

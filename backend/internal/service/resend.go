@@ -339,7 +339,14 @@ func DoRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
 	slog.Info("resend: request", "method", method, "path", path)
 
 	var reqBody io.Reader
-	if body != nil {
+	switch b := body.(type) {
+	case nil:
+	case []byte:
+		// Already-encoded JSON. Marshaling []byte again would base64 it.
+		reqBody = bytes.NewReader(b)
+	case json.RawMessage:
+		reqBody = bytes.NewReader(b)
+	default:
 		encoded, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("resend: marshal body: %w", err)

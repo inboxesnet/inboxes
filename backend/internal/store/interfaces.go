@@ -136,6 +136,7 @@ type DomainStore interface {
 	UpdateWebhookConfig(ctx context.Context, orgID, webhookID string, encSecret, encIV, encTag string) error
 	ListDiscoveredDomains(ctx context.Context, orgID string) ([]map[string]any, error)
 	DismissDiscoveredDomain(ctx context.Context, id, orgID string) error
+	DismissDiscoveredDomainByName(ctx context.Context, orgID, domain string) error
 }
 
 // DomainOrder represents a domain reorder request item.

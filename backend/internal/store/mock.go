@@ -692,6 +692,10 @@ func (m *MockStore) DismissDiscoveredDomain(ctx context.Context, id, orgID strin
 	return nil
 }
 
+func (m *MockStore) DismissDiscoveredDomainByName(ctx context.Context, orgID, domain string) error {
+	return nil
+}
+
 // ===========================================================================
 // UserStore
 // ===========================================================================

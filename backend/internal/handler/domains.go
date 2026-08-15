@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/middleware"
@@ -56,23 +58,34 @@ func (h *DomainHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create domain via Resend API
-	body := map[string]string{"name": req.Domain}
-	bodyBytes, ok := marshalOrFail(w, body, "failed to prepare request")
-	if !ok {
-		return
-	}
-	respBytes, err := h.ResendSvc.Fetch(r.Context(), claims.OrgID, "POST", "/domains", bodyBytes)
+	// The domain can already exist in Resend (a "Found in Resend" domain).
+	// A create call on an existing name fails, so check the list first and
+	// import the existing domain instead.
+	existingID, err := h.findResendDomainByName(r.Context(), claims.OrgID, req.Domain)
 	if err != nil {
-		writeResendError(w, err, "failed to create domain in Resend")
+		writeResendError(w, err, "failed to check domains in Resend")
 		return
 	}
 
 	var resendDomain struct {
-		ID     string          `json:"id"`
-		Name   string          `json:"name"`
-		Status string          `json:"status"`
+		ID      string          `json:"id"`
+		Name    string          `json:"name"`
+		Status  string          `json:"status"`
 		Records json.RawMessage `json:"records"`
+	}
+	var respBytes []byte
+	if existingID != "" {
+		respBytes, err = h.ResendSvc.Fetch(r.Context(), claims.OrgID, "GET", "/domains/"+existingID, nil)
+		if err != nil {
+			writeResendError(w, err, "failed to read domain from Resend")
+			return
+		}
+	} else {
+		respBytes, err = h.ResendSvc.Fetch(r.Context(), claims.OrgID, "POST", "/domains", map[string]string{"name": req.Domain})
+		if err != nil {
+			writeResendError(w, err, "failed to create domain in Resend")
+			return
+		}
 	}
 	if err := json.Unmarshal(respBytes, &resendDomain); err != nil {
 		slog.Error("domain: failed to parse Resend response", "error", err)
@@ -80,21 +93,55 @@ func (h *DomainHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	domainID, err := h.Store.InsertDomain(r.Context(), claims.OrgID, req.Domain, resendDomain.ID, "pending", resendDomain.Records)
+	status := "pending"
+	if existingID != "" {
+		status = service.NormalizeDomainStatus(resendDomain.Status)
+	}
+
+	domainID, err := h.Store.InsertDomain(r.Context(), claims.OrgID, req.Domain, resendDomain.ID, status, resendDomain.Records)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save domain")
 		return
 	}
 
-	slog.Info("domain: created", "domain", req.Domain, "domain_id", domainID, "resend_domain_id", resendDomain.ID)
+	// The domain is added now, so its discovery row must not show again.
+	if err := h.Store.DismissDiscoveredDomainByName(r.Context(), claims.OrgID, req.Domain); err != nil {
+		slog.Error("domain: dismiss discovered row failed", "domain", req.Domain, "error", err)
+	}
+
+	slog.Info("domain: created", "domain", req.Domain, "domain_id", domainID, "resend_domain_id", resendDomain.ID, "imported", existingID != "")
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":               domainID,
 		"domain":           req.Domain,
 		"resend_domain_id": resendDomain.ID,
-		"status":           "pending",
+		"status":           status,
 		"dns_records":      resendDomain.Records,
 	})
+}
+
+// findResendDomainByName returns the Resend domain id for a name, or "" when
+// the name is not in the Resend account.
+func (h *DomainHandler) findResendDomainByName(ctx context.Context, orgID, name string) (string, error) {
+	respBytes, err := h.ResendSvc.Fetch(ctx, orgID, "GET", "/domains", nil)
+	if err != nil {
+		return "", err
+	}
+	var list struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBytes, &list); err != nil {
+		return "", fmt.Errorf("parse Resend domain list: %w", err)
+	}
+	for _, d := range list.Data {
+		if strings.EqualFold(d.Name, name) {
+			return d.ID, nil
+		}
+	}
+	return "", nil
 }
 
 func (h *DomainHandler) Verify(w http.ResponseWriter, r *http.Request) {

@@ -636,22 +636,27 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     }
   }
 
-  async function handleAddDomain(e: React.FormEvent) {
-    e.preventDefault();
-    if (!newDomainName) return;
+  async function addDomain(name: string) {
     setError("");
     setSuccess("");
     setAddingDomain(true);
     try {
-      const result = await api.post<Domain>("/api/domains", { domain: newDomainName });
+      const result = await api.post<Domain>("/api/domains", { domain: name });
       setAllDomains((prev) => [...prev, result]);
       setNewDomainName("");
+      setDiscoveredDomains((prev) => prev.filter((d) => d.domain !== name));
       setSuccess("Domain added. Configure DNS records below, then verify.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to add domain");
     } finally {
       setAddingDomain(false);
     }
+  }
+
+  async function handleAddDomain(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newDomainName) return;
+    await addDomain(newDomainName);
   }
 
   // Auto-recheck pending domains every 15s while the Domains tab is open,
@@ -1654,7 +1659,8 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                               <span className="text-sm font-medium">{dd.domain}</span>
                               <div className="flex gap-1">
                                 <Button size="sm" variant="outline" className="h-7 text-xs"
-                                  onClick={() => { setNewDomainName(dd.domain); }}>
+                                  disabled={addingDomain}
+                                  onClick={() => addDomain(dd.domain)}>
                                   Add
                                 </Button>
                                 <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground"
