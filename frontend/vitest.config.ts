@@ -8,8 +8,8 @@ export default defineConfig({
     setupFiles: ["./test-setup.ts"],
     exclude: ["e2e/**", "node_modules/**"],
   },
-  esbuild: {
-    jsx: "automatic",
+  oxc: {
+    jsx: { runtime: "automatic" },
   },
   resolve: {
     alias: {
