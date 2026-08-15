@@ -35,6 +35,7 @@ import {
   WifiOff,
   Keyboard,
   Info,
+  XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -47,6 +48,7 @@ import type { Label } from "@/lib/types";
 const LABELS: { key: Label; label: string; icon: React.ReactNode }[] = [
   { key: "inbox", label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
   { key: "sent", label: "Sent", icon: <Send className="h-4 w-4" /> },
+  { key: "failed", label: "Failed", icon: <XCircle className="h-4 w-4" /> },
   { key: "drafts", label: "Drafts", icon: <FileText className="h-4 w-4" /> },
   { key: "archive", label: "Archive", icon: <Archive className="h-4 w-4" /> },
   { key: "starred", label: "Starred", icon: <Star className="h-4 w-4" /> },

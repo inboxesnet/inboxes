@@ -98,6 +98,7 @@ func main() {
 	emailWorker := queue.NewEmailWorker(st, rdb, resendSvc, bus, orgLimiterMap, cfg.StripeKey)
 	util.SafeGo("email-worker", func() { emailWorker.Run(ctx) })
 	util.SafeGo("email-stale-recovery", func() { emailWorker.RunStaleRecovery(ctx) })
+	util.SafeGo("send-reconciler", func() { emailWorker.RunReconciler(ctx, cfg.SendReconcileInterval) })
 
 	// Trash collector
 	trashCollector := worker.NewTrashCollector(pool, bus, cfg.TrashCollectorEnabled, cfg.TrashCollectorInterval)

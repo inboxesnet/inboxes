@@ -53,7 +53,7 @@ export interface ThreadListResponse {
 }
 
 // Label type for view routing (URL segment, not thread data)
-export type Label = "inbox" | "sent" | "drafts" | "archive" | "starred" | "trash" | "spam" | "deleted_forever";
+export type Label = "inbox" | "sent" | "drafts" | "archive" | "starred" | "trash" | "spam" | "failed" | "deleted_forever";
 
 export function hasLabel(thread: { labels?: string[] }, label: string): boolean {
   return thread.labels?.includes(label) ?? false;

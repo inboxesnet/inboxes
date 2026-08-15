@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 )
 
 func (s *PgStore) GetOrgWebhookSecret(ctx context.Context, orgID string) (encSecret, encIV, encTag string, plainSecret *string, err error) {
@@ -76,4 +77,48 @@ func (s *PgStore) ClearBounce(ctx context.Context, orgID, fromAddress string) er
 		orgID, fromAddress,
 	)
 	return err
+}
+
+// ListBounces returns the bounce block list for an org, newest first.
+// Each row includes expires_at so the UI can show when the block ends.
+func (s *PgStore) ListBounces(ctx context.Context, orgID string) ([]map[string]any, error) {
+	rows, err := s.q.Query(ctx,
+		`SELECT id, address, reason, created_at,
+		        created_at + make_interval(days => $2) AS expires_at
+		 FROM email_bounces WHERE org_id = $1
+		 ORDER BY created_at DESC LIMIT 500`,
+		orgID, BounceExpiryDays,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bounces := []map[string]any{}
+	for rows.Next() {
+		var id, address, reason string
+		var createdAt, expiresAt time.Time
+		if rows.Scan(&id, &address, &reason, &createdAt, &expiresAt) == nil {
+			bounces = append(bounces, map[string]any{
+				"id":         id,
+				"address":    address,
+				"reason":     reason,
+				"created_at": createdAt,
+				"expires_at": expiresAt,
+			})
+		}
+	}
+	return bounces, rows.Err()
+}
+
+// DeleteBounce removes one bounce row for an org. Returns affected rows.
+func (s *PgStore) DeleteBounce(ctx context.Context, orgID, id string) (int64, error) {
+	tag, err := s.q.Exec(ctx,
+		`DELETE FROM email_bounces WHERE org_id = $1 AND id = $2`,
+		orgID, id,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

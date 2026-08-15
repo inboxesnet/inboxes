@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
@@ -311,4 +312,81 @@ func (h *EmailHandler) AdminJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"jobs": jobs})
+}
+
+// Retry re-queues a failed outbound email. It reuses the stored send job
+// payload, so the email goes out exactly as composed.
+func (h *EmailHandler) Retry(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	emailID := chi.URLParam(r, "id")
+	ctx := r.Context()
+
+	var status, direction, threadID, domainID string
+	err := h.Store.Q().QueryRow(ctx,
+		`SELECT status, direction, thread_id, domain_id FROM emails WHERE id = $1 AND org_id = $2`,
+		emailID, claims.OrgID,
+	).Scan(&status, &direction, &threadID, &domainID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "email not found")
+		return
+	}
+	if direction != "outbound" {
+		writeError(w, http.StatusBadRequest, "only outbound emails can be retried")
+		return
+	}
+	if status != "failed" && status != "bounced" && status != "queued" {
+		writeError(w, http.StatusConflict, "email is not in a failed state")
+		return
+	}
+
+	// Find the most recent send job for this email and reset it.
+	var jobID string
+	err = h.Store.Q().QueryRow(ctx,
+		`SELECT id FROM email_jobs WHERE email_id = $1 AND job_type = 'send'
+		 ORDER BY created_at DESC LIMIT 1`,
+		emailID,
+	).Scan(&jobID)
+	if err != nil {
+		writeError(w, http.StatusConflict, "no send job found for this email — edit the recovery draft instead")
+		return
+	}
+
+	if _, err := h.Store.Q().Exec(ctx,
+		`UPDATE email_jobs SET status = 'pending', retry_count = 0, error_message = '',
+		        heartbeat_at = now(), updated_at = now() WHERE id = $1`,
+		jobID,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset send job")
+		return
+	}
+	if _, err := h.Store.Q().Exec(ctx,
+		`UPDATE emails SET status = 'queued', updated_at = now() WHERE id = $1`,
+		emailID,
+	); err != nil {
+		slog.Error("email retry: failed to reset email status", "email_id", emailID, "error", err)
+	}
+	if err := h.RDB.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to queue send job")
+		return
+	}
+
+	if h.Bus != nil {
+		h.Bus.Publish(ctx, event.Event{
+			EventType: event.EmailStatusUpdated,
+			OrgID:     claims.OrgID,
+			DomainID:  domainID,
+			ThreadID:  threadID,
+			Payload: map[string]interface{}{
+				"email_id": emailID,
+				"status":   "queued",
+			},
+		})
+	}
+
+	slog.Info("email retry: re-queued", "email_id", emailID, "job_id", jobID, "user", claims.UserID)
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"email_id": emailID,
+		"job_id":   jobID,
+		"status":   "queued",
+	})
 }

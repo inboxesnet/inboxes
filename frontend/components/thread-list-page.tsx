@@ -30,6 +30,7 @@ const EMPTY_MESSAGES: Record<Label, string> = {
   starred: "No starred messages",
   trash: "Trash is empty",
   spam: "No spam messages",
+  failed: "No failed sends",
   deleted_forever: "No deleted messages",
 };
 

@@ -163,6 +163,8 @@ type MockStore struct {
 	UpdateEmailStatusFn        func(ctx context.Context, orgID, resendEmailID, status string) (int64, error)
 	GetEmailThreadByResendIDFn func(ctx context.Context, orgID, resendEmailID string) (string, string, string, error)
 	InsertBounceFn             func(ctx context.Context, orgID, address, bounceType string) error
+	ListBouncesFn               func(ctx context.Context, orgID string) ([]map[string]any, error)
+	DeleteBounceFn              func(ctx context.Context, orgID, id string) (int64, error)
 	ClearBounceFn              func(ctx context.Context, orgID, fromAddress string) error
 
 	// ---- Billing ----
@@ -1477,4 +1479,18 @@ func (q *MockQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx
 		return q.QueryRowFn(ctx, sql, args...)
 	}
 	return nil
+}
+
+func (m *MockStore) ListBounces(ctx context.Context, orgID string) ([]map[string]any, error) {
+	if m.ListBouncesFn != nil {
+		return m.ListBouncesFn(ctx, orgID)
+	}
+	return []map[string]any{}, nil
+}
+
+func (m *MockStore) DeleteBounce(ctx context.Context, orgID, id string) (int64, error) {
+	if m.DeleteBounceFn != nil {
+		return m.DeleteBounceFn(ctx, orgID, id)
+	}
+	return 0, nil
 }

@@ -460,6 +460,10 @@ function EmailMessage({
       </button>
 
       <div className="px-4 pb-4">
+        {email.direction === "outbound" &&
+          (email.status === "failed" || email.status === "bounced") && (
+            <RetrySendBanner email={email} />
+          )}
         <div className="text-xs text-muted-foreground mb-3 space-y-0.5">
           <p>To: {parseAddresses(email.to_addresses).join(", ")}</p>
           {parseAddresses(email.cc_addresses).length > 0 && (
@@ -539,6 +543,45 @@ function EmailMessage({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Retry failed send ─────────────────────────────────────────────────
+
+function RetrySendBanner({ email }: { email: Email }) {
+  const [retrying, setRetrying] = useState(false);
+  const qc = useQueryClient();
+
+  async function handleRetry() {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await api.post(`/api/emails/${email.id}/retry`);
+      toast.success("Email queued to send again.");
+      qc.invalidateQueries({ queryKey: queryKeys.threads.detail(email.thread_id) });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to retry");
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  return (
+    <div className="mb-3 flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+      <span className="flex-1">
+        {email.status === "bounced"
+          ? "This email bounced."
+          : "This email failed to send."}
+      </span>
+      <button
+        onClick={handleRetry}
+        disabled={retrying}
+        className="font-medium underline underline-offset-2 disabled:opacity-50"
+      >
+        {retrying ? "Retrying…" : "Retry send"}
+      </button>
     </div>
   );
 }

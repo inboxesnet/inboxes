@@ -245,6 +245,8 @@ type WebhookStore interface {
 	GetEmailThreadByResendID(ctx context.Context, orgID, resendEmailID string) (emailID, threadID, domainID string, err error)
 	InsertBounce(ctx context.Context, orgID, address, bounceType string) error
 	ClearBounce(ctx context.Context, orgID, fromAddress string) error
+	ListBounces(ctx context.Context, orgID string) ([]map[string]any, error)
+	DeleteBounce(ctx context.Context, orgID, id string) (int64, error)
 }
 
 // ---- Billing ----

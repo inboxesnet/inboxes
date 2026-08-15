@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// BounceExpiryDays is how long a bounce block stays active. After this many
+// days the address can receive mail again without manual intervention.
+const BounceExpiryDays = 30
+
 func (s *PgStore) LoadAttachmentsForResend(ctx context.Context, ids []string, orgID string) ([]map[string]string, error) {
 	rows, err := s.q.Query(ctx,
 		`SELECT filename, content_type, data FROM attachments WHERE id = ANY($1) AND org_id = $2`,
@@ -47,8 +51,10 @@ func (s *PgStore) CheckBouncedRecipients(ctx context.Context, orgID string, addr
 	}
 
 	rows, err := s.q.Query(ctx,
-		`SELECT address FROM email_bounces WHERE org_id = $1 AND lower(address) = ANY($2)`,
-		orgID, normalized,
+		`SELECT address FROM email_bounces
+		 WHERE org_id = $1 AND lower(address) = ANY($2)
+		   AND created_at > now() - make_interval(days => $3)`,
+		orgID, normalized, BounceExpiryDays,
 	)
 	if err != nil {
 		return nil, err
@@ -263,7 +269,7 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 
 func (s *PgStore) ListAdminJobs(ctx context.Context, orgID string) ([]map[string]any, error) {
 	rows, err := s.q.Query(ctx,
-		`SELECT id, job_type, status, email_id, thread_id, error_message, attempts, created_at, updated_at
+		`SELECT id, job_type, status, email_id, thread_id, error_message, retry_count AS attempts, created_at, updated_at
 		 FROM email_jobs WHERE org_id = $1
 		 ORDER BY created_at DESC LIMIT 100`,
 		orgID,
@@ -308,9 +314,12 @@ func (s *PgStore) ListAdminJobs(ctx context.Context, orgID string) ([]map[string
 }
 
 func (s *PgStore) CheckSendJobExists(ctx context.Context, draftID string) (bool, error) {
+	// Only live jobs block a re-send. A failed or cancelled job must not
+	// lock the draft with a 409 forever.
 	var exists bool
 	err := s.q.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM email_jobs WHERE draft_id = $1 AND job_type = 'send')`,
+		`SELECT EXISTS(SELECT 1 FROM email_jobs WHERE draft_id = $1 AND job_type = 'send'
+		  AND status IN ('pending', 'running'))`,
 		draftID).Scan(&exists)
 	return exists, err
 }

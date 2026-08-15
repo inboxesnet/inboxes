@@ -320,7 +320,10 @@ func extractBareAddress(raw string) string {
 	return strings.ToLower(raw)
 }
 
-// recordBounce adds all recipients of the email to the org-scoped bounce block list.
+// recordBounce adds the bounced recipient to the org-scoped bounce block
+// list. The Resend payload does not identify which recipient bounced, so a
+// block is recorded only when the email had exactly one recipient. Blocking
+// every co-recipient of a multi-recipient email punished innocent addresses.
 func (h *WebhookHandler) recordBounce(ctx context.Context, orgID string, data json.RawMessage, reason string) {
 	var statusData emailStatusData
 	if err := json.Unmarshal(data, &statusData); err != nil {
@@ -349,17 +352,22 @@ func (h *WebhookHandler) recordBounce(ctx context.Context, orgID string, data js
 		}
 	}
 
-	for _, addr := range recipients {
-		addr = strings.ToLower(strings.TrimSpace(addr))
-		if addr == "" {
-			continue
-		}
-		if err := h.Store.InsertBounce(dbCtx, orgID, addr, reason); err != nil {
-			slog.Error("webhook: recordBounce insert failed", "org_id", orgID, "address", addr, "error", err)
-		}
+	if len(recipients) != 1 {
+		slog.Info("webhook: bounce on multi-recipient email, not attributable — no address blocked",
+			"org_id", orgID, "reason", reason, "recipients", len(recipients))
+		return
 	}
 
-	slog.Info("webhook: recorded bounce", "org_id", orgID, "reason", reason, "recipients", len(recipients))
+	addr := strings.ToLower(strings.TrimSpace(recipients[0]))
+	if addr == "" {
+		return
+	}
+	if err := h.Store.InsertBounce(dbCtx, orgID, addr, reason); err != nil {
+		slog.Error("webhook: recordBounce insert failed", "org_id", orgID, "address", addr, "error", err)
+		return
+	}
+
+	slog.Info("webhook: recorded bounce", "org_id", orgID, "reason", reason, "address", addr)
 }
 
 // verifySvixSignature verifies a Svix-signed webhook payload.

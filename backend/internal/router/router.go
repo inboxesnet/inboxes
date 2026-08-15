@@ -63,6 +63,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	syncH := &handler.SyncHandler{Store: st, RDB: rdb}
 	events := &handler.EventHandler{Store: st, CatchupMaxAge: cfg.EventCatchupMaxAge}
 	cron := &handler.CronHandler{Store: st, ResendSvc: resendSvc}
+	bounces := &handler.BounceHandler{Store: st}
 	billing := &handler.BillingHandler{
 		Store:               st,
 		Bus:                 bus,
@@ -215,7 +216,12 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 			// Emails
 			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/emails/send", emails.Send)
+			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/emails/{id}/retry", emails.Retry)
 			r.Get("/api/emails/search", emails.Search)
+
+			// Bounce block list
+			r.Get("/api/bounces", bounces.List)
+			r.With(middleware.RequireAdmin).Delete("/api/bounces/{id}", bounces.Delete)
 
 			// Domains
 			r.Get("/api/domains", domains.List)

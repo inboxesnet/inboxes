@@ -12,23 +12,26 @@ import (
 )
 
 type sendItem struct {
-	jobID    string
-	emailID  string
-	threadID string
-	payload  json.RawMessage
-	draftID  *string
-	userID   string
+	jobID      string
+	emailID    string
+	threadID   string
+	payload    json.RawMessage
+	draftID    *string
+	userID     string
+	retryCount int
+	maxRetries int
 }
 
 func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID string) error {
 	var emailID, threadID string
 	var resendPayloadRaw []byte
 	var draftID *string
+	var retryCount, maxRetries int
 	err := w.store.Q().QueryRow(ctx,
-		`SELECT email_id, thread_id, resend_payload, draft_id
+		`SELECT email_id, thread_id, resend_payload, draft_id, retry_count, max_retries
 		 FROM email_jobs WHERE id = $1`,
 		jobID,
-	).Scan(&emailID, &threadID, &resendPayloadRaw, &draftID)
+	).Scan(&emailID, &threadID, &resendPayloadRaw, &draftID, &retryCount, &maxRetries)
 	if err != nil {
 		return fmt.Errorf("load send job: %w", err)
 	}
@@ -53,17 +56,19 @@ func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID stri
 	}
 
 	items := []sendItem{{
-		jobID:    jobID,
-		emailID:  emailID,
-		threadID: threadID,
-		payload:  resendPayloadRaw,
-		draftID:  draftID,
-		userID:   userID,
+		jobID:      jobID,
+		emailID:    emailID,
+		threadID:   threadID,
+		payload:    resendPayloadRaw,
+		draftID:    draftID,
+		userID:     userID,
+		retryCount: retryCount,
+		maxRetries: maxRetries,
 	}}
 
 	// Batch collection: grab up to 99 more pending send jobs for same org
 	rows, err := w.store.Q().Query(ctx,
-		`SELECT id, email_id, thread_id, resend_payload, draft_id, user_id
+		`SELECT id, email_id, thread_id, resend_payload, draft_id, user_id, retry_count, max_retries
 		 FROM email_jobs
 		 WHERE org_id = $1 AND status = 'pending' AND job_type = 'send' AND id != $2
 		 ORDER BY created_at ASC
@@ -75,7 +80,7 @@ func (w *EmailWorker) processSend(ctx context.Context, jobID, orgID, userID stri
 		defer rows.Close()
 		for rows.Next() {
 			var item sendItem
-			if err := rows.Scan(&item.jobID, &item.emailID, &item.threadID, &item.payload, &item.draftID, &item.userID); err != nil {
+			if err := rows.Scan(&item.jobID, &item.emailID, &item.threadID, &item.payload, &item.draftID, &item.userID, &item.retryCount, &item.maxRetries); err != nil {
 				continue
 			}
 			items = append(items, item)
@@ -185,40 +190,27 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 
 	data, err := service.DoRequest(apiKey, "POST", service.ResendBaseURL()+"/emails/batch", payloads)
 	if err != nil {
-		slog.Error("email worker: batch send failed, re-enqueueing individually", "error", err, "count", len(items))
-		for _, item := range items {
-			if _, execErr := w.store.Q().Exec(ctx,
-				`UPDATE email_jobs SET status='pending', retry_count=retry_count+1,
-				 error_message=$1, updated_at=now() WHERE id=$2`,
-				err.Error(), item.jobID,
-			); execErr != nil {
-				slog.Error("email worker: failed to reset batch item", "job_id", item.jobID, "error", execErr)
-			}
-			if lpushErr := w.rdb.LPush(ctx, emailJobsQueue, item.jobID).Err(); lpushErr != nil {
-				slog.Error("email worker: failed to re-enqueue batch item", "job_id", item.jobID, "error", lpushErr)
-			}
+		// Route every item through failJob so retry accounting and the
+		// max_retries cap apply. The lead item (items[0]) is handled by
+		// processJob via the returned error. A bare re-queue here caused
+		// batched failures to retry forever with no failure surfaced.
+		slog.Error("email worker: batch send failed", "error", err, "count", len(items))
+		for _, item := range items[1:] {
+			w.failJob(ctx, item.jobID, item.retryCount, item.maxRetries, err)
 		}
-		return nil
+		return err
 	}
 
 	var resps []struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(data, &resps); err != nil {
+		parseErr := fmt.Errorf("parse batch response: %w", err)
 		slog.Error("email worker: parse batch response", "error", err)
-		for _, item := range items {
-			if _, execErr := w.store.Q().Exec(ctx,
-				`UPDATE email_jobs SET status='pending', retry_count=retry_count+1,
-				 error_message='failed to parse batch response', updated_at=now() WHERE id=$1`,
-				item.jobID,
-			); execErr != nil {
-				slog.Error("email worker: failed to reset batch item", "job_id", item.jobID, "error", execErr)
-			}
-			if lpushErr := w.rdb.LPush(ctx, emailJobsQueue, item.jobID).Err(); lpushErr != nil {
-				slog.Error("email worker: failed to re-enqueue batch item", "job_id", item.jobID, "error", lpushErr)
-			}
+		for _, item := range items[1:] {
+			w.failJob(ctx, item.jobID, item.retryCount, item.maxRetries, parseErr)
 		}
-		return nil
+		return parseErr
 	}
 
 	slog.Info("email worker: batch sent", "count", len(resps), "org_id", orgID)
@@ -232,17 +224,16 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 	// positional order as the request array, so resps[i] corresponds to items[i].
 	// If this ever changes, mismatched resend_email_id mapping will be caught by
 	// the count-mismatch warning above and the per-item audit log below.
+	var leadErr error
 	for i, item := range items {
 		if i >= len(resps) {
-			if _, execErr := w.store.Q().Exec(ctx,
-				`UPDATE email_jobs SET status='pending', retry_count=retry_count+1,
-				 error_message='unmapped in batch response', updated_at=now() WHERE id=$1`,
-				item.jobID,
-			); execErr != nil {
-				slog.Error("email worker: failed to reset unmapped item", "job_id", item.jobID, "error", execErr)
-			}
-			if lpushErr := w.rdb.LPush(ctx, emailJobsQueue, item.jobID).Err(); lpushErr != nil {
-				slog.Error("email worker: failed to re-enqueue unmapped item", "job_id", item.jobID, "error", lpushErr)
+			unmappedErr := fmt.Errorf("unmapped in batch response")
+			if i == 0 {
+				// The lead item belongs to processJob — return the error so
+				// its failJob path runs with correct accounting.
+				leadErr = unmappedErr
+			} else {
+				w.failJob(ctx, item.jobID, item.retryCount, item.maxRetries, unmappedErr)
 			}
 			continue
 		}
@@ -300,7 +291,7 @@ func (w *EmailWorker) sendBatch(ctx context.Context, apiKey string, items []send
 		})
 	}
 
-	return nil
+	return leadErr
 }
 
 // mergeParticipantEmails updates the thread's participant_emails to include

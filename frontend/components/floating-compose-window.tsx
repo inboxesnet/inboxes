@@ -382,6 +382,10 @@ export function FloatingComposeWindow() {
         }
         await api.post("/api/emails/send", payload);
       }
+      toast.success("Email sent", {
+        description: to.join(", "),
+        id: "compose-send",
+      });
       closeCompose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send");

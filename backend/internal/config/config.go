@@ -38,6 +38,7 @@ type Config struct {
 	StatusRecoveryInterval   time.Duration
 	StripeEventPrunerInterval time.Duration
 	GracePeriodInterval      time.Duration
+	SendReconcileInterval    time.Duration
 
 	// Trash collector toggle
 	TrashCollectorEnabled bool
@@ -75,6 +76,7 @@ func Load() (*Config, error) {
 		StatusRecoveryInterval:    getEnvDuration("STATUS_RECOVERY_INTERVAL", 5*time.Minute),
 		StripeEventPrunerInterval: getEnvDuration("STRIPE_EVENT_PRUNER_INTERVAL", 6*time.Hour),
 		GracePeriodInterval:       getEnvDuration("GRACE_PERIOD_INTERVAL", 1*time.Hour),
+		SendReconcileInterval:     getEnvDuration("SEND_RECONCILE_INTERVAL", 10*time.Minute),
 
 		TrashCollectorEnabled: os.Getenv("TRASH_COLLECTOR_ENABLED") == "true",
 

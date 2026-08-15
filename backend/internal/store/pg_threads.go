@@ -86,6 +86,23 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 		args = append(args, orgID, label)
 		argIdx = 3
 
+	case "failed":
+		// Virtual view: threads with at least one failed or bounced outbound
+		// email. Not backed by a thread_labels row.
+		countQuery = `SELECT COUNT(*) FROM threads t
+			WHERE t.org_id = $1 AND t.deleted_at IS NULL
+			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
+				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced'))`
+		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
+			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
+			t.trash_expires_at
+			FROM threads t
+			WHERE t.org_id = $1 AND t.deleted_at IS NULL
+			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
+				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced'))`
+		args = append(args, orgID)
+		argIdx = 2
+
 	default:
 		countQuery = `SELECT COUNT(*) FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id

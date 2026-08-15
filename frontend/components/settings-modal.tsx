@@ -235,6 +235,88 @@ function NotificationsCard() {
   );
 }
 
+interface BounceEntry {
+  id: string;
+  address: string;
+  reason: string;
+  created_at: string;
+  expires_at: string;
+}
+
+// Blocked addresses from bounces. One bounce blocks an address for a limited
+// time; admins can unblock early here.
+function BouncesCard() {
+  const [bounces, setBounces] = useState<BounceEntry[]>([]);
+  const [expiryDays, setExpiryDays] = useState(30);
+  const [loading, setLoading] = useState(true);
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .get<{ bounces: BounceEntry[]; expiry_days: number }>("/api/bounces")
+      .then((data) => {
+        setBounces(data.bounces || []);
+        setExpiryDays(data.expiry_days || 30);
+      })
+      .catch(() => toast.error("Failed to load blocked addresses"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleRemove(id: string) {
+    setRemoving(id);
+    try {
+      await api.delete(`/api/bounces/${id}`);
+      setBounces((prev) => prev.filter((b) => b.id !== id));
+      toast.success("Address unblocked");
+    } catch {
+      toast.error("Failed to unblock address");
+    } finally {
+      setRemoving(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Blocked Addresses</CardTitle>
+        <CardDescription>
+          Addresses that bounced. Sends to these addresses are blocked for {expiryDays} days. An inbound email from a blocked address also unblocks it.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner /> Loading...
+          </div>
+        ) : bounces.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No blocked addresses.</p>
+        ) : (
+          <div className="space-y-2">
+            {bounces.map((b) => (
+              <div key={b.id} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
+                <span className="font-mono truncate">{b.address}</span>
+                <Badge variant="outline">{b.reason || "bounce"}</Badge>
+                <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                  until {new Date(b.expires_at).toLocaleDateString()}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs shrink-0"
+                  onClick={() => handleRemove(b.id)}
+                  disabled={removing === b.id}
+                >
+                  {removing === b.id ? <Spinner className="h-3 w-3" /> : "Unblock"}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function PrivacyCard() {
   const { stripTrackingParams, updatePreference } = usePreferences();
 
@@ -2405,6 +2487,8 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                         </form>
                       </Card>
                     )}
+
+                    <BouncesCard />
 
                     {/* Danger zone */}
                     {user?.is_owner && (

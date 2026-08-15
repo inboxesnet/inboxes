@@ -65,13 +65,17 @@ type staleEmail struct {
 }
 
 func (sr *StatusRecovery) recover(ctx context.Context) {
+	// 'received' catches outbound emails whose status was never advanced.
+	// 'sent' catches emails whose delivery webhook never arrived — common
+	// for self-hosters without a reachable webhook URL.
 	rows, err := sr.DB.Query(ctx,
 		`SELECT id, resend_email_id, org_id FROM emails
 		 WHERE resend_email_id IS NOT NULL
-		   AND status = 'received'
+		   AND status IN ('received', 'sent')
 		   AND direction = 'outbound'
 		   AND created_at < now() - interval '10 minutes'
 		   AND created_at > now() - interval '24 hours'
+		   AND updated_at < now() - interval '30 minutes'
 		 LIMIT 50`,
 	)
 	if err != nil {
@@ -124,6 +128,13 @@ func (sr *StatusRecovery) recover(ctx context.Context) {
 
 		newStatus := mapResendEvent(resendEmail.LastEvent)
 		if newStatus == "" || newStatus == "received" {
+			// No new information. Bump updated_at so the 30-minute throttle
+			// in the query above delays the next poll of this email.
+			if _, err := sr.DB.Exec(ctx,
+				"UPDATE emails SET updated_at = now() WHERE id = $1", e.ID,
+			); err != nil {
+				slog.Error("status recovery: throttle bump failed", "email_id", e.ID, "error", err)
+			}
 			continue
 		}
 
