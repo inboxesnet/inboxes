@@ -40,6 +40,8 @@ func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		"has_api_key":          settings["has_api_key"],
 		"api_key_status":       settings["api_key_status"],
 		"api_key_checked_at":   settings["api_key_checked_at"],
+		"has_webhook":          settings["has_webhook"],
+		"last_webhook_at":      settings["last_webhook_at"],
 		"billing_enabled":      h.StripeKey != "",
 		"resend_rps":           settings["resend_rps"],
 	}

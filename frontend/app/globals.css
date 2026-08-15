@@ -96,3 +96,21 @@
   }
 }
 
+
+/* ── Print ── */
+@media print {
+  body {
+    background: white !important;
+    overflow: visible !important;
+  }
+  /* Let the printed content flow across pages instead of scrolling */
+  .overflow-y-auto,
+  .overflow-hidden {
+    overflow: visible !important;
+  }
+  .h-screen,
+  .h-dvh,
+  .h-full {
+    height: auto !important;
+  }
+}

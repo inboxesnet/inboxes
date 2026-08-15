@@ -18,6 +18,7 @@ import {
   Minus,
   Tag,
   BellOff,
+  FolderInput,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -81,14 +82,16 @@ export function ThreadToolbar({
   const { activeDomain } = useDomains();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [labelDropdownOpen, setLabelDropdownOpen] = useState(false);
+  const [moveDropdownOpen, setMoveDropdownOpen] = useState(false);
   const [customLabels, setCustomLabels] = useState<CustomLabel[]>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
+  const moveDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!dropdownOpen && !labelDropdownOpen) return;
+    if (!dropdownOpen && !labelDropdownOpen && !moveDropdownOpen) return;
     function handleClick(e: MouseEvent) {
       if (dropdownOpen && dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setDropdownOpen(false);
@@ -96,16 +99,32 @@ export function ThreadToolbar({
       if (labelDropdownOpen && labelDropdownRef.current && !labelDropdownRef.current.contains(e.target as Node)) {
         setLabelDropdownOpen(false);
       }
+      if (moveDropdownOpen && moveDropdownRef.current && !moveDropdownRef.current.contains(e.target as Node)) {
+        setMoveDropdownOpen(false);
+      }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [dropdownOpen, labelDropdownOpen]);
+  }, [dropdownOpen, labelDropdownOpen, moveDropdownOpen]);
 
   useEffect(() => {
-    if (labelDropdownOpen && customLabels.length === 0) {
+    if ((labelDropdownOpen || moveDropdownOpen) && customLabels.length === 0) {
       api.get<CustomLabel[]>("/api/labels").then(setCustomLabels).catch(() => { toast.error("Failed to load labels"); });
     }
-  }, [labelDropdownOpen]);
+  }, [labelDropdownOpen, moveDropdownOpen]);
+
+  // The "v" keyboard shortcut dispatches this event to open the move menu.
+  useEffect(() => {
+    function handleOpenMoveDialog() {
+      if (!hasSelection) {
+        toast.info("Select a conversation first (press x)", { id: "move-no-selection" });
+        return;
+      }
+      setMoveDropdownOpen(true);
+    }
+    window.addEventListener("open-move-dialog", handleOpenMoveDialog);
+    return () => window.removeEventListener("open-move-dialog", handleOpenMoveDialog);
+  }, [hasSelection]);
   const start = total === 0 ? 0 : (page - 1) * limit + 1;
   const end = Math.min(page * limit, total);
   const totalPages = Math.ceil(total / limit);
@@ -115,7 +134,7 @@ export function ThreadToolbar({
 
   return (
     <div>
-    <div className="flex items-center gap-2 h-10 px-3 border-b shrink-0">
+    <div className="flex print:hidden items-center gap-2 h-10 px-3 border-b shrink-0">
       {/* Select all checkbox + dropdown */}
       <div className="relative flex items-center" ref={dropdownRef}>
         <input
@@ -268,6 +287,54 @@ export function ThreadToolbar({
             >
               <BellOff className="h-4 w-4" />
             </button>
+
+            {/* Move dropdown — also opened by the "v" shortcut */}
+            <div className="relative" ref={moveDropdownRef}>
+              <button
+                title="Move to (v)"
+                onClick={() => setMoveDropdownOpen((v) => !v)}
+                disabled={isPending}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <FolderInput className="h-4 w-4" />
+              </button>
+              {moveDropdownOpen && (
+                <div className="absolute top-full left-0 mt-1 z-50 bg-popover border rounded-md shadow-md py-1 min-w-[160px]">
+                  {[
+                    { key: "inbox", name: "Inbox" },
+                    { key: "archive", name: "Archive" },
+                    { key: "spam", name: "Spam" },
+                    { key: "trash", name: "Trash" },
+                  ]
+                    .filter((f) => f.key !== label)
+                    .map((f) => (
+                      <button
+                        key={f.key}
+                        onClick={() => {
+                          onBulkAction(`move:${f.key}`);
+                          setMoveDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                  {customLabels.length > 0 && <div className="my-1 border-t" />}
+                  {customLabels.map((l) => (
+                    <button
+                      key={l.id}
+                      onClick={() => {
+                        onBulkAction(`move:${l.name}`);
+                        setMoveDropdownOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground"
+                    >
+                      {l.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Label dropdown */}
             <div className="relative" ref={labelDropdownRef}>

@@ -435,7 +435,7 @@ export function FloatingComposeWindow() {
   if (composeState === "minimized") {
     return (
       <div
-        className="fixed bottom-0 right-0 md:right-6 z-50 w-full md:w-[320px] bg-foreground text-background border border-b-0 md:rounded-t-lg shadow-lg cursor-pointer"
+        className="print:hidden fixed bottom-0 right-0 md:right-6 z-50 w-full md:w-[320px] bg-foreground text-background border border-b-0 md:rounded-t-lg shadow-lg cursor-pointer"
         onClick={restoreCompose}
       >
         <div className="flex items-center justify-between px-3 py-2">
@@ -500,7 +500,7 @@ export function FloatingComposeWindow() {
 
   // ── Mobile: full-screen compose ──
   const mobileCompose = (
-    <div className="fixed inset-0 z-50 bg-background flex flex-col md:hidden" role="dialog" aria-modal="true" aria-label="Compose email">
+    <div className="fixed inset-0 z-50 bg-background flex flex-col md:hidden print:hidden" role="dialog" aria-modal="true" aria-label="Compose email">
       {/* Mobile title bar */}
       <div className="flex items-center justify-between px-3 py-2 border-b shrink-0">
         <button onClick={handleClose} className="p-1 -ml-1 hover:bg-muted rounded" aria-label="Close">
@@ -645,7 +645,7 @@ export function FloatingComposeWindow() {
 
   // ── Desktop: floating compose window ──
   const desktopCompose = (
-    <div className="hidden md:flex fixed bottom-0 right-6 z-50 w-[520px] bg-background border border-b-0 rounded-t-lg shadow-2xl flex-col h-[500px] max-h-[70vh]" role="dialog" aria-label="Compose email">
+    <div className="hidden md:flex print:hidden fixed bottom-0 right-6 z-50 w-[520px] bg-background border border-b-0 rounded-t-lg shadow-2xl flex-col h-[500px] max-h-[70vh]" role="dialog" aria-label="Compose email">
       {/* Title bar — dark like Gmail */}
       <div className="flex items-center justify-between px-3 py-2 border-b bg-foreground text-background rounded-t-lg shrink-0">
         <span className="text-sm font-medium">New Message</span>

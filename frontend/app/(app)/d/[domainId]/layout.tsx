@@ -27,7 +27,8 @@ import { DragPreview } from "@/components/drag-preview";
 import { Spinner } from "@/components/ui/spinner";
 import { useBroadcastSync } from "@/hooks/use-broadcast-sync";
 import { useTheme } from "next-themes";
-import { Menu, Settings, Keyboard, Sun, Moon, LogOut } from "lucide-react";
+import { Menu, Settings, Keyboard, LogOut } from "lucide-react";
+import { nextTheme, themeLabel, ThemeIcon } from "@/components/theme-toggle";
 import type { Thread } from "@/lib/types";
 
 const SettingsModal = dynamic(
@@ -163,7 +164,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
         )}
 
         {/* Desktop sidebar */}
-        <div className="hidden md:flex">
+        <div className="hidden md:flex print:hidden">
           <DomainSidebar onCompose={handleCompose} onOpenSettings={(tab?: string) => { setSettingsTab(tab as SettingsTab | undefined); setSettingsOpen(true); }} />
         </div>
 
@@ -178,13 +179,13 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
           </button>
 
           {/* Top-right toolbar (desktop only) */}
-          <div className="hidden md:flex absolute top-0 right-0 z-20 h-14 items-center gap-1 pr-3">
+          <div className="hidden md:flex print:hidden absolute top-0 right-0 z-20 h-14 items-center gap-1 pr-3">
             <button
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              onClick={() => setTheme(nextTheme(theme))}
               className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              title={theme === "dark" ? "Light mode" : "Dark mode"}
+              title={themeLabel(theme)}
             >
-              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              <ThemeIcon theme={theme} className="h-4 w-4" />
             </button>
             <button
               onClick={() => window.dispatchEvent(new CustomEvent("open-shortcuts-dialog"))}

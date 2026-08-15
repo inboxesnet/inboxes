@@ -362,7 +362,7 @@ function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
   const listPane = (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="h-14 flex items-center pl-14 md:pl-4 pr-4 border-b shrink-0 gap-2">
+      <div className="h-14 flex print:hidden items-center pl-14 md:pl-4 pr-4 border-b shrink-0 gap-2">
         <form
           className="flex-1 flex items-center gap-2 max-w-md"
           onSubmit={(e) => {
@@ -527,7 +527,7 @@ function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
     >
       <div className="h-full flex">
         {/* List pane — hidden on mobile when a thread is selected */}
-        <div className={`${selectedThreadId ? "hidden md:block w-full md:w-[350px] md:shrink-0 md:border-r" : "flex-1"} h-full`}>
+        <div className={`${selectedThreadId ? "hidden md:block print:hidden w-full md:w-[350px] md:shrink-0 md:border-r" : "flex-1"} h-full`}>
           {listPane}
         </div>
 

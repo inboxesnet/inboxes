@@ -11,6 +11,14 @@ export const metadata: Metadata = {
   title: "Inboxes - The missing inbox for Resend",
   description: "Multi-tenant email client built on Resend",
   robots: { index: false, follow: false },
+  appleWebApp: {
+    capable: true,
+    title: "Inboxes",
+    statusBarStyle: "default",
+  },
+  icons: {
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({

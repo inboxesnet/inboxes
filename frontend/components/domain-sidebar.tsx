@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDomains } from "@/contexts/domain-context";
 import { useNotifications } from "@/contexts/notification-context";
 import { DomainIcon } from "@/components/domain-icon";
+import { nextTheme, themeLabel, ThemeIcon } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 import { queryKeys } from "@/lib/query-keys";
 import type { Domain } from "@/lib/types";
@@ -397,11 +398,11 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
         {/* Theme toggle + Settings + Logout */}
         <div className="border-t p-2 shrink-0 space-y-px">
           <button
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            onClick={() => setTheme(nextTheme(theme))}
             className="flex items-center gap-3 w-full rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
           >
-            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            {theme === "dark" ? "Light mode" : "Dark mode"}
+            <ThemeIcon theme={theme} className="h-4 w-4" />
+            {themeLabel(theme)}
           </button>
           <button
             onClick={() => { window.dispatchEvent(new CustomEvent("open-shortcuts-dialog")); onCloseSidebar?.(); }}

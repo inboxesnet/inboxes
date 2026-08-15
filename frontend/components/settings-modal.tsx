@@ -235,6 +235,60 @@ function NotificationsCard() {
   );
 }
 
+// Webhook health: whether a webhook is registered and when it last fired.
+// Without this, a dead webhook silently degrades the app to polling.
+function WebhookHealthCard() {
+  const [health, setHealth] = useState<{ has_webhook?: boolean; last_webhook_at?: string | null } | null>(null);
+
+  useEffect(() => {
+    api
+      .get<{ has_webhook?: boolean; last_webhook_at?: string | null }>("/api/orgs/settings")
+      .then(setHealth)
+      .catch(() => setHealth(null));
+  }, []);
+
+  if (!health) return null;
+
+  const last = health.last_webhook_at ? new Date(health.last_webhook_at) : null;
+  const stale = last ? Date.now() - last.getTime() > 24 * 60 * 60 * 1000 : true;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Webhook Health</CardTitle>
+        <CardDescription>
+          Resend delivers new mail to this app through a webhook. Without a live webhook the app falls back to slower polling.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="font-medium">Registered:</span>
+          {health.has_webhook ? (
+            <Badge variant="default">Yes</Badge>
+          ) : (
+            <Badge variant="destructive">No</Badge>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="font-medium">Last received:</span>
+          {last ? (
+            <span className={stale ? "text-destructive" : "text-muted-foreground"}>
+              {last.toLocaleString()}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">never</span>
+          )}
+        </div>
+        {health.has_webhook && stale && (
+          <p className="text-xs text-muted-foreground">
+            No webhook received in the last 24 hours. If new mail is late, re-register the webhook above.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 interface BounceEntry {
   id: string;
   address: string;
@@ -1785,6 +1839,8 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                         )}
                       </CardFooter>
                     </Card>
+
+                    <WebhookHealthCard />
                   </div>
                 )}
 

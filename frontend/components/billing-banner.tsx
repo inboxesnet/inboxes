@@ -58,7 +58,7 @@ export function BillingBanner() {
   return (
     <div
       role="alert"
-      className={`flex items-center justify-center gap-2 border-b px-4 py-1.5 text-sm ${tone}`}
+      className={`flex print:hidden items-center justify-center gap-2 border-b px-4 py-1.5 text-sm ${tone}`}
     >
       <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span>{message}</span>

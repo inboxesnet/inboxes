@@ -33,11 +33,23 @@ vi.mock("lucide-react", () => ({
   X: () => <span data-testid="x-icon">X</span>,
 }));
 
+// Mock sonner — in-app notifications go through the shared toast stack
+const { mockToast } = vi.hoisted(() => ({
+  mockToast: Object.assign(vi.fn(), {
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn(),
+  }),
+}));
+vi.mock("sonner", () => ({ toast: mockToast }));
+
 describe("NotificationListener", () => {
   let originalNotification: typeof Notification;
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockToast.mockClear();
     localStorage.clear();
     Object.keys(subscriptionCallbacks).forEach(k => delete subscriptionCallbacks[k]);
     originalNotification = globalThis.Notification;
@@ -112,12 +124,13 @@ describe("NotificationListener", () => {
       });
     });
 
-    expect(screen.getByText("alice@test.com")).toBeInTheDocument();
-    expect(screen.getByText("New message")).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith(
+      "alice@test.com",
+      expect.objectContaining({ description: "New message" })
+    );
   });
 
-  it("auto-dismisses toast after 5s", async () => {
-    vi.useFakeTimers();
+  it("toast auto-dismisses after 5s (duration option)", () => {
     render(<NotificationListener />);
 
     act(() => {
@@ -127,14 +140,30 @@ describe("NotificationListener", () => {
       });
     });
 
-    expect(screen.getByText("bob@test.com")).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith(
+      "bob@test.com",
+      expect.objectContaining({ duration: 5000 })
+    );
+  });
+
+  it("toast offers an Open action when the message carries a thread", () => {
+    render(<NotificationListener />);
 
     act(() => {
-      vi.advanceTimersByTime(5100);
+      subscriptionCallbacks["email.received"]!({
+        event: "email.received",
+        domain_id: "dom1",
+        thread_id: "t1",
+        payload: { from: "carol@test.com", subject: "Deep link" },
+      });
     });
 
-    expect(screen.queryByText("bob@test.com")).not.toBeInTheDocument();
-    vi.useRealTimers();
+    expect(mockToast).toHaveBeenCalledWith(
+      "carol@test.com",
+      expect.objectContaining({
+        action: expect.objectContaining({ label: "Open" }),
+      })
+    );
   });
 
   it("skips empty payload (no toast shown)", () => {
@@ -147,8 +176,7 @@ describe("NotificationListener", () => {
       });
     });
 
-    // No toast should appear for empty payload
-    expect(screen.queryByText("alice@test.com")).not.toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalled();
   });
 
   it("cleans up subscription on unmount", () => {
@@ -184,24 +212,33 @@ describe("NotificationListener", () => {
     }));
   });
 
-  it("caps in-app toasts at 3 (MAX_TOASTS)", () => {
+  it("browser Notification click opens the thread", () => {
+    const instances: Array<{ onclick?: () => void; close?: () => void }> = [];
+    const NotificationSpy = vi.fn(function (this: { close: () => void }) {
+      this.close = vi.fn();
+      instances.push(this);
+    });
+    Object.defineProperty(globalThis, "Notification", {
+      value: Object.assign(NotificationSpy, {
+        permission: "granted",
+        requestPermission: vi.fn().mockResolvedValue("granted"),
+      }),
+      configurable: true,
+      writable: true,
+    });
+
     render(<NotificationListener />);
-    expect(subscriptionCallbacks["email.received"]).toBeDefined();
 
-    // Fire 4 email.received events
-    for (let i = 1; i <= 4; i++) {
-      act(() => {
-        subscriptionCallbacks["email.received"]!({
-          event: "email.received",
-          payload: { from: `user${i}@test.com`, subject: `Message ${i}` },
-        });
+    act(() => {
+      subscriptionCallbacks["email.received"]!({
+        event: "email.received",
+        domain_id: "dom1",
+        thread_id: "t1",
+        payload: { from: "dana@test.com", subject: "Click me" },
       });
-    }
+    });
 
-    // Only the last 3 should be visible
-    expect(screen.queryByText("user1@test.com")).not.toBeInTheDocument();
-    expect(screen.getByText("user2@test.com")).toBeInTheDocument();
-    expect(screen.getByText("user3@test.com")).toBeInTheDocument();
-    expect(screen.getByText("user4@test.com")).toBeInTheDocument();
+    expect(instances).toHaveLength(1);
+    expect(typeof instances[0].onclick).toBe("function");
   });
 });

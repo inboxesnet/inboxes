@@ -25,6 +25,7 @@ vi.mock("lucide-react", () => {
     Minus: icon("minus"),
     Tag: icon("tag"),
     BellOff: icon("bell-off"),
+    FolderInput: icon("folder-input"),
   };
 });
 

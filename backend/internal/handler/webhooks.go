@@ -131,6 +131,15 @@ func (h *WebhookHandler) HandleResend(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// Record webhook health, throttled to one write per minute.
+	if _, err := h.Store.Q().Exec(ctx,
+		`UPDATE orgs SET last_webhook_at = now()
+		 WHERE id = $1 AND (last_webhook_at IS NULL OR last_webhook_at < now() - interval '60 seconds')`,
+		orgID,
+	); err != nil {
+		slog.Warn("webhook: failed to record last_webhook_at", "org_id", orgID, "error", err)
+	}
+
 	switch payload.Type {
 	case "email.received":
 		h.handleEmailReceived(ctx, orgID, payload.Data)

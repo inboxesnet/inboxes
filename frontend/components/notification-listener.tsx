@@ -7,15 +7,15 @@ import { api } from "@/lib/api";
 import { Bell, X } from "lucide-react";
 import type { WSMessage } from "@/lib/types";
 
-const MAX_TOASTS = 3;
-
-interface ToastNotification {
-  id: string;
-  from: string;
-  subject: string;
-}
-
 const PROMPT_DISMISSED_KEY = "notification_prompt_dismissed";
+
+// threadUrl builds a deep link to the thread a notification refers to.
+// The inbox page reads ?thread= from the URL and opens the reading pane.
+function threadUrl(msg: WSMessage): string | null {
+  if (!msg.domain_id) return null;
+  const base = `/d/${msg.domain_id}/inbox`;
+  return msg.thread_id ? `${base}?thread=${msg.thread_id}` : base;
+}
 
 function NotificationPrompt() {
   const [show, setShow] = useState(false);
@@ -86,11 +86,11 @@ function NotificationPrompt() {
 
 export function NotificationListener() {
   const { subscribe } = useNotifications();
-  const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
   const handleEmailReceived = useCallback(
     (msg: WSMessage) => {
       const payload = msg.payload as {
+        email_id?: string;
         from?: string;
         subject?: string;
       } | undefined;
@@ -100,26 +100,36 @@ export function NotificationListener() {
 
       const from = payload?.from ?? "";
       const subject = payload?.subject ?? "";
+      const url = threadUrl(msg);
 
-      // Desktop notification (visible when tab is backgrounded)
+      // Desktop notification (visible when tab is backgrounded).
+      // Clicking it focuses the tab and opens the thread.
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-        new Notification(from || "New email", {
+        const notification = new Notification(from || "New email", {
           body: subject,
-          tag: `email-${Date.now()}`,
+          tag: payload?.email_id ? `email-${payload.email_id}` : `email-${Date.now()}`,
         });
+        notification.onclick = () => {
+          window.focus();
+          if (url) window.location.href = url;
+          notification.close();
+        };
       }
 
-      // In-app toast (cap at MAX_TOASTS)
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      setToasts((prev) => {
-        const next = [...prev, { id, from, subject }];
-        return next.length > MAX_TOASTS ? next.slice(-MAX_TOASTS) : next;
+      // In-app toast — the one sonner stack, same as the rest of the app
+      toast(from || "New email", {
+        id: payload?.email_id ? `email-received-${payload.email_id}` : undefined,
+        description: subject,
+        duration: 5000,
+        action: url
+          ? {
+              label: "Open",
+              onClick: () => {
+                window.location.href = url;
+              },
+            }
+          : undefined,
       });
-
-      // Auto-dismiss after 5s
-      setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
-      }, 5000);
     },
     []
   );
@@ -153,24 +163,5 @@ export function NotificationListener() {
     return unsub;
   }, [subscribe]);
 
-  return (
-    <>
-      <NotificationPrompt />
-      {toasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 space-y-2">
-          {toasts.map((toast) => (
-            <div
-              key={toast.id}
-              className="bg-card border shadow-lg rounded-lg p-3 max-w-sm animate-in slide-in-from-right"
-            >
-              <p className="text-sm font-medium truncate">{toast.from}</p>
-              <p className="text-xs text-muted-foreground truncate">
-                {toast.subject}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
+  return <NotificationPrompt />;
 }
