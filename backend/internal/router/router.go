@@ -202,6 +202,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 			// Threads
 			r.Get("/api/threads", threads.List)
+			r.Get("/api/threads/counts", threads.LabelCounts)
 			r.Patch("/api/threads/bulk", threads.BulkAction)
 			r.Get("/api/threads/{id}", threads.Get)
 			r.Patch("/api/threads/{id}/read", threads.MarkRead)

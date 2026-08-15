@@ -39,6 +39,8 @@ interface ThreadToolbarProps {
   onToggleSelectAllPages: () => void;
   onBulkAction: (action: string) => void;
   onRefresh: () => void;
+  onMarkAllRead?: () => void;
+  onEmptyFolder?: () => void;
   page: number;
   total: number;
   limit: number;
@@ -67,6 +69,8 @@ export function ThreadToolbar({
   onToggleSelectAllPages,
   onBulkAction,
   onRefresh,
+  onMarkAllRead,
+  onEmptyFolder,
   page,
   total,
   limit,
@@ -79,6 +83,7 @@ export function ThreadToolbar({
   const [labelDropdownOpen, setLabelDropdownOpen] = useState(false);
   const [customLabels, setCustomLabels] = useState<CustomLabel[]>([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [confirmEmpty, setConfirmEmpty] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const labelDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -161,6 +166,27 @@ export function ThreadToolbar({
         </button>
       )}
 
+      {/* Folder-wide actions — hidden when selection active */}
+      {!hasSelection && onMarkAllRead && threads.length > 0 && (
+        <button
+          title="Mark all as read"
+          onClick={onMarkAllRead}
+          disabled={isPending}
+          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50"
+        >
+          <MailOpen className="h-4 w-4" />
+        </button>
+      )}
+      {!hasSelection && onEmptyFolder && threads.length > 0 && (
+        <button
+          onClick={() => setConfirmEmpty(true)}
+          disabled={isPending}
+          className="ml-1 text-xs text-destructive hover:underline disabled:opacity-50 whitespace-nowrap"
+        >
+          {label === "trash" ? "Empty trash" : "Empty spam"}
+        </button>
+      )}
+
       {/* Bulk actions — visible when selection exists */}
       {hasSelection && (() => {
         const selected = threads.filter((t) => selectedIds.has(t.id));
@@ -170,7 +196,7 @@ export function ThreadToolbar({
         const showMoveToInbox = label === "archive" || label === "trash" || label === "spam";
         const showSpam = label !== "sent" && label !== "spam";
         const showTrash = label !== "trash";
-        const showDelete = label === "trash";
+        const showDelete = label === "trash" || label === "spam";
 
         return (
           <div className="flex items-center gap-0.5 ml-1">
@@ -380,6 +406,15 @@ export function ThreadToolbar({
       confirmLabel="Delete"
       destructive
       onConfirm={() => onBulkAction("delete")}
+    />
+    <ConfirmDialog
+      open={confirmEmpty}
+      onOpenChange={setConfirmEmpty}
+      title={label === "trash" ? "Empty trash" : "Empty spam"}
+      description={`Permanently delete all conversations in ${label}? This cannot be undone.`}
+      confirmLabel="Delete all"
+      destructive
+      onConfirm={() => onEmptyFolder?.()}
     />
     </div>
   );

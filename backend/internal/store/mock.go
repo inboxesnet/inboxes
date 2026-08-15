@@ -72,7 +72,8 @@ type MockStore struct {
 	InsertEmailFn              func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status string, inReplyTo string, refsJSON []byte) (string, error)
 	UpdateThreadStatsFn        func(ctx context.Context, threadID, orgID, snippet, lastSender string) error
 	CreateEmailJobFn           func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
-	SearchEmailsFn             func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error)
+	SearchEmailsFn             func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error)
+	GetLabelCountsFn            func(ctx context.Context, orgID, domainID, userID, role string, aliasAddrs []string) (map[string]any, error)
 	ListAdminJobsFn            func(ctx context.Context, orgID string) ([]map[string]any, error)
 	CheckSendJobExistsFn       func(ctx context.Context, draftID string) (bool, error)
 
@@ -581,11 +582,11 @@ func (m *MockStore) CreateEmailJob(ctx context.Context, orgID, userID, domainID,
 	return "", nil
 }
 
-func (m *MockStore) SearchEmails(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error) {
+func (m *MockStore) SearchEmails(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error) {
 	if m.SearchEmailsFn != nil {
-		return m.SearchEmailsFn(ctx, orgID, query, domainID, role, aliasAddrs)
+		return m.SearchEmailsFn(ctx, orgID, query, domainID, label, role, aliasAddrs, page, limit)
 	}
-	return []map[string]any{}, nil
+	return []map[string]any{}, 0, nil
 }
 
 func (m *MockStore) ListAdminJobs(ctx context.Context, orgID string) ([]map[string]any, error) {
@@ -1493,4 +1494,11 @@ func (m *MockStore) DeleteBounce(ctx context.Context, orgID, id string) (int64, 
 		return m.DeleteBounceFn(ctx, orgID, id)
 	}
 	return 0, nil
+}
+
+func (m *MockStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, role string, aliasAddrs []string) (map[string]any, error) {
+	if m.GetLabelCountsFn != nil {
+		return m.GetLabelCountsFn(ctx, orgID, domainID, userID, role, aliasAddrs)
+	}
+	return map[string]any{}, nil
 }

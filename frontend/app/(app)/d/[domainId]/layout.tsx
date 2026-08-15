@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/core";
 import { useDomains } from "@/contexts/domain-context";
 import { EmailWindowProvider, useEmailWindow } from "@/contexts/email-window-context";
+import { useThreadAction, useBulkAction } from "@/hooks/use-threads";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import dynamic from "next/dynamic";
@@ -90,38 +91,35 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
     if (thread) setDraggedThread(thread);
   }, []);
 
+  const actionMutation = useThreadAction();
+  const bulkMutation = useBulkAction();
+
+  // Drops route through the shared mutation hooks, so the list updates
+  // optimistically and the user gets a toast with Undo.
   const handleDragEnd = useCallback(
-    async (event: DragEndEvent) => {
+    (event: DragEndEvent) => {
       setDraggedThread(null);
       const { active, over } = event;
       if (!over) return;
 
-      const targetLabel = over.id as string;
+      const targetLabel = String(over.id);
       const threadIds = (active.data.current?.threadIds as string[]) || [];
       const thread = active.data.current?.thread as Thread | undefined;
 
       if (threadIds.length > 1) {
-        // Multi-thread drag — bulk move
-        try {
-          await api.patch("/api/threads/bulk", {
-            thread_ids: threadIds,
-            action: "move",
-            label: targetLabel,
-          });
-        } catch {
-          toast.error("Failed to move thread(s)");
-        }
+        bulkMutation.mutate({
+          threadIds,
+          action: "move",
+          label: targetLabel,
+        });
       } else if (thread) {
-        try {
-          await api.patch(`/api/threads/${thread.id}/move`, {
-            label: targetLabel,
-          });
-        } catch {
-          toast.error("Failed to move thread(s)");
-        }
+        actionMutation.mutate({
+          threadId: thread.id,
+          action: `move:${targetLabel}`,
+        });
       }
     },
-    []
+    [actionMutation, bulkMutation]
   );
 
   if (loading) {

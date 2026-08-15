@@ -7,6 +7,27 @@ import type { Thread, ThreadListResponse, Label, UnreadCounts } from "@/lib/type
 
 const LIMIT = 100;
 
+const SYSTEM_MOVE_TARGETS = ["inbox", "archive", "trash", "spam"];
+
+// findCachedThread returns the first cached copy of a thread from the list caches.
+function findCachedThread(qc: ReturnType<typeof useQueryClient>, threadId: string): Thread | undefined {
+  for (const query of qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() })) {
+    const data = query.state.data as ThreadListResponse | undefined;
+    const found = data?.threads?.find((t) => t.id === threadId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+// undoOrigin decides where an undo should put a thread back: inbox when it
+// was in the inbox before the action, archive otherwise.
+function undoOrigin(thread: Thread | undefined): string {
+  if (!thread) return "inbox";
+  return hasLabel(thread, "inbox") && !hasLabel(thread, "trash") && !hasLabel(thread, "spam")
+    ? "inbox"
+    : "archive";
+}
+
 export function useThreadList(domainId: string, label: Label, page: number) {
   return useQuery({
     queryKey: queryKeys.threads.list(domainId, label, page),
@@ -198,6 +219,9 @@ export function useThreadAction() {
       const movingActions = ["archive", "trash", "spam", "delete", "move:deleted_forever"];
       const isMoving = movingActions.includes(action) || action.startsWith("move:");
 
+      // Capture where an undo should restore the thread, before caches change.
+      const undoTarget = undoOrigin(findCachedThread(qc, threadId));
+
       // Adjust unread counts BEFORE modifying cached threads (WSSync will see delta=0)
       if (action === "read" || action === "unread" || isMoving) {
         const allQueries = qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() });
@@ -320,6 +344,8 @@ export function useThreadAction() {
         // Remove stale detail cache for moved/deleted threads
         qc.removeQueries({ queryKey: queryKeys.threads.detail(threadId) });
       }
+
+      return { undoTarget };
     },
     onError: (_err, { action }) => {
       const label = action === "archive" ? "archive" : action === "trash" ? "trash" : action;
@@ -328,17 +354,44 @@ export function useThreadAction() {
       qc.invalidateQueries({ queryKey: queryKeys.search.all });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
     },
-    onSuccess: (_data, { threadId, action }) => {
-      if (action === "archive" || action === "trash") {
-        const label = action === "archive" ? "Archived" : "Moved to trash";
+    onSuccess: (_data, { threadId, action }, context) => {
+      const undoTarget = context?.undoTarget || "inbox";
+      const refresh = () => {
+        qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+        qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+        qc.invalidateQueries({ queryKey: queryKeys.search.all });
+      };
+
+      let label: string | null = null;
+      let undo: (() => Promise<unknown>) | null = null;
+
+      if (action === "archive" || action === "trash" || action === "spam") {
+        label =
+          action === "archive" ? "Archived" : action === "trash" ? "Moved to trash" : "Marked as spam";
+        undo = () => api.patch(`/api/threads/${threadId}/move`, { label: undoTarget });
+      } else if (action.startsWith("move:")) {
+        const target = action.split(":")[1];
+        if (target === "deleted_forever") return;
+        label = `Moved to ${target}`;
+        undo = SYSTEM_MOVE_TARGETS.includes(target)
+          ? () => api.patch(`/api/threads/${threadId}/move`, { label: undoTarget })
+          : () =>
+              api.patch("/api/threads/bulk", {
+                thread_ids: [threadId],
+                action: "unlabel",
+                label: target,
+              });
+      }
+
+      if (label && undo) {
+        const doUndo = undo;
         toast(label, {
           action: {
             label: "Undo",
             onClick: () => {
-              api.patch(`/api/threads/${threadId}/move`, { label: "inbox" }).then(() => {
-                qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
-                qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
-              }).catch(() => toast.error("Failed to undo"));
+              doUndo()
+                .then(refresh)
+                .catch(() => toast.error("Failed to undo"));
             },
           },
         });
@@ -378,6 +431,17 @@ export function useBulkAction() {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
       const movingActions = ["archive", "trash", "spam", "move", "delete"];
+
+      // Capture where an undo should restore the threads. When any selected
+      // thread was in the inbox, undo restores the batch to the inbox.
+      let undoTarget = "archive";
+      for (const id of threadIds) {
+        if (undoOrigin(findCachedThread(qc, id)) === "inbox") {
+          undoTarget = "inbox";
+          break;
+        }
+      }
+      if (threadIds.length === 0) undoTarget = "inbox";
 
       // Adjust unread counts BEFORE modifying cached threads (WSSync will see delta=0)
       if (action === "read" || action === "unread" || movingActions.includes(action)) {
@@ -531,6 +595,8 @@ export function useBulkAction() {
           qc.removeQueries({ queryKey: queryKeys.threads.detail(id) });
         }
       }
+
+      return { undoTarget };
     },
     onError: (_err, { action }) => {
       toast.error(`Failed to ${action} threads`);
@@ -538,22 +604,55 @@ export function useBulkAction() {
       qc.invalidateQueries({ queryKey: queryKeys.search.all });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
     },
-    onSuccess: (_data, { threadIds, action }) => {
-      if (action === "archive" || action === "trash") {
-        const label = action === "archive" ? "Archived" : "Moved to trash";
-        const count = threadIds.length;
-        toast(`${label} ${count} conversation${count > 1 ? "s" : ""}`, {
-          action: {
-            label: "Undo",
-            onClick: () => {
+    onSuccess: (_data, { threadIds, action, label: moveLabel }, context) => {
+      const undoTarget = context?.undoTarget || "inbox";
+      const count = threadIds.length;
+      const plural = `${count} conversation${count > 1 ? "s" : ""}`;
+      const refresh = () => {
+        qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+        qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+        qc.invalidateQueries({ queryKey: queryKeys.search.all });
+      };
+
+      let text: string | null = null;
+      let undo: (() => Promise<unknown>) | null = null;
+
+      if (action === "archive" || action === "trash" || action === "spam") {
+        const verb =
+          action === "archive" ? "Archived" : action === "trash" ? "Moved to trash" : "Marked as spam";
+        text = `${verb} ${plural}`;
+        undo = () =>
+          api.patch("/api/threads/bulk", {
+            thread_ids: threadIds,
+            action: "move",
+            label: undoTarget,
+          });
+      } else if (action === "move" && moveLabel && moveLabel !== "deleted_forever") {
+        text = `Moved ${plural} to ${moveLabel}`;
+        undo = SYSTEM_MOVE_TARGETS.includes(moveLabel)
+          ? () =>
               api.patch("/api/threads/bulk", {
                 thread_ids: threadIds,
                 action: "move",
-                label: "inbox",
-              }).then(() => {
-                qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
-                qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
-              }).catch(() => toast.error("Failed to undo"));
+                label: undoTarget,
+              })
+          : () =>
+              api.patch("/api/threads/bulk", {
+                thread_ids: threadIds,
+                action: "unlabel",
+                label: moveLabel,
+              });
+      }
+
+      if (text && undo && count > 0) {
+        const doUndo = undo;
+        toast(text, {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              doUndo()
+                .then(refresh)
+                .catch(() => toast.error("Failed to undo"));
             },
           },
         });

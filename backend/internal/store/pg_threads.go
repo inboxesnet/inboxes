@@ -440,9 +440,10 @@ func (s *PgStore) BulkUpdateUnread(ctx context.Context, threadIDs []string, orgI
 }
 
 func (s *PgStore) FilterTrashThreadIDs(ctx context.Context, threadIDs []string) ([]string, error) {
+	// Permanent delete is allowed from trash and spam.
 	rows, err := s.q.Query(ctx,
 		`SELECT DISTINCT thread_id FROM thread_labels
-		 WHERE thread_id = ANY($1::uuid[]) AND label = 'trash'`,
+		 WHERE thread_id = ANY($1::uuid[]) AND label IN ('trash', 'spam')`,
 		threadIDs)
 	if err != nil {
 		return nil, err
@@ -616,4 +617,81 @@ func (s *PgStore) BulkRemoveLabel(ctx context.Context, threadIDs []string, label
 		`DELETE FROM thread_labels WHERE thread_id = ANY($1::uuid[]) AND label = $2`,
 		threadIDs, label)
 	return err
+}
+
+// GetLabelCounts returns sidebar counts for one domain: total drafts for the
+// user, unread spam, unread failed sends, and unread counts per custom label.
+func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, role string, aliasAddrs []string) (map[string]any, error) {
+	result := map[string]any{}
+
+	var draftCount int
+	if err := s.q.QueryRow(ctx,
+		`SELECT COUNT(*) FROM drafts WHERE org_id = $1 AND domain_id = $2 AND user_id = $3`,
+		orgID, domainID, userID,
+	).Scan(&draftCount); err != nil {
+		return nil, err
+	}
+	result["drafts"] = draftCount
+
+	aliasFilter := ""
+	baseArgs := []interface{}{orgID, domainID}
+	if role != "admin" {
+		if aliasAddrs == nil {
+			aliasAddrs = []string{}
+		}
+		labels := make([]string, len(aliasAddrs))
+		for i, addr := range aliasAddrs {
+			labels[i] = "alias:" + addr
+		}
+		aliasFilter = ` AND EXISTS (SELECT 1 FROM thread_labels al WHERE al.thread_id = t.id AND al.label = ANY($3::text[]))`
+		baseArgs = append(baseArgs, labels)
+	}
+
+	var spamUnread int
+	if err := s.q.QueryRow(ctx,
+		`SELECT COALESCE(SUM(t.unread_count), 0) FROM threads t
+		 JOIN thread_labels tl ON tl.thread_id = t.id
+		 WHERE t.org_id = $1 AND t.domain_id = $2 AND tl.label = 'spam' AND t.deleted_at IS NULL`+aliasFilter,
+		baseArgs...,
+	).Scan(&spamUnread); err != nil {
+		return nil, err
+	}
+	result["spam"] = spamUnread
+
+	var failedCount int
+	if err := s.q.QueryRow(ctx,
+		`SELECT COUNT(DISTINCT t.id) FROM threads t
+		 WHERE t.org_id = $1 AND t.domain_id = $2 AND t.deleted_at IS NULL
+		 AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
+			AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced'))`+aliasFilter,
+		baseArgs...,
+	).Scan(&failedCount); err != nil {
+		return nil, err
+	}
+	result["failed"] = failedCount
+
+	customCounts := map[string]int{}
+	rows, err := s.q.Query(ctx,
+		`SELECT tl.label, COALESCE(SUM(t.unread_count), 0) FROM threads t
+		 JOIN thread_labels tl ON tl.thread_id = t.id
+		 WHERE t.org_id = $1 AND t.domain_id = $2 AND t.deleted_at IS NULL
+		 AND tl.label NOT IN ('inbox', 'sent', 'archive', 'starred', 'trash', 'spam', 'muted')
+		 AND tl.label NOT LIKE 'alias:%'
+		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash', 'spam'))`+aliasFilter+`
+		 GROUP BY tl.label`,
+		baseArgs...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var label string
+		var count int
+		if rows.Scan(&label, &count) == nil {
+			customCounts[label] = count
+		}
+	}
+	result["labels"] = customCounts
+	return result, nil
 }

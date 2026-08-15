@@ -10,8 +10,8 @@ export const queryKeys = {
   },
   search: {
     all: ["search"] as const,
-    results: (domainId: string, query: string) =>
-      [...queryKeys.search.all, domainId, query] as const,
+    results: (domainId: string, query: string, page = 1, scope = "") =>
+      [...queryKeys.search.all, domainId, query, page, scope] as const,
   },
   drafts: {
     all: ["drafts"] as const,
@@ -21,6 +21,10 @@ export const queryKeys = {
     all: ["domains"] as const,
     list: () => [...queryKeys.domains.all, "list"] as const,
     unreadCounts: () => [...queryKeys.domains.all, "unreadCounts"] as const,
+    // Prefixed under unreadCounts so every existing invalidation of the
+    // unread counts also refreshes the per-label counts.
+    labelCounts: (domainId: string) =>
+      [...queryKeys.domains.unreadCounts(), "labels", domainId] as const,
   },
   billing: {
     all: ["billing"] as const,

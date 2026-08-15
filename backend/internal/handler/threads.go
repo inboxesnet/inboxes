@@ -236,8 +236,10 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "label is required for move action")
 			return
 		}
-		validSystemLabels := map[string]bool{"inbox": true, "sent": true, "archive": true, "trash": true, "spam": true}
-		if !validSystemLabels[req.Label] {
+		// Valid destinations: the four system folders plus custom labels.
+		// sent/drafts/starred/failed are views, not destinations.
+		validSystemLabels := map[string]bool{"inbox": true, "archive": true, "trash": true, "spam": true}
+		if !validSystemLabels[req.Label] && isReservedLabel(req.Label) {
 			writeError(w, http.StatusBadRequest, "invalid label: "+req.Label)
 			return
 		}
@@ -265,7 +267,20 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 			case "spam":
 				return tx.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, "spam")
 			case "archive":
-				return tx.BulkRemoveLabel(ctx, req.ThreadIDs, "inbox")
+				// Archive is a destination: it also restores from trash/spam.
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "inbox"); err != nil {
+					return err
+				}
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "trash"); err != nil {
+					return err
+				}
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "spam"); err != nil {
+					return err
+				}
+				_, err := tx.Q().Exec(ctx,
+					`UPDATE threads SET trash_expires_at = NULL, updated_at = now()
+					 WHERE id = ANY($1::uuid[]) AND org_id = $2`, req.ThreadIDs, claims.OrgID)
+				return err
 			default:
 				return tx.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, req.Label)
 			}
@@ -445,7 +460,19 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 		case "spam":
 			return tx.AddLabel(ctx, threadID, claims.OrgID, "spam")
 		case "archive":
-			return tx.RemoveLabel(ctx, threadID, "inbox")
+			// Archive is a destination: it also restores from trash/spam.
+			if err := tx.RemoveLabel(ctx, threadID, "inbox"); err != nil {
+				return err
+			}
+			if err := tx.RemoveLabel(ctx, threadID, "trash"); err != nil {
+				return err
+			}
+			if err := tx.RemoveLabel(ctx, threadID, "spam"); err != nil {
+				return err
+			}
+			_, err := tx.Q().Exec(ctx, "UPDATE threads SET trash_expires_at = NULL, updated_at = now() WHERE id = $1 AND org_id = $2",
+				threadID, claims.OrgID)
+			return err
 		default:
 			return tx.AddLabel(ctx, threadID, claims.OrgID, req.Label)
 		}
@@ -801,4 +828,32 @@ func (h *ThreadHandler) updateThread(w http.ResponseWriter, r *http.Request, que
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "updated"})
+}
+
+// LabelCounts returns sidebar counts for one domain: drafts, spam unread,
+// failed sends, and unread counts per custom label.
+func (h *ThreadHandler) LabelCounts(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	domainID := r.URL.Query().Get("domain_id")
+	if domainID == "" {
+		writeError(w, http.StatusBadRequest, "domain_id is required")
+		return
+	}
+	ctx := r.Context()
+
+	var aliasAddrs []string
+	if claims.Role != "admin" {
+		aliasAddrs, _ = h.Store.GetUserAliasAddresses(ctx, claims.UserID)
+		if aliasAddrs == nil {
+			aliasAddrs = []string{}
+		}
+	}
+
+	counts, err := h.Store.GetLabelCounts(ctx, claims.OrgID, domainID, claims.UserID, claims.Role, aliasAddrs)
+	if err != nil {
+		slog.Error("threads: label counts failed", "org_id", claims.OrgID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to load counts")
+		return
+	}
+	writeJSON(w, http.StatusOK, counts)
 }

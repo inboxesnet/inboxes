@@ -177,22 +177,103 @@ func (s *PgStore) CreateEmailJob(ctx context.Context, orgID, userID, domainID, j
 	return jobID, err
 }
 
-func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainID, role string, aliasAddrs []string) ([]map[string]any, error) {
-	sqlQuery := `SELECT DISTINCT ON (t.id)
-		t.id, t.domain_id, t.subject, t.participant_emails,
-		t.last_message_at, t.message_count, t.unread_count,
-		t.snippet, t.last_sender, t.original_to, t.created_at
-		FROM threads t
-		JOIN emails e ON e.thread_id = t.id
-		WHERE e.org_id = $1 AND e.search_vector @@ plainto_tsquery('english', $2)
-		AND t.deleted_at IS NULL`
-	args := []interface{}{orgID, query}
-	argIdx := 3
+// searchFilters holds the structured parts of a search query.
+type searchFilters struct {
+	Text          string
+	From          string
+	To            string
+	HasAttachment bool
+	Before        string
+	After         string
+}
 
-	if domainID != "" {
-		sqlQuery += " AND e.domain_id = $" + strconv.Itoa(argIdx)
-		args = append(args, domainID)
+// parseSearchQuery splits a raw query into structured filters and free text.
+// Supported operators: from:, to:, has:attachment, before:YYYY-MM-DD,
+// after:YYYY-MM-DD.
+func parseSearchQuery(raw string) searchFilters {
+	var f searchFilters
+	var textParts []string
+	for _, token := range strings.Fields(raw) {
+		lower := strings.ToLower(token)
+		switch {
+		case strings.HasPrefix(lower, "from:") && len(token) > 5:
+			f.From = token[5:]
+		case strings.HasPrefix(lower, "to:") && len(token) > 3:
+			f.To = token[3:]
+		case lower == "has:attachment":
+			f.HasAttachment = true
+		case strings.HasPrefix(lower, "before:") && len(token) > 7:
+			f.Before = token[7:]
+		case strings.HasPrefix(lower, "after:") && len(token) > 6:
+			f.After = token[6:]
+		default:
+			textParts = append(textParts, token)
+		}
+	}
+	f.Text = strings.Join(textParts, " ")
+	return f
+}
+
+// isSearchDate reports whether s looks like YYYY-MM-DD.
+func isSearchDate(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
+
+func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	f := parseSearchQuery(query)
+
+	base := ` FROM threads t
+		JOIN emails e ON e.thread_id = t.id
+		WHERE e.org_id = $1 AND t.deleted_at IS NULL`
+	args := []interface{}{orgID}
+	argIdx := 2
+
+	addArg := func(cond string, val interface{}) {
+		base += strings.ReplaceAll(cond, "$N", "$"+strconv.Itoa(argIdx))
+		args = append(args, val)
 		argIdx++
+	}
+
+	if f.Text != "" {
+		addArg(" AND e.search_vector @@ plainto_tsquery('english', $N)", f.Text)
+	}
+	if f.From != "" {
+		addArg(" AND e.from_address ILIKE $N", "%"+f.From+"%")
+	}
+	if f.To != "" {
+		addArg(" AND (e.to_addresses::text ILIKE $N OR e.cc_addresses::text ILIKE $N)", "%"+f.To+"%")
+	}
+	if f.HasAttachment {
+		base += " AND COALESCE(jsonb_array_length(e.attachment_ids), 0) > 0"
+	}
+	if f.Before != "" && isSearchDate(f.Before) {
+		addArg(" AND e.created_at < $N::date", f.Before)
+	}
+	if f.After != "" && isSearchDate(f.After) {
+		addArg(" AND e.created_at >= $N::date", f.After)
+	}
+	if domainID != "" {
+		addArg(" AND e.domain_id = $N", domainID)
+	}
+
+	// Optional folder scope. "archive" is label-absence, the rest are labels.
+	switch label {
+	case "":
+		// all mail — no scope filter
+	case "archive":
+		base += ` AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('inbox','trash','spam'))`
+	default:
+		addArg(` AND EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label = $N)`, label)
+		if label != "trash" && label != "spam" {
+			base += ` AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
+		}
 	}
 
 	// Alias visibility filter for non-admins
@@ -204,15 +285,25 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 		for i, addr := range aliasAddrs {
 			labels[i] = "alias:" + addr
 		}
-		sqlQuery += ` AND EXISTS (SELECT 1 FROM thread_labels al WHERE al.thread_id = t.id AND al.label = ANY($` + strconv.Itoa(argIdx) + `::text[]))`
-		args = append(args, labels)
+		addArg(` AND EXISTS (SELECT 1 FROM thread_labels al WHERE al.thread_id = t.id AND al.label = ANY($N::text[]))`, labels)
 	}
 
-	sqlQuery = "SELECT * FROM (" + sqlQuery + ") sub ORDER BY last_message_at DESC LIMIT 50"
+	var total int
+	if err := s.q.QueryRow(ctx, "SELECT COUNT(DISTINCT t.id)"+base, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	sqlQuery := `SELECT DISTINCT ON (t.id)
+		t.id, t.domain_id, t.subject, t.participant_emails,
+		t.last_message_at, t.message_count, t.unread_count,
+		t.snippet, t.last_sender, t.original_to, t.created_at` + base
+	sqlQuery = "SELECT * FROM (" + sqlQuery + ") sub ORDER BY last_message_at DESC" +
+		" LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
+	args = append(args, limit, (page-1)*limit)
 
 	rows, err := s.q.Query(ctx, sqlQuery, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -264,7 +355,7 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 		}
 	}
 
-	return results, nil
+	return results, total, nil
 }
 
 func (s *PgStore) ListAdminJobs(ctx context.Context, orgID string) ([]map[string]any, error) {

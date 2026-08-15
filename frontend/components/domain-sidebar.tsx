@@ -9,7 +9,7 @@ import { SortableContext, verticalListSortingStrategy, horizontalListSortingStra
 import { CSS } from "@dnd-kit/utilities";
 import { useDroppable } from "@dnd-kit/core";
 import { useTheme } from "next-themes";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDomains } from "@/contexts/domain-context";
 import { useNotifications } from "@/contexts/notification-context";
 import { DomainIcon } from "@/components/domain-icon";
@@ -68,6 +68,7 @@ function DroppableLabelButton({
   icon,
   isActive,
   count,
+  droppable = true,
   onClick,
 }: {
   labelKey: string;
@@ -75,9 +76,10 @@ function DroppableLabelButton({
   icon: React.ReactNode;
   isActive: boolean;
   count: number;
+  droppable?: boolean;
   onClick: () => void;
 }) {
-  const { isOver, setNodeRef } = useDroppable({ id: labelKey });
+  const { isOver, setNodeRef } = useDroppable({ id: labelKey, disabled: !droppable });
 
   return (
     <button
@@ -193,6 +195,16 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
   const { connected } = useNotifications();
   const qc = useQueryClient();
 
+  const { data: labelCounts } = useQuery({
+    queryKey: queryKeys.domains.labelCounts(activeDomain?.id ?? ""),
+    queryFn: () =>
+      api.get<{ drafts: number; spam: number; failed: number; labels: Record<string, number> }>(
+        `/api/threads/counts?domain_id=${activeDomain?.id}`
+      ),
+    enabled: !!activeDomain,
+    staleTime: 30 * 1000,
+  });
+
   const reorderSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   );
@@ -271,12 +283,18 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
     window.location.href = "/login";
   }
 
+  // sent/drafts/starred/failed are views, not move destinations
+  const DROP_TARGETS = new Set(["inbox", "archive", "spam", "trash"]);
+
   const labelList = LABELS.map((f) => {
     const isActive = currentLabel === f.key;
-    const count =
-      f.key === "inbox" && activeDomain
-        ? unreadCounts[activeDomain.id] || 0
-        : 0;
+    let count = 0;
+    if (activeDomain) {
+      if (f.key === "inbox") count = unreadCounts[activeDomain.id] || 0;
+      else if (f.key === "drafts") count = labelCounts?.drafts || 0;
+      else if (f.key === "spam") count = labelCounts?.spam || 0;
+      else if (f.key === "failed") count = labelCounts?.failed || 0;
+    }
 
     return (
       <DroppableLabelButton
@@ -286,6 +304,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
         icon={f.icon}
         isActive={isActive}
         count={count}
+        droppable={DROP_TARGETS.has(f.key)}
         onClick={() => navigateToLabel(f.key)}
       />
     );
@@ -364,7 +383,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
                   label={l.name}
                   icon={<Tag className="h-4 w-4" />}
                   isActive={currentLabel === l.name}
-                  count={0}
+                  count={labelCounts?.labels?.[l.name] || 0}
                   onClick={() => navigateToLabel(l.name)}
                 />
               ))}
@@ -479,7 +498,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
                     label={l.name}
                     icon={<Tag className="h-4 w-4" />}
                     isActive={currentLabel === l.name}
-                    count={0}
+                    count={labelCounts?.labels?.[l.name] || 0}
                     onClick={() => navigateToLabel(l.name)}
                   />
                 ))}

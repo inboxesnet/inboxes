@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 
 export function useThreadSelection(threadIds: string[]) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const anchorIndexRef = useRef<number | null>(null);
 
   const toggleSelect = useCallback((id: string) => {
+    anchorIndexRef.current = null;
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -16,6 +18,35 @@ export function useThreadSelection(threadIds: string[]) {
       return next;
     });
   }, []);
+
+  // selectClick handles a checkbox click with range support: a shift-click
+  // selects everything between the last clicked row and this one.
+  const selectClick = useCallback(
+    (id: string, index: number, shiftKey: boolean) => {
+      if (shiftKey && anchorIndexRef.current !== null) {
+        const start = Math.min(anchorIndexRef.current, index);
+        const end = Math.max(anchorIndexRef.current, index);
+        const range = threadIds.slice(start, end + 1);
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const rangeId of range) next.add(rangeId);
+          return next;
+        });
+      } else {
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) {
+            next.delete(id);
+          } else {
+            next.add(id);
+          }
+          return next;
+        });
+      }
+      anchorIndexRef.current = index;
+    },
+    [threadIds]
+  );
 
   const toggleSelectAll = useCallback(() => {
     setSelectedIds((prev) => {
@@ -41,12 +72,13 @@ export function useThreadSelection(threadIds: string[]) {
     () => ({
       selectedIds,
       toggleSelect,
+      selectClick,
       toggleSelectAll,
       clearSelection,
       selectIds,
       allSelected,
       someSelected,
     }),
-    [selectedIds, toggleSelect, toggleSelectAll, clearSelection, selectIds, allSelected, someSelected]
+    [selectedIds, toggleSelect, selectClick, toggleSelectAll, clearSelection, selectIds, allSelected, someSelected]
   );
 }

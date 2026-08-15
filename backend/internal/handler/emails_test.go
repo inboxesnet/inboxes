@@ -259,11 +259,11 @@ func TestSearch_ValidQuery(t *testing.T) {
 	t.Parallel()
 	h := &EmailHandler{
 		Store: &store.MockStore{
-			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error) {
+			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error) {
 				return []map[string]any{
 					{"id": "thread1", "subject": "Hello"},
 					{"id": "thread2", "subject": "World"},
-				}, nil
+				}, 2, nil
 			},
 		},
 	}
@@ -295,9 +295,9 @@ func TestSearch_NonAdminAliasFiltered(t *testing.T) {
 			GetUserAliasAddressesFn: func(ctx context.Context, userID string) ([]string, error) {
 				return []string{"alias1@example.com", "alias2@example.com"}, nil
 			},
-			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error) {
+			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error) {
 				capturedAliasAddrs = aliasAddrs
-				return []map[string]any{}, nil
+				return []map[string]any{}, 0, nil
 			},
 		},
 	}
@@ -326,9 +326,9 @@ func TestSearch_AdminUnfiltered(t *testing.T) {
 				aliasWasCalled = true
 				return []string{"should-not-be-used@example.com"}, nil
 			},
-			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error) {
+			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error) {
 				capturedAliasAddrs = aliasAddrs
-				return []map[string]any{}, nil
+				return []map[string]any{}, 0, nil
 			},
 		},
 	}
@@ -487,8 +487,8 @@ func TestSearch_Max50Results(t *testing.T) {
 	}
 	h := &EmailHandler{
 		Store: &store.MockStore{
-			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error) {
-				return results, nil
+			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error) {
+				return results, len(results), nil
 			},
 		},
 	}
@@ -512,9 +512,9 @@ func TestSearch_DomainFilter(t *testing.T) {
 	var capturedDomainID string
 	h := &EmailHandler{
 		Store: &store.MockStore{
-			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, role string, aliasAddrs []string) ([]map[string]any, error) {
+			SearchEmailsFn: func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error) {
 				capturedDomainID = domainID
-				return []map[string]any{{"id": "thread1"}}, nil
+				return []map[string]any{{"id": "thread1"}}, 1, nil
 			},
 		},
 	}

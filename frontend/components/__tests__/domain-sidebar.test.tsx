@@ -59,11 +59,12 @@ vi.mock("@dnd-kit/utilities", () => ({
 // Mock @tanstack/react-query
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ setQueryData: vi.fn(), invalidateQueries: vi.fn() }),
+  useQuery: () => ({ data: undefined }),
 }));
 
 // Mock query-keys
 vi.mock("@/lib/query-keys", () => ({
-  queryKeys: { domains: { list: () => ["domains", "list"] } },
+  queryKeys: { domains: { list: () => ["domains", "list"], labelCounts: (id: string) => ["domains", "unreadCounts", "labels", id] } },
 }));
 
 // Mock domain context

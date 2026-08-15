@@ -16,6 +16,7 @@ interface ThreadListProps {
   selectedIds: Set<string>;
   focusedIndex: number;
   onToggleSelect: (id: string) => void;
+  onSelectClick?: (id: string, index: number, shiftKey: boolean) => void;
   onToggleSelectAll: () => void;
   onStar: (id: string) => void;
   onAction: (id: string, action: string) => void;
@@ -32,6 +33,7 @@ function ThreadRow({
   selectedIds,
   focusedIndex,
   onToggleSelect,
+  onSelectClick,
   onStar,
   onAction,
   onThreadClick,
@@ -45,6 +47,7 @@ function ThreadRow({
   selectedIds: Set<string>;
   focusedIndex: number;
   onToggleSelect: (id: string) => void;
+  onSelectClick?: (id: string, index: number, shiftKey: boolean) => void;
   onStar: (id: string) => void;
   onAction: (id: string, action: string) => void;
   onThreadClick?: (threadId: string) => void;
@@ -106,7 +109,12 @@ function ThreadRow({
         <input
           type="checkbox"
           checked={isSelected}
-          onChange={() => onToggleSelect(thread.id)}
+          onClick={(e) =>
+            onSelectClick
+              ? onSelectClick(thread.id, index, e.shiftKey)
+              : onToggleSelect(thread.id)
+          }
+          onChange={() => {}}
           className="h-3.5 w-3.5 rounded border-muted-foreground/40 cursor-pointer accent-primary"
         />
       </label>
@@ -254,6 +262,7 @@ export function ThreadList({
   selectedIds,
   focusedIndex,
   onToggleSelect,
+  onSelectClick,
   onToggleSelectAll,
   onStar,
   onAction,
@@ -277,6 +286,7 @@ export function ThreadList({
           selectedIds={selectedIds}
           focusedIndex={focusedIndex}
           onToggleSelect={onToggleSelect}
+          onSelectClick={onSelectClick}
           onStar={onStar}
           onAction={onAction}
           onThreadClick={onThreadClick}

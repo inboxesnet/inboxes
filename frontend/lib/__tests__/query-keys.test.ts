@@ -35,9 +35,16 @@ describe("queryKeys.search", () => {
     expect(queryKeys.search.all).toEqual(["search"]);
   });
 
-  it("results includes domain and query", () => {
+  it("results includes domain, query, page, and scope", () => {
     const key = queryKeys.search.results("d1", "hello");
-    expect(key).toEqual(["search", "d1", "hello"]);
+    expect(key).toEqual(["search", "d1", "hello", 1, ""]);
+    expect(queryKeys.search.results("d1", "hello", 2, "inbox")).toEqual([
+      "search",
+      "d1",
+      "hello",
+      2,
+      "inbox",
+    ]);
   });
 });
 

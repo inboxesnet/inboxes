@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -278,10 +279,18 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	q := r.URL.Query().Get("q")
 	domainID := r.URL.Query().Get("domain_id")
+	label := r.URL.Query().Get("label")
 	if q == "" {
 		writeError(w, http.StatusBadRequest, "q parameter is required")
 		return
 	}
+	page := 1
+	if p := r.URL.Query().Get("page"); p != "" {
+		if parsed, err := strconv.Atoi(p); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	const searchLimit = 50
 
 	ctx := r.Context()
 
@@ -294,13 +303,19 @@ func (h *EmailHandler) Search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	results, err := h.Store.SearchEmails(ctx, claims.OrgID, q, domainID, claims.Role, aliasAddrs)
+	results, total, err := h.Store.SearchEmails(ctx, claims.OrgID, q, domainID, label, claims.Role, aliasAddrs, page, searchLimit)
 	if err != nil {
+		slog.Error("email search failed", "org_id", claims.OrgID, "error", err)
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"threads": results})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"threads": results,
+		"total":   total,
+		"page":    page,
+		"limit":   searchLimit,
+	})
 }
 
 func (h *EmailHandler) AdminJobs(w http.ResponseWriter, r *http.Request) {

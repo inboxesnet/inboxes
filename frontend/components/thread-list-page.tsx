@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { useThreadList, useStarThread, useThreadAction, useBulkAction } from "@/hooks/use-threads";
 import { useThreadSelection } from "@/hooks/use-thread-selection";
@@ -12,6 +12,7 @@ import { ThreadToolbar } from "@/components/thread-toolbar";
 import { ThreadView } from "@/components/thread-view";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ThreadListProvider } from "@/contexts/thread-list-context";
 import { useUnreadBadge } from "@/hooks/use-unread-badge";
 import { queryKeys } from "@/lib/query-keys";
@@ -49,34 +50,78 @@ interface ThreadListPageProps {
   subtitle?: string;
 }
 
-export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) {
+// The URL owns the view state: ?thread= (open thread), ?q= (search),
+// ?page=, ?scope=folder (search scope). Refresh and Back now work.
+export function ThreadListPage(props: ThreadListPageProps) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center h-full">
+          <Spinner className="h-6 w-6" />
+        </div>
+      }
+    >
+      <ThreadListPageInner {...props} />
+    </Suspense>
+  );
+}
+
+function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
   const params = useParams();
   const domainId = params.domainId as string;
   const qc = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
-  const [page, setPage] = useState(1);
+  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1);
+  const searchQuery = searchParams.get("q") || "";
+  const scopeFolder = searchParams.get("scope") === "folder";
+  const selectedThreadId = searchParams.get("thread");
+
+  const updateParams = useCallback(
+    (updates: Record<string, string | null>, push = false) => {
+      const sp = new URLSearchParams(searchParams.toString());
+      for (const [key, value] of Object.entries(updates)) {
+        if (value === null || value === "") sp.delete(key);
+        else sp.set(key, value);
+      }
+      const qs = sp.toString();
+      const url = qs ? `${pathname}?${qs}` : pathname;
+      if (push) router.push(url, { scroll: false });
+      else router.replace(url, { scroll: false });
+    },
+    [searchParams, pathname, router]
+  );
+
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const [searchInput, setSearchInput] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchInput, setSearchInput] = useState(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
   const scrollPositionRef = useRef(0);
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectAllPages, setSelectAllPages] = useState(false);
+
+  // Keep the input in sync when the query changes via URL navigation
+  useEffect(() => {
+    setSearchInput(searchQuery);
+  }, [searchQuery]);
 
   const { data, isLoading, isFetching } = useThreadList(domainId, label, page);
   const threads = data?.threads ?? [];
   const total = data?.total ?? 0;
 
+  const searchScope = scopeFolder ? label : "";
   const { data: searchData, isFetching: searchFetching, isError: searchError, refetch: searchRefetch } = useQuery({
-    queryKey: queryKeys.search.results(domainId, searchQuery),
+    queryKey: queryKeys.search.results(domainId, searchQuery, page, searchScope),
     queryFn: () =>
-      api.get<{ threads: Thread[] }>(
-        `/api/emails/search?q=${encodeURIComponent(searchQuery)}&domain_id=${domainId}`
+      api.get<{ threads: Thread[]; total: number; limit: number }>(
+        `/api/emails/search?q=${encodeURIComponent(searchQuery)}&domain_id=${domainId}&page=${page}${searchScope ? `&label=${encodeURIComponent(searchScope)}` : ""}`
       ),
     enabled: searchQuery.length > 0,
   });
   const searchResults = searchData?.threads ?? [];
+  const searchTotal = searchData?.total ?? 0;
+  const searchLimit = searchData?.limit ?? 50;
 
   const isSearching = searchQuery.length > 0;
   const activeThreads = isSearching ? searchResults : threads;
@@ -102,12 +147,11 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
   // Update page title + favicon badge
   useUnreadBadge(title, domainId);
 
-  // Reset selection, focus, and reading pane when domain/label changes
+  // Reset selection and focus when domain/label changes. The URL params
+  // (page/thread/search) already reset on navigation.
   useEffect(() => {
-    setPage(1);
     clearSelectionRef.current();
     setFocusedIndex(-1);
-    setSelectedThreadId(null);
     setSelectAllPages(false);
   }, [domainId, label]);
 
@@ -158,9 +202,9 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
       selection.clearSelection();
       setFocusedIndex(-1);
       setSelectAllPages(false);
-      setPage(newPage);
+      updateParams({ page: newPage <= 1 ? null : String(newPage), thread: null }, true);
     },
-    [selection.clearSelection]
+    [selection.clearSelection, updateParams]
   );
 
   const handleStar = useCallback(
@@ -177,10 +221,10 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
       // Close reading pane when thread is moved/archived/trashed
       const closingActions = ["archive", "trash", "spam", "delete"];
       if ((closingActions.includes(action) || action.startsWith("move:")) && threadId === selectedThreadId) {
-        setSelectedThreadId(null);
+        updateParams({ thread: null });
       }
     },
-    [actionMutation, selectedThreadId]
+    [actionMutation, selectedThreadId, updateParams]
   );
 
   const handleThreadClick = useCallback(
@@ -189,9 +233,10 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
       if (listScrollRef.current) {
         scrollPositionRef.current = listScrollRef.current.scrollTop;
       }
-      setSelectedThreadId(threadId);
+      // Push, so browser Back closes the reading pane
+      updateParams({ thread: threadId }, true);
     },
-    []
+    [updateParams]
   );
 
   // Restore scroll position when returning from thread view
@@ -256,10 +301,58 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
     [selection.selectedIds, selection.clearSelection, bulkMutation, selectAllPages, label, domainId]
   );
 
+  const handleMarkAllRead = useCallback(() => {
+    bulkMutation.mutate(
+      {
+        threadIds: [],
+        action: "read",
+        selectAll: true,
+        filterLabel: label,
+        filterDomainId: domainId,
+      },
+      { onSuccess: () => toast.success("Marked all as read") }
+    );
+  }, [bulkMutation, label, domainId]);
+
+  const handleEmptyFolder = useCallback(() => {
+    bulkMutation.mutate(
+      {
+        threadIds: [],
+        action: "delete",
+        selectAll: true,
+        filterLabel: label,
+        filterDomainId: domainId,
+      },
+      {
+        onSuccess: () => {
+          toast.success(label === "trash" ? "Trash emptied" : "Spam emptied");
+          qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+        },
+      }
+    );
+  }, [bulkMutation, label, domainId, qc]);
+
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Spinner className="h-6 w-6" />
+      <div className="h-full flex flex-col">
+        <div className="h-14 flex items-center pl-14 md:pl-4 pr-4 border-b shrink-0">
+          <Skeleton className="h-8 w-full max-w-md" />
+        </div>
+        <div className="h-10 flex items-center gap-3 px-4 border-b shrink-0">
+          <Skeleton className="h-4 w-4" />
+          <Skeleton className="h-4 w-28" />
+        </div>
+        <div className="flex-1 overflow-hidden divide-y">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 px-3 h-14 md:h-10">
+              <Skeleton className="h-3.5 w-3.5 shrink-0" />
+              <Skeleton className="h-3.5 w-3.5 shrink-0" />
+              <Skeleton className="h-3.5 w-40 shrink-0" />
+              <Skeleton className="h-3.5 flex-1" />
+              <Skeleton className="h-3.5 w-12 shrink-0" />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -274,7 +367,10 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
           className="flex-1 flex items-center gap-2 max-w-md"
           onSubmit={(e) => {
             e.preventDefault();
-            setSearchQuery(searchInput.trim());
+            updateParams(
+              { q: searchInput.trim() || null, page: null, thread: null },
+              true
+            );
           }}
         >
           <div className="relative flex-1">
@@ -283,21 +379,33 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
               ref={searchInputRef}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              placeholder={`Search ${title.toLowerCase()} by subject, sender, or content...`}
+              placeholder="Search all mail — try from:, to:, has:attachment, after:2026-01-01"
               className="h-8 pl-8 bg-muted"
             />
           </div>
           {searchQuery && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchInput("");
-                setSearchQuery("");
-              }}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  updateParams({ scope: scopeFolder ? null : "folder", page: null })
+                }
+                className={`text-xs whitespace-nowrap rounded-full border px-2 py-0.5 transition-colors ${scopeFolder ? "bg-primary text-primary-foreground border-primary" : "text-muted-foreground hover:text-foreground"}`}
+                title={scopeFolder ? "Searching this folder only" : "Searching all mail"}
+              >
+                {scopeFolder ? `Only ${title}` : "All mail"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchInput("");
+                  updateParams({ q: null, scope: null, page: null });
+                }}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </>
           )}
         </form>
       </div>
@@ -318,9 +426,11 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
         onToggleSelectAllPages={handleToggleSelectAllPages}
         onBulkAction={handleBulkAction}
         onRefresh={handleRefresh}
-        page={isSearching ? 1 : page}
-        total={isSearching ? searchResults.length : total}
-        limit={isSearching ? searchResults.length : LIMIT}
+        onMarkAllRead={!isSearching && label !== "trash" && label !== "spam" && label !== "drafts" ? handleMarkAllRead : undefined}
+        onEmptyFolder={!isSearching && (label === "trash" || label === "spam") ? handleEmptyFolder : undefined}
+        page={page}
+        total={isSearching ? searchTotal : total}
+        limit={isSearching ? searchLimit : LIMIT}
         onPageChange={handlePageChange}
         loading={isSearching ? searchFetching : (refreshing || syncRunning)}
         isPending={bulkMutation.isPending}
@@ -344,7 +454,7 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
             <div className="flex flex-col items-center justify-center h-32 gap-2 text-sm">
               <span className="text-muted-foreground">No results found for &ldquo;{searchQuery}&rdquo;</span>
               <button
-                onClick={() => { setSearchInput(""); setSearchQuery(""); }}
+                onClick={() => { setSearchInput(""); updateParams({ q: null, scope: null, page: null }); }}
                 className="text-primary hover:underline text-xs"
               >
                 Clear search
@@ -359,6 +469,7 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
               selectedIds={selection.selectedIds}
               focusedIndex={focusedIndex}
               onToggleSelect={selection.toggleSelect}
+              onSelectClick={selection.selectClick}
               onToggleSelectAll={selection.toggleSelectAll}
               onStar={handleStar}
               onAction={handleAction}
@@ -373,7 +484,7 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
           <div ref={listScrollRef} className={`flex-1 overflow-y-auto overflow-x-hidden relative ${refreshing ? "opacity-60" : ""}`}>
             {threads.length === 0 ? (
               <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                {EMPTY_MESSAGES[label]}
+                {EMPTY_MESSAGES[label] ?? `No messages with label “${label}”`}
               </div>
             ) : (
               <ThreadList
@@ -384,6 +495,7 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
                 selectedIds={selection.selectedIds}
                 focusedIndex={focusedIndex}
                 onToggleSelect={selection.toggleSelect}
+              onSelectClick={selection.selectClick}
                 onToggleSelectAll={selection.toggleSelectAll}
                 onStar={handleStar}
                 onAction={handleAction}
@@ -427,7 +539,7 @@ export function ThreadListPage({ label, title, subtitle }: ThreadListPageProps) 
               threadId={selectedThreadId}
               domainId={domainId}
               label={label}
-              onBack={() => setSelectedThreadId(null)}
+              onBack={() => updateParams({ thread: null })}
             />
           </div>
         )}
