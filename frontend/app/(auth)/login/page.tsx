@@ -25,6 +25,16 @@ export default function LoginPage() {
   const [showSignup, setShowSignup] = useState(true);
 
   useEffect(() => {
+    // A user with a valid session does not need the login form.
+    api
+      .get("/api/users/me")
+      .then(() => router.replace("/d"))
+      .catch(() => {
+        // No session — stay on the login form.
+      });
+  }, [router]);
+
+  useEffect(() => {
     api
       .get<{ commercial: boolean }>("/api/setup/status")
       .then((res) => {

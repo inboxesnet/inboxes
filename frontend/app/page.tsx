@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Spinner } from "@/components/ui/spinner";
 
 interface AppConfig {
@@ -18,6 +18,18 @@ export default function Home() {
 
   useEffect(() => {
     async function check() {
+      // A valid session cookie skips the auth pages entirely.
+      try {
+        await api.get("/api/users/me");
+        router.replace("/d");
+        return;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 402) {
+          router.replace("/billing");
+          return;
+        }
+      }
+
       try {
         const config = await api.get<AppConfig>("/api/config");
         if (config.commercial) {

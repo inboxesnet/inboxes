@@ -29,19 +29,31 @@ export default function SignupPage() {
   const [blocked, setBlocked] = useState(false);
 
   useEffect(() => {
-    api
-      .get<{ needs_setup: boolean; commercial: boolean }>("/api/setup/status")
-      .then((res) => {
+    async function check() {
+      // A user with a valid session does not need the signup form.
+      try {
+        await api.get("/api/users/me");
+        router.replace("/d");
+        return;
+      } catch {
+        // No session — continue to the status check.
+      }
+
+      try {
+        const res = await api.get<{ needs_setup: boolean; commercial: boolean }>(
+          "/api/setup/status"
+        );
         if (res.needs_setup) {
           router.replace("/setup");
         } else if (!res.commercial) {
           setBlocked(true);
         }
-      })
-      .catch(() => {
+      } catch {
         // If status check fails, allow form to show
-      })
-      .finally(() => setChecking(false));
+      }
+      setChecking(false);
+    }
+    check();
   }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
