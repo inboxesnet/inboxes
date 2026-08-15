@@ -152,6 +152,8 @@ export interface Draft {
   body_html: string;
   body_plain: string;
   attachment_ids?: string[];
+  in_reply_to?: string;
+  references_header?: string;
   created_at: string;
   updated_at: string;
 }

@@ -51,6 +51,8 @@ func (h *DraftHandler) Create(w http.ResponseWriter, r *http.Request) {
 		BodyHTML      string   `json:"body_html"`
 		BodyPlain     string   `json:"body_plain"`
 		AttachmentIDs []string `json:"attachment_ids"`
+		InReplyTo     string   `json:"in_reply_to"`
+		References    []string `json:"references"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -87,7 +89,8 @@ func (h *DraftHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id, err := h.Store.CreateDraft(r.Context(), claims.OrgID, claims.UserID, req.DomainID,
-		req.ThreadID, req.Kind, req.Subject, req.FromAddress, toJSON, ccJSON, bccJSON, attJSON)
+		req.ThreadID, req.Kind, req.Subject, req.FromAddress, toJSON, ccJSON, bccJSON, attJSON,
+		req.InReplyTo, strings.Join(req.References, " "))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create draft")
 		return
@@ -110,6 +113,9 @@ func (h *DraftHandler) Update(w http.ResponseWriter, r *http.Request) {
 		BodyHTML      *string  `json:"body_html"`
 		BodyPlain     *string  `json:"body_plain"`
 		AttachmentIDs []string `json:"attachment_ids"`
+		ThreadID      *string  `json:"thread_id"`
+		InReplyTo     *string  `json:"in_reply_to"`
+		References    []string `json:"references"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -179,6 +185,21 @@ func (h *DraftHandler) Update(w http.ResponseWriter, r *http.Request) {
 		args = append(args, attJSON)
 		argIdx++
 	}
+	if req.ThreadID != nil {
+		setClauses = append(setClauses, "thread_id = $"+itoa(argIdx))
+		args = append(args, *req.ThreadID)
+		argIdx++
+	}
+	if req.InReplyTo != nil {
+		setClauses = append(setClauses, "in_reply_to = $"+itoa(argIdx))
+		args = append(args, *req.InReplyTo)
+		argIdx++
+	}
+	if req.References != nil {
+		setClauses = append(setClauses, "references_header = $"+itoa(argIdx))
+		args = append(args, strings.Join(req.References, " "))
+		argIdx++
+	}
 
 	n, err := h.Store.UpdateDraft(ctx, id, claims.UserID, setClauses, args)
 	if err != nil {
@@ -227,12 +248,11 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch draft
-	domainID, threadID, kind, subject, fromAddr, bodyHTML, bodyPlain, toAddr, ccAddr, bccAddr, attachmentIDsRaw, err := h.Store.GetDraft(ctx, id, claims.UserID, claims.OrgID)
+	domainID, threadID, kind, subject, fromAddr, bodyHTML, bodyPlain, toAddr, ccAddr, bccAddr, attachmentIDsRaw, inReplyTo, referencesHeader, err := h.Store.GetDraft(ctx, id, claims.UserID, claims.OrgID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "draft not found")
 		return
 	}
-	_ = kind
 
 	var to, cc, bcc []string
 	if err := json.Unmarshal(toAddr, &to); err != nil {
@@ -311,6 +331,15 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	if len(bcc) > 0 {
 		resendPayload["bcc"] = bcc
 	}
+	// Threading headers, like the direct send path. Without them a reply
+	// sent from a draft starts a new conversation at the recipient.
+	if inReplyTo != "" {
+		headers := map[string]string{"In-Reply-To": inReplyTo}
+		if referencesHeader != "" {
+			headers["References"] = referencesHeader
+		}
+		resendPayload["headers"] = headers
+	}
 
 	// Attach files from draft's attachment_ids
 	var attachmentIDs []string
@@ -366,10 +395,14 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Store email with status='queued'
+		// Store email with status='queued', keeping the threading context
+		var refsJSON []byte
+		if referencesHeader != "" {
+			refsJSON, _ = json.Marshal(strings.Fields(referencesHeader))
+		}
 		var err error
 		emailID, err = tx.InsertEmail(ctx, finalThreadID, claims.UserID, claims.OrgID, domainID,
-			"outbound", fromAddr, toJSON, ccJSON, bccJSON, subject, bodyHTML, bodyPlain, "queued", "", nil)
+			"outbound", fromAddr, toJSON, ccJSON, bccJSON, subject, bodyHTML, bodyPlain, "queued", inReplyTo, refsJSON)
 		if err != nil {
 			slog.Error("draft: insert email failed", "error", err)
 			return err
@@ -400,7 +433,7 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		slog.Error("draft: redis lpush failed", "job_id", jobID, "error", err)
 	}
 
-	slog.Info("draft: queued send", "email_id", emailID, "thread_id", finalThreadID, "job_id", jobID, "draft_id", id)
+	slog.Info("draft: queued send", "email_id", emailID, "thread_id", finalThreadID, "job_id", jobID, "draft_id", id, "kind", kind)
 
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"email_id":  emailID,

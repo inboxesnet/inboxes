@@ -204,10 +204,10 @@ type LabelStore interface {
 
 type DraftStore interface {
 	ListDrafts(ctx context.Context, userID, orgID, domainID string) ([]map[string]any, error)
-	CreateDraft(ctx context.Context, orgID, userID, domainID string, threadID *string, kind, subject, fromAddress string, toJSON, ccJSON, bccJSON, attJSON []byte) (string, error)
+	CreateDraft(ctx context.Context, orgID, userID, domainID string, threadID *string, kind, subject, fromAddress string, toJSON, ccJSON, bccJSON, attJSON []byte, inReplyTo, referencesHeader string) (string, error)
 	UpdateDraft(ctx context.Context, draftID, userID string, sets []string, args []any) (int64, error)
 	DeleteDraft(ctx context.Context, draftID, userID string) (int64, error)
-	GetDraft(ctx context.Context, draftID, userID, orgID string) (domainID string, threadID *string, kind, subject, fromAddr, bodyHTML, bodyPlain string, toAddr, ccAddr, bccAddr, attIDsRaw json.RawMessage, err error)
+	GetDraft(ctx context.Context, draftID, userID, orgID string) (domainID string, threadID *string, kind, subject, fromAddr, bodyHTML, bodyPlain string, toAddr, ccAddr, bccAddr, attIDsRaw json.RawMessage, inReplyTo, referencesHeader string, err error)
 }
 
 // ---- Orgs ----

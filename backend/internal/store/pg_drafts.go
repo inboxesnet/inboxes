@@ -10,7 +10,7 @@ import (
 func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string) ([]map[string]any, error) {
 	query := `SELECT id, domain_id, thread_id, kind, subject, from_address,
 		to_addresses, cc_addresses, bcc_addresses, body_html, body_plain,
-		created_at, updated_at, COALESCE(attachment_ids, '[]')
+		created_at, updated_at, COALESCE(attachment_ids, '[]'), in_reply_to, references_header
 		FROM drafts WHERE user_id = $1 AND org_id = $2`
 	args := []any{userID, orgID}
 
@@ -29,13 +29,14 @@ func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string
 	var drafts []map[string]any
 	for rows.Next() {
 		var id, domID, kind, subject, fromAddr, bodyHTML, bodyPlain string
+		var inReplyTo, referencesHeader string
 		var threadID *string
 		var toAddr, ccAddr, bccAddr, attIDs json.RawMessage
 		var createdAt, updatedAt time.Time
 
 		err := rows.Scan(&id, &domID, &threadID, &kind, &subject, &fromAddr,
 			&toAddr, &ccAddr, &bccAddr, &bodyHTML, &bodyPlain,
-			&createdAt, &updatedAt, &attIDs)
+			&createdAt, &updatedAt, &attIDs, &inReplyTo, &referencesHeader)
 		if err != nil {
 			continue
 		}
@@ -53,6 +54,8 @@ func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string
 			"body_html":      bodyHTML,
 			"body_plain":     bodyPlain,
 			"attachment_ids": json.RawMessage(attIDs),
+			"in_reply_to":    inReplyTo,
+			"references_header": referencesHeader,
 			"created_at":     createdAt,
 			"updated_at":     updatedAt,
 		}
@@ -64,15 +67,15 @@ func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string
 	return drafts, nil
 }
 
-func (s *PgStore) CreateDraft(ctx context.Context, orgID, userID, domainID string, threadID *string, kind, subject, fromAddress string, toJSON, ccJSON, bccJSON, attJSON []byte) (string, error) {
+func (s *PgStore) CreateDraft(ctx context.Context, orgID, userID, domainID string, threadID *string, kind, subject, fromAddress string, toJSON, ccJSON, bccJSON, attJSON []byte, inReplyTo, referencesHeader string) (string, error) {
 	var id string
 	err := s.q.QueryRow(ctx,
 		`INSERT INTO drafts (org_id, user_id, domain_id, thread_id, kind, subject, from_address,
-		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain, attachment_ids)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '', '', $11)
+		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain, attachment_ids, in_reply_to, references_header)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '', '', $11, $12, $13)
 		 RETURNING id`,
 		orgID, userID, domainID, threadID, kind, subject, fromAddress,
-		toJSON, ccJSON, bccJSON, attJSON,
+		toJSON, ccJSON, bccJSON, attJSON, inReplyTo, referencesHeader,
 	).Scan(&id)
 	return id, err
 }
@@ -97,14 +100,14 @@ func (s *PgStore) DeleteDraft(ctx context.Context, draftID, userID string) (int6
 	return tag.RowsAffected(), nil
 }
 
-func (s *PgStore) GetDraft(ctx context.Context, draftID, userID, orgID string) (domainID string, threadID *string, kind, subject, fromAddr, bodyHTML, bodyPlain string, toAddr, ccAddr, bccAddr, attIDsRaw json.RawMessage, err error) {
+func (s *PgStore) GetDraft(ctx context.Context, draftID, userID, orgID string) (domainID string, threadID *string, kind, subject, fromAddr, bodyHTML, bodyPlain string, toAddr, ccAddr, bccAddr, attIDsRaw json.RawMessage, inReplyTo, referencesHeader string, err error) {
 	err = s.q.QueryRow(ctx,
 		`SELECT domain_id, thread_id, kind, subject, from_address,
 		 to_addresses, cc_addresses, bcc_addresses, body_html, body_plain,
-		 COALESCE(attachment_ids, '[]')
+		 COALESCE(attachment_ids, '[]'), in_reply_to, references_header
 		 FROM drafts WHERE id = $1 AND user_id = $2 AND org_id = $3`,
 		draftID, userID, orgID,
 	).Scan(&domainID, &threadID, &kind, &subject, &fromAddr,
-		&toAddr, &ccAddr, &bccAddr, &bodyHTML, &bodyPlain, &attIDsRaw)
+		&toAddr, &ccAddr, &bccAddr, &bodyHTML, &bodyPlain, &attIDsRaw, &inReplyTo, &referencesHeader)
 	return
 }

@@ -7,7 +7,7 @@ import { sanitizeLinkNode } from "@/lib/sanitize-links";
 import { useEmailWindow } from "@/contexts/email-window-context";
 import { useDomains } from "@/contexts/domain-context";
 import { usePreferences } from "@/contexts/preferences-context";
-import { api, uploadFile } from "@/lib/api";
+import { api, uploadFileWithProgress } from "@/lib/api";
 import { TipTapEditor } from "@/components/tiptap-editor";
 import { RecipientInput } from "@/components/recipient-input";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,7 @@ interface MyAlias {
 }
 
 export function FloatingComposeWindow() {
-  const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose } =
+  const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose, registerFlush } =
     useEmailWindow();
   const { activeDomain } = useDomains();
   const { stripTrackingParams, warnNoSubject } = usePreferences();
@@ -62,6 +62,7 @@ export function FloatingComposeWindow() {
   const [saveStatus, setSaveStatus] = useState<"" | "saving" | "saved" | "error">("");
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ index: number; total: number; percent: number } | null>(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -98,6 +99,10 @@ export function FloatingComposeWindow() {
   // Initialize form from composeData when window opens
   useEffect(() => {
     if (composeState === "open" && composeData) {
+      // Cancel any pending autosave from the previous content. Without this
+      // a queued save could write the new content into the old draft.
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (saveAbortRef.current) saveAbortRef.current.abort();
       setTo(composeData.toAddresses || []);
       setCc(composeData.ccAddresses || []);
       setBcc(composeData.bccAddresses || []);
@@ -182,25 +187,35 @@ export function FloatingComposeWindow() {
   ]);
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const file = files[0];
-    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-    if (BLOCKED_EXTENSIONS.has(ext)) {
-      setError(`File type ${ext} is not allowed`);
-      return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    // Validate every file before any upload starts
+    for (const file of files) {
+      const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+      if (BLOCKED_EXTENSIONS.has(ext)) {
+        setError(`File type ${ext} is not allowed`);
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        setError(`File too large (max 10MB): ${file.name}`);
+        return;
+      }
     }
-    if (file.size > 10 * 1024 * 1024) {
-      setError("File too large (max 10MB)");
-      return;
-    }
+
     setUploading(true);
     setError("");
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const data = await uploadFile("/api/attachments/upload", form);
-      setAttachments((prev) => [...prev, { id: data.id, filename: data.filename, size: data.size }]);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress({ index: i + 1, total: files.length, percent: 0 });
+        const form = new FormData();
+        form.append("file", file);
+        const data = await uploadFileWithProgress("/api/attachments/upload", form, (percent) =>
+          setUploadProgress({ index: i + 1, total: files.length, percent })
+        );
+        setAttachments((prev) => [...prev, { id: data.id, filename: data.filename, size: data.size }]);
+      }
       scheduleSave();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to upload file";
@@ -208,6 +223,7 @@ export function FloatingComposeWindow() {
       toast.error(msg);
     } finally {
       setUploading(false);
+      setUploadProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
@@ -246,7 +262,7 @@ export function FloatingComposeWindow() {
       } else {
         const res = await api.post<{ id: string }>("/api/drafts", {
           domain_id: activeDomain.id,
-          kind: composeData?.replyToThreadId ? "reply" : "compose",
+          kind: composeData?.kind || (composeData?.replyToThreadId ? "reply" : "compose"),
           ...draftPayload,
         }, { signal });
         draftIdRef.current = res.id;
@@ -258,7 +274,19 @@ export function FloatingComposeWindow() {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setSaveStatus("error");
     }
-  }, [activeDomain, to, cc, bcc, subject, effectiveFrom, bodyHtml, bodyPlain, attachments]);
+  }, [activeDomain, to, cc, bcc, subject, effectiveFrom, bodyHtml, bodyPlain, attachments, composeData]);
+
+  // Register a save-now hook with the provider, so opening a reply over
+  // this window saves the current content as a draft instead of losing it.
+  useEffect(() => {
+    registerFlush(async () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (dirtyRef.current) {
+        await saveDraft();
+      }
+    });
+    return () => registerFlush(null);
+  }, [registerFlush, saveDraft]);
 
   // Debounced auto-save
   const scheduleSave = useCallback(() => {
@@ -346,8 +374,9 @@ export function FloatingComposeWindow() {
 
     try {
       if (draftId) {
-        // Update draft then send it
-        await api.patch(`/api/drafts/${draftId}`, {
+        // Update draft then send it. Threading context rides along so a
+        // reply sent from a draft still threads.
+        const sendPatch: Record<string, unknown> = {
           subject,
           from_address: effectiveFrom,
           to_addresses: to,
@@ -356,7 +385,11 @@ export function FloatingComposeWindow() {
           body_html: fullHtml,
           body_plain: bodyPlain,
           attachment_ids: attachments.map((a) => a.id),
-        });
+        };
+        if (composeData?.replyToThreadId) sendPatch.thread_id = composeData.replyToThreadId;
+        if (composeData?.inReplyTo) sendPatch.in_reply_to = composeData.inReplyTo;
+        if (composeData?.references?.length) sendPatch.references = composeData.references;
+        await api.patch(`/api/drafts/${draftId}`, sendPatch);
         await api.post(`/api/drafts/${draftId}/send`);
       } else {
         const payload: Record<string, unknown> = {
@@ -436,8 +469,14 @@ export function FloatingComposeWindow() {
     );
   }
 
-  const attachmentChips = attachments.length > 0 ? (
+  const attachmentChips = attachments.length > 0 || uploadProgress ? (
     <div className="flex flex-wrap gap-1.5 px-3 py-1.5 border-t">
+      {uploadProgress && (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground rounded px-2 py-0.5">
+          <Spinner className="h-3 w-3" />
+          Uploading {uploadProgress.index}/{uploadProgress.total} ({uploadProgress.percent}%)
+        </span>
+      )}
       {attachments.map((att) => (
         <span
           key={att.id}
@@ -775,6 +814,7 @@ export function FloatingComposeWindow() {
     <input
       ref={fileInputRef}
       type="file"
+      multiple
       className="hidden"
       onChange={handleFileUpload}
     />

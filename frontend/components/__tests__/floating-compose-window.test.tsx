@@ -20,6 +20,7 @@ vi.mock("@/contexts/email-window-context", () => ({
     minimizeCompose: mockMinimizeCompose,
     restoreCompose: mockRestoreCompose,
     closeCompose: mockCloseCompose,
+    registerFlush: vi.fn(),
   }),
 }));
 

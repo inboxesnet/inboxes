@@ -123,3 +123,60 @@ export function uploadFile(path: string, formData: FormData) {
     return res.json();
   });
 }
+
+// uploadFileWithProgress uploads via XMLHttpRequest so byte progress can be
+// reported. onProgress receives 0-100.
+export function uploadFileWithProgress(
+  path: string,
+  formData: FormData,
+  onProgress?: (percent: number) => void
+): Promise<{ id: string; filename: string; content_type: string; size: number }> {
+  if (sessionExpired) {
+    return Promise.reject(new ApiError(401, "Session expired"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}${path}`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new ApiError(xhr.status, "Invalid server response"));
+        }
+        return;
+      }
+      let message = xhr.statusText;
+      try {
+        const parsed = JSON.parse(xhr.responseText);
+        if (parsed.error) message = parsed.error;
+      } catch {
+        // keep statusText
+      }
+      if (xhr.status === 401) {
+        if (!sessionExpired) {
+          sessionExpired = true;
+          window.dispatchEvent(new CustomEvent("session-expired"));
+        }
+        reject(new ApiError(401, "Session expired"));
+        return;
+      }
+      if (xhr.status === 402) {
+        window.dispatchEvent(new CustomEvent("payment-required"));
+      }
+      reject(new ApiError(xhr.status, message));
+    };
+    xhr.onerror = () => reject(new ApiError(0, "Network error"));
+    xhr.send(formData);
+  });
+}

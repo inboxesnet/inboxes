@@ -168,6 +168,7 @@ export function ThreadView({
       ccAddresses: defaultCc,
       subject,
       quotedHtml,
+      kind: mode === "forward" ? "forward" : "reply",
       replyToThreadId: thread.id,
       inReplyTo: email.message_id || undefined,
       references: email.message_id

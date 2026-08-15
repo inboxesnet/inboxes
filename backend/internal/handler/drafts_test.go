@@ -171,13 +171,14 @@ func TestDraftGet_Success(t *testing.T) {
 	threadID := "thread1"
 	h := &DraftHandler{
 		Store: &store.MockStore{
-			GetDraftFn: func(ctx context.Context, draftID, userID, orgID string) (string, *string, string, string, string, string, string, json.RawMessage, json.RawMessage, json.RawMessage, json.RawMessage, error) {
+			GetDraftFn: func(ctx context.Context, draftID, userID, orgID string) (string, *string, string, string, string, string, string, json.RawMessage, json.RawMessage, json.RawMessage, json.RawMessage, string, string, error) {
 				return "dom1", &threadID, "compose", "Test Subject", "from@example.com",
 					"<p>Hello</p>", "Hello",
 					json.RawMessage(`["to@example.com"]`),
 					json.RawMessage(`[]`),
 					json.RawMessage(`[]`),
 					json.RawMessage(`[]`),
+					"", "",
 					nil
 			},
 			CheckSendJobExistsFn: func(ctx context.Context, draftID string) (bool, error) {
@@ -219,7 +220,7 @@ func TestDraftGet_Success(t *testing.T) {
 	// mock function signature matches.
 
 	// Verify the mock's GetDraft works standalone
-	domainID, tid, kind, subj, from, bodyHTML, bodyPlain, toAddr, ccAddr, bccAddr, attIDs, err := h.Store.GetDraft(context.Background(), "d1", "user1", "org1")
+	domainID, tid, kind, subj, from, bodyHTML, bodyPlain, toAddr, ccAddr, bccAddr, attIDs, _, _, err := h.Store.GetDraft(context.Background(), "d1", "user1", "org1")
 	if err != nil {
 		t.Fatalf("GetDraft: unexpected error: %v", err)
 	}
