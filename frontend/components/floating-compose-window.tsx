@@ -8,7 +8,7 @@ import { useEmailWindow } from "@/contexts/email-window-context";
 import { useDomains } from "@/contexts/domain-context";
 import { usePreferences } from "@/contexts/preferences-context";
 import { api, uploadFileWithProgress } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
 import type { Draft, User } from "@/lib/types";
 
@@ -103,6 +103,14 @@ export function FloatingComposeWindow() {
     useEmailWindow();
   const { activeDomain } = useDomains();
   const { stripTrackingParams, warnNoSubject } = usePreferences();
+  const qc = useQueryClient();
+
+  // The drafts list and the sidebar Drafts badge live in the query cache.
+  // Call this whenever a draft is created, deleted, or sent.
+  const refreshDrafts = useCallback(() => {
+    qc.invalidateQueries({ queryKey: queryKeys.drafts.all });
+    qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+  }, [qc]);
 
   const { data: me } = useQuery({
     queryKey: queryKeys.users.me(),
@@ -368,6 +376,7 @@ export function FloatingComposeWindow() {
         }, { signal });
         draftIdRef.current = res.id;
         setDraftId(res.id);
+        refreshDrafts();
       }
       setSaveStatus("saved");
       dirtyRef.current = false;
@@ -375,7 +384,7 @@ export function FloatingComposeWindow() {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setSaveStatus("error");
     }
-  }, [activeDomain, to, cc, bcc, subject, effectiveFrom, bodyHtml, bodyPlain, attachments, composeData]);
+  }, [activeDomain, to, cc, bcc, subject, effectiveFrom, bodyHtml, bodyPlain, attachments, composeData, refreshDrafts]);
 
   // Register a save-now hook with the provider, so opening a reply over
   // this window saves the current content as a draft instead of losing it.
@@ -411,9 +420,10 @@ export function FloatingComposeWindow() {
       } catch {
         // Ignore — draft may not exist
       }
+      refreshDrafts();
     }
     closeCompose();
-  }, [draftId, closeCompose]);
+  }, [draftId, closeCompose, refreshDrafts]);
 
   // Save on close if dirty — keep open on failure to avoid data loss
   const handleClose = useCallback(async () => {
@@ -535,6 +545,9 @@ export function FloatingComposeWindow() {
         sendResult = await api.post<SendResult>("/api/emails/send", payload);
       }
 
+      // A sent draft is deleted server-side — refresh the list and badge.
+      refreshDrafts();
+
       const undoSeconds = sendResult?.undo_seconds ?? 0;
       if (undoSeconds > 0 && sendResult?.email_id) {
         // Snapshot the compose fields: an undo reopens them as a draft.
@@ -645,6 +658,7 @@ export function FloatingComposeWindow() {
       await api.patch(`/api/drafts/${id}`, sendPatch);
       await api.post(`/api/drafts/${id}/send`, { scheduled_at: when.toISOString() });
 
+      refreshDrafts();
       toast.success(`Send scheduled for ${formatWhen(when)}`, { id: "compose-send" });
       closeCompose();
     } catch (err) {

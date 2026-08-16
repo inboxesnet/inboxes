@@ -47,6 +47,8 @@ export default function DraftsPage() {
       } catch {
         // 404 = already deleted (e.g. discarded from compose window) — ignore
       }
+      // The sidebar Drafts badge comes from the label counts — refresh it.
+      qc.invalidateQueries({ queryKey: ["domains", "unreadCounts"] });
     },
     [currentDraftId, closeCompose, qc, domainId]
   );

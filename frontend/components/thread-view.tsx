@@ -586,6 +586,10 @@ function RetrySendBanner({
       await api.post(`/api/emails/${email.id}/retry`);
       toast.success("Email queued to send again.");
       qc.invalidateQueries({ queryKey: queryKeys.threads.detail(email.thread_id) });
+      // Retry takes the email out of the failed state — refresh the Failed
+      // list and the sidebar badge too.
+      qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+      qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to retry");
     } finally {

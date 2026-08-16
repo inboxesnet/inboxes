@@ -77,7 +77,11 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@/lib/query-keys", () => ({
-  queryKeys: { users: { all: ["users"], me: () => ["users", "me"] } },
+  queryKeys: {
+    users: { all: ["users"], me: () => ["users", "me"] },
+    drafts: { all: ["drafts"] },
+    domains: { unreadCounts: () => ["domains", "unreadCounts"] },
+  },
 }));
 
 // Mock TipTapEditor as a simple textarea
