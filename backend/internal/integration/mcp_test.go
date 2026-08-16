@@ -437,6 +437,50 @@ func TestOAuthFullFlow(t *testing.T) {
 	}
 }
 
+func TestAgentKeyExchange(t *testing.T) {
+	h, _ := newFullRouter(t)
+	orgID, adminID := seedOrg(t, fmt.Sprintf("exch-%s", t.Name()), fmt.Sprintf("exch-%s@test.com", t.Name()), "password123")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+
+	bearer := createAgentKey(t, h, adminID, orgID, "admin")
+
+	// A valid bearer credential exchanges for a fresh durable key.
+	req := httptest.NewRequest(http.MethodPost, "/api/agent-keys/exchange", jsonBody(map[string]string{"name": "cli-test"}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("exchange: %d %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Key  string `json:"key"`
+		Name string `json:"name"`
+	}
+	parseJSON(t, rec, &out)
+	if !strings.HasPrefix(out.Key, "inbx_k_") || out.Key == bearer {
+		t.Fatalf("bad exchanged key: %q", out.Key)
+	}
+	if out.Name != "cli-test" {
+		t.Errorf("name not stored: %q", out.Name)
+	}
+
+	// The exchanged key works on /mcp.
+	if mcpCall(t, h, out.Key, "ping", nil)["result"] == nil {
+		t.Fatal("exchanged key rejected by /mcp")
+	}
+
+	// Garbage bearers get 401.
+	req = httptest.NewRequest(http.MethodPost, "/api/agent-keys/exchange", jsonBody(map[string]string{}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer inbx_at_garbage")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for bad bearer, got %d", rec.Code)
+	}
+}
+
 func TestOAuthPKCEMismatchRejected(t *testing.T) {
 	h, _ := newFullRouter(t)
 	orgID, adminID := seedOrg(t, fmt.Sprintf("pkce-%s", t.Name()), fmt.Sprintf("pkce-%s@test.com", t.Name()), "password123")

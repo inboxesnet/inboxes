@@ -1,0 +1,28 @@
+{
+  "name": "inboxes",
+  "version": "0.1.0",
+  "description": "Connect coding agents to your Inboxes email server over MCP: npx inboxes setup",
+  "bin": {
+    "inboxes": "./bin.js"
+  },
+  "files": [
+    "bin.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inboxesnet/inboxes.git",
+    "directory": "cli"
+  },
+  "keywords": [
+    "mcp",
+    "email",
+    "inboxes",
+    "agents",
+    "claude"
+  ],
+  "license": "MIT"
+}

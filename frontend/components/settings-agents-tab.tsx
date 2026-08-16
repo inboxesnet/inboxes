@@ -242,6 +242,10 @@ export function AgentsTab({ isAdmin }: { isAdmin: boolean }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <CopyBlock
+            label="One command — signs in via browser, configures Claude Code, Codex, and opencode"
+            text={`npx inboxes setup --url ${base}`}
+          />
           <CopyBlock label="MCP server URL" text={mcpUrl} />
           <CopyBlock
             label="Claude Code (OAuth — approves in your browser)"

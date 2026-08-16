@@ -20,7 +20,20 @@ authenticated user: read mail, search, and prepare drafts for human review.
 
 ## Connecting
 
-Settings → Agents shows copy-paste snippets. Two auth paths:
+**One command (preferred):**
+
+```
+npx inboxes setup --url https://YOUR-HOST
+```
+
+The CLI (in `cli/`) runs the OAuth browser flow, trades the token for a
+durable API key via `POST /api/agent-keys/exchange`, and writes MCP config
+for every harness it finds: Claude Code (`claude mcp add -s user`), Codex
+(`~/.codex/config.toml`, via an `mcp-remote` stdio bridge), and opencode
+(`~/.config/opencode/opencode.json`). `cli/e2e.sh` tests the whole flow
+against a real backend. Publish with `cd cli && npm publish`.
+
+Settings → Agents also shows manual copy-paste snippets. Two auth paths:
 
 **OAuth (browser approval).** MCP-standard OAuth 2.1: dynamic client
 registration, authorization code + PKCE S256, refresh tokens. Example:
@@ -74,6 +87,7 @@ text.
 | `POST /api/oauth/token` | public, rate-limited | Code + refresh grants (form or JSON) |
 | `GET /api/oauth/client` | public, rate-limited | Client name for the consent page |
 | `POST /api/oauth/approve` | session cookie | Consent page issues the auth code |
+| `POST /api/agent-keys/exchange` | Bearer agent token | CLI trades OAuth token for a durable key |
 | `GET/POST /api/agent-keys`, `DELETE /api/agent-keys/{id}` | session cookie | Key management |
 
 Raw tokens are never stored — only SHA-256 hashes. Access tokens live 30

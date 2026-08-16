@@ -2,18 +2,21 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/inboxes/backend/internal/mcp"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/store"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // AgentKeyHandler manages the caller's own MCP credentials: API keys they
 // created plus OAuth tokens agents obtained through the consent flow.
 type AgentKeyHandler struct {
 	Store store.Store
+	Pool  *pgxpool.Pool
 }
 
 // List returns the caller's active agent credentials. Raw tokens are never
@@ -103,6 +106,66 @@ func (h *AgentKeyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		"id":   id,
 		"name": req.Name,
 		"key":  raw, // shown once; only the hash is stored
+	})
+}
+
+// Exchange turns a valid agent bearer credential (typically an OAuth access
+// token from the CLI setup flow) into a durable API key for harnesses that
+// cannot refresh OAuth tokens. Same user, same visibility, revocable in
+// Settings → Agents like any other key.
+func (h *AgentKeyHandler) Exchange(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if raw == "" || raw == r.Header.Get("Authorization") {
+		writeError(w, http.StatusUnauthorized, "bearer token required")
+		return
+	}
+	id, err := mcp.LookupToken(r.Context(), h.Pool, raw)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	readJSON(r, &req) // body optional
+	if req.Name == "" {
+		req.Name = "CLI setup"
+	}
+	if err := validateLength(req.Name, "name", 100); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var count int
+	h.Store.Q().QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM agent_tokens WHERE user_id = $1 AND revoked_at IS NULL`,
+		id.UserID,
+	).Scan(&count)
+	if count >= 25 {
+		writeError(w, http.StatusBadRequest, "too many active keys — revoke one first")
+		return
+	}
+
+	rawKey, err := mcp.NewToken("inbx_k")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create key")
+		return
+	}
+	var keyID string
+	if err := h.Store.Q().QueryRow(r.Context(),
+		`INSERT INTO agent_tokens (org_id, user_id, kind, name, token_hash)
+		 VALUES ($1, $2, 'key', $3, $4) RETURNING id`,
+		id.OrgID, id.UserID, req.Name, mcp.HashToken(rawKey),
+	).Scan(&keyID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to store key")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":   keyID,
+		"name": req.Name,
+		"key":  rawKey,
 	})
 }
 

@@ -81,7 +81,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	}
 
 	oauth := &handler.OAuthHandler{Store: st, AppURL: appURL, PublicURL: cfg.PublicURL}
-	agentKeys := &handler.AgentKeyHandler{Store: st}
+	agentKeys := &handler.AgentKeyHandler{Store: st, Pool: db}
 
 	// OAuth discovery + endpoints for MCP clients (public, rate-limited)
 	r.With(middleware.RateLimitByIP(rdb, 60, 60)).Get("/.well-known/oauth-protected-resource", oauth.ProtectedResourceMetadata)
@@ -89,6 +89,8 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	r.With(middleware.RateLimitByIP(rdb, 10, 60)).Post("/api/oauth/register", oauth.Register)
 	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Post("/api/oauth/token", oauth.Token)
 	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Get("/api/oauth/client", oauth.ClientInfo)
+	// Bearer-authenticated (not cookie): the CLI trades its OAuth token for a durable key.
+	r.With(middleware.RateLimitByIP(rdb, 10, 60)).Post("/api/agent-keys/exchange", agentKeys.Exchange)
 
 	// Health
 	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
