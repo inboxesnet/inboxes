@@ -438,14 +438,25 @@ export function FloatingComposeWindow() {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
       handleSend(e);
-    } else if (e.key === "Escape" && !e.defaultPrevented) {
-      // Inner popups (emoji, recipient suggestions) consume Escape with
-      // preventDefault. Otherwise Escape closes the window; handleClose
-      // saves a dirty draft first.
-      e.stopPropagation();
-      handleClose();
     }
   }
+
+  // Escape closes the open compose window; handleClose saves a dirty draft
+  // first. A document listener catches the key even when focus sits outside
+  // the form. Inner popups (emoji, recipient suggestions) consume Escape
+  // with preventDefault, and Escape aimed at another dialog is ignored.
+  useEffect(() => {
+    if (composeState !== "open") return;
+    function onDocKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const target = e.target as HTMLElement | null;
+      const dialog = target?.closest?.('[role="dialog"]');
+      if (dialog && dialog.getAttribute("aria-label") !== "Compose email") return;
+      handleClose();
+    }
+    document.addEventListener("keydown", onDocKeyDown);
+    return () => document.removeEventListener("keydown", onDocKeyDown);
+  }, [composeState, handleClose]);
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -894,6 +905,10 @@ export function FloatingComposeWindow() {
             autofocus
             className="border-0 rounded-none"
             stripTracking={stripTrackingParams}
+            onEscape={() => {
+              handleClose();
+              return true;
+            }}
           />
           {composeData?.quotedHtml && (
             <div
@@ -1049,6 +1064,10 @@ export function FloatingComposeWindow() {
             className="border-0 rounded-none flex-1"
             quotedHtml={composeData?.quotedHtml}
             stripTracking={stripTrackingParams}
+            onEscape={() => {
+              handleClose();
+              return true;
+            }}
             toolbarLeft={
               <div className="flex items-center shrink-0">
                 <Button type="submit" size="sm" disabled={sending} className="mx-1 shrink-0">

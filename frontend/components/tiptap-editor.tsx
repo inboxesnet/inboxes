@@ -37,6 +37,12 @@ interface TipTapEditorProps {
   quotedHtml?: string;
   /** Whether to strip tracking parameters from links (default true) */
   stripTracking?: boolean;
+  /**
+   * Called when Escape is pressed in the editor and no emoji popup is open.
+   * Return true to mark the key as handled. ProseMirror consumes Escape, so
+   * a parent cannot see it on the document; this prop is the escape hatch.
+   */
+  onEscape?: () => boolean;
 }
 
 export function TipTapEditor({
@@ -49,6 +55,7 @@ export function TipTapEditor({
   toolbarRight,
   quotedHtml,
   stripTracking = true,
+  onEscape,
 }: TipTapEditorProps) {
   const [emojiState, setEmojiState] = useState<EmojiSuggestionState>({
     active: false,
@@ -60,6 +67,10 @@ export function TipTapEditor({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const editorWrapperRef = useRef<HTMLDivElement>(null);
   const prevEmojiRef = useRef({ active: false, query: "", from: 0 });
+  // Refs for the editorProps.handleKeyDown closure, which is created once.
+  const onEscapeRef = useRef(onEscape);
+  onEscapeRef.current = onEscape;
+  const popupActiveRef = useRef(false);
 
   const onEmojiStateChange = useCallback(
     (state: EmojiSuggestionState) => {
@@ -100,6 +111,12 @@ export function TipTapEditor({
       attributes: {
         class: "text-[13px] leading-relaxed max-w-none focus:outline-none min-h-[120px] px-3 py-2 [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_a]:text-primary [&_a]:underline",
       },
+      handleKeyDown: (_view, event) => {
+        if (event.key === "Escape" && !popupActiveRef.current) {
+          return onEscapeRef.current?.() ?? false;
+        }
+        return false;
+      },
     },
     onUpdate: ({ editor }) => {
       onChange?.(editor.getHTML(), editor.getText());
@@ -130,6 +147,7 @@ export function TipTapEditor({
   );
 
   const popupActive = emojiState.active && emojiState.items.length > 0;
+  popupActiveRef.current = popupActive;
 
   // Compute popup position relative to editor wrapper
   const getPopupStyle = (): React.CSSProperties => {

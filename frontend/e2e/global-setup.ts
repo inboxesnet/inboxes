@@ -16,6 +16,19 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "TestPass1";
 export const STORAGE_STATE = "e2e/.auth/admin.json";
 
 async function globalSetup(_config: FullConfig) {
+  // Best effort: clear leftover rate-limit keys from a previous run so
+  // back-to-back local runs stay deterministic. Ignore failures (no
+  // redis-cli, remote Redis, etc.).
+  try {
+    const { execSync } = await import("child_process");
+    execSync('redis-cli --scan --pattern "rl:*" | xargs -r redis-cli del', {
+      stdio: "ignore",
+      timeout: 10000,
+    });
+  } catch {
+    // ignore
+  }
+
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

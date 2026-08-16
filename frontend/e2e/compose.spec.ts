@@ -100,6 +100,11 @@ test.describe("Compose Window", () => {
 
   test("compose remembers state across minimize", async ({ page }) => {
     await compose.openCompose();
+    // Opening over a prior compose flushes and then clears the form
+    // asynchronously. Wait for the clear before typing, or the clear wipes
+    // the typed subject.
+    const subjectInput = page.locator('input[placeholder="Subject"]:visible');
+    await expect(subjectInput).toHaveValue("", { timeout: 10000 });
     const testSubject = "Persist Subject " + Date.now();
     await compose.fillSubject(testSubject);
     // Minimize

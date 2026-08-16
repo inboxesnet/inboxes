@@ -338,8 +338,9 @@ test.describe("Settings Modal", () => {
     const labelRow = panel.locator("div.divide-y > div", { hasText: "Label To Rename" });
     await labelRow.locator('button[title="Rename label"]').click();
 
-    // An input should appear with the label name
-    const renameInput = labelRow.locator("input");
+    // An input replaces the row text, so match it inside the list, not the
+    // (now text-less) row.
+    const renameInput = panel.locator("div.divide-y input");
     await renameInput.fill("Renamed Label");
     await renameInput.press("Enter");
 
@@ -459,7 +460,7 @@ test.describe("Settings Modal", () => {
     await panel.locator('button:has-text("Save")').first().click();
 
     // Verify success
-    await expect(page.getByText("Organization settings saved")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("Organization settings updated")).toBeVisible({ timeout: 5000 });
   });
 
   // -------------------------------------------------------------------------

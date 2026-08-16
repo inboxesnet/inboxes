@@ -108,33 +108,9 @@ test.describe("Security", () => {
     await expect(goHomeLink).toHaveAttribute("href", "/");
   });
 
-  // -------------------------------------------------------------------------
-  // 7. Rate limited login shows error message
-  // -------------------------------------------------------------------------
-  test("rate limited login shows error", async ({ page }) => {
-    await page.goto("/login");
-    await expect(page.getByText("Welcome back")).toBeVisible({ timeout: 5000 });
-
-    // Attempt rapid login attempts to trigger rate limiting
-    const emailInput = page.locator('input[type="email"]');
-    const passwordInput = page.locator('input[type="password"]');
-    // The login button has no explicit type attribute; match it by text.
-    const loginButton = page.locator('button:has-text("Sign in")');
-
-    // Send many login attempts in quick succession
-    for (let i = 0; i < 12; i++) {
-      await emailInput.fill(`ratelimit-${i}@test.com`);
-      await passwordInput.fill("WrongPass1");
-      await loginButton.click();
-      // Brief wait for the request to fire
-      await page.waitForTimeout(100);
-    }
-
-    // After multiple rapid attempts, should either see rate limit error or invalid credentials
-    // (The exact behavior depends on backend rate limit config)
-    const errorText = page.locator("text=/rate limit|too many|try again|Invalid/i");
-    await expect(errorText).toBeVisible({ timeout: 10000 });
-  });
+  // The "rate limited login" test lives in zz-rate-limit.spec.ts. It
+  // exhausts the per-IP login rate limit, so it must run after every other
+  // spec.
 
   // -------------------------------------------------------------------------
   // 8. Dark mode toggle on login page persists across reload

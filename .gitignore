@@ -31,3 +31,4 @@ backend/tmp/
 # Misc
 *.log
 docs/internal/
+test-results/
