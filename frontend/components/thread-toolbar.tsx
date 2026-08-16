@@ -20,6 +20,7 @@ import {
   BellOff,
   FolderInput,
   Clock,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -253,6 +254,17 @@ export function ThreadToolbar({
 
         return (
           <div className="flex items-center gap-0.5 ml-1">
+            {/* Dismiss — Failed view only: clears the failure without a resend */}
+            {label === "failed" && (
+              <button
+                title="Dismiss"
+                onClick={() => onBulkAction("dismiss")}
+                disabled={isPending}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+              </button>
+            )}
             {/* Primary: Archive or Move to Inbox */}
             {showArchive && (
               <button

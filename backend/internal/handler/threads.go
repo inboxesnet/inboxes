@@ -346,6 +346,26 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 		}
 		affected = int64(len(req.ThreadIDs))
 
+	case "dismiss":
+		// Dismiss every failed/bounced outbound email on the given threads.
+		// Members only dismiss their own sends; admins dismiss any.
+		q := `UPDATE emails SET dismissed_at = now(), updated_at = now()
+			 WHERE thread_id = ANY($1) AND org_id = $2
+			 AND direction = 'outbound' AND status IN ('failed', 'bounced')
+			 AND dismissed_at IS NULL`
+		args := []interface{}{req.ThreadIDs, claims.OrgID}
+		if claims.Role != "admin" {
+			q += " AND user_id = $3"
+			args = append(args, claims.UserID)
+		}
+		tag, err := h.Store.Q().Exec(ctx, q, args...)
+		if err != nil {
+			slog.Error("threads: bulk dismiss failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to dismiss threads")
+			return
+		}
+		affected = tag.RowsAffected()
+
 	case "delete":
 		trashIDs, err := h.Store.FilterTrashThreadIDs(ctx, req.ThreadIDs, claims.OrgID)
 		if err != nil {

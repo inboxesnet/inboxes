@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { cn, formatThreadTime } from "@/lib/utils";
-import { Star, Archive, Trash2, Mail, MailOpen, BellOff } from "lucide-react";
+import { Star, Archive, Trash2, Mail, MailOpen, BellOff, CheckCircle2 } from "lucide-react";
 import { useDraggable } from "@dnd-kit/core";
 import { hasLabel } from "@/lib/types";
 import type { Thread, Label } from "@/lib/types";
@@ -204,6 +204,20 @@ function ThreadRow({
 
         {/* Actions — desktop hover only */}
         <div className="hidden md:group-hover:flex items-center gap-1">
+          {effectiveLabel === "failed" && (
+            <button
+              title="Dismiss"
+              aria-label="Dismiss"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAction(thread.id, "dismiss");
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            </button>
+          )}
           {effectiveLabel !== "archive" && (
             <button
               title="Archive"

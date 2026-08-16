@@ -98,6 +98,59 @@ func TestDismissFailedEmail(t *testing.T) {
 	}
 }
 
+func TestBulkDismiss(t *testing.T) {
+	ctx := context.Background()
+	orgID, userID := seedOrg(t, fmt.Sprintf("bulkdis-%s", t.Name()), fmt.Sprintf("bulkdis-%s@test.com", t.Name()), "password123")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, fmt.Sprintf("bulkdis-%s.example.com", t.Name()))
+
+	threadA := seedThread(t, orgID, userID, domainID, "Bounce A")
+	threadB := seedThread(t, orgID, userID, domainID, "Bounce B")
+	emailA := seedEmail(t, orgID, userID, domainID, threadA, "outbound", "me@x.com", "Bounce A")
+	emailB := seedEmail(t, orgID, userID, domainID, threadB, "outbound", "me@x.com", "Bounce B")
+	for _, id := range []string{emailA, emailB} {
+		if _, err := testPool.Exec(ctx, "UPDATE emails SET status = 'failed' WHERE id = $1", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	th := &handler.ThreadHandler{Store: testStore, Bus: testBus()}
+	bulkDismiss := func(actorID, role string) map[string]any {
+		req := httptest.NewRequest(http.MethodPatch, "/api/threads/bulk", jsonBody(map[string]any{
+			"thread_ids": []string{threadA, threadB},
+			"action":     "dismiss",
+		}))
+		req = withClaims(req, actorID, orgID, role)
+		w := httptest.NewRecorder()
+		th.BulkAction(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("bulk dismiss: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]any
+		parseJSON(t, w, &resp)
+		return resp
+	}
+
+	// A member who did not send the emails dismisses nothing.
+	memberID := seedUser(t, orgID, fmt.Sprintf("member-%s@test.com", t.Name()), "member")
+	resp := bulkDismiss(memberID, "member")
+	if got := int(resp["affected"].(float64)); got != 0 {
+		t.Fatalf("member bulk dismiss: expected affected 0, got %d", got)
+	}
+	if ids := failedThreadIDs(t, orgID); len(ids) != 2 {
+		t.Fatalf("member bulk dismiss must not change the Failed view, got %v", ids)
+	}
+
+	// The admin sender dismisses both threads at once.
+	resp = bulkDismiss(userID, "admin")
+	if got := int(resp["affected"].(float64)); got != 2 {
+		t.Fatalf("admin bulk dismiss: expected affected 2, got %d", got)
+	}
+	if ids := failedThreadIDs(t, orgID); len(ids) != 0 {
+		t.Fatalf("expected empty Failed view after bulk dismiss, got %v", ids)
+	}
+}
+
 func TestNotificationsBell(t *testing.T) {
 	ctx := context.Background()
 	orgID, userID := seedOrg(t, fmt.Sprintf("bell-%s", t.Name()), fmt.Sprintf("bell-%s@test.com", t.Name()), "password123")

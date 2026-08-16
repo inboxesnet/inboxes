@@ -279,7 +279,7 @@ function ThreadListPageInner({ label, title, subtitle }: ThreadListPageProps) {
       }
 
       // Clear selection only for actions that remove threads from the current view
-      const removesFromView = ["archive", "trash", "spam", "delete", "move"].includes(action);
+      const removesFromView = ["archive", "trash", "spam", "delete", "move", "dismiss"].includes(action);
       bulkMutation.mutate(
         {
           threadIds: ids,

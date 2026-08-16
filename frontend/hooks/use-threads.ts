@@ -211,6 +211,11 @@ export function useThreadAction() {
       if (action === "delete") {
         return api.delete(`/api/threads/${threadId}`);
       }
+      if (action === "dismiss") {
+        // Dismiss is email-level; the bulk route fans it out to every
+        // failed email on the thread.
+        return api.patch(`/api/threads/bulk`, { thread_ids: [threadId], action: "dismiss" });
+      }
       return api.patch(`/api/threads/${threadId}/${action}`);
     },
     onMutate: async ({ threadId, action }) => {
@@ -242,6 +247,23 @@ export function useThreadAction() {
               return { ...old, [thread!.domain_id]: Math.max(0, (old[thread!.domain_id] || 0) + delta) };
             });
           }
+        }
+      }
+
+      // Dismiss removes the thread from the Failed view only — every other
+      // list keeps it.
+      if (action === "dismiss") {
+        for (const query of qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() })) {
+          if (query.queryKey[3] !== "failed") continue;
+          qc.setQueryData<ThreadListResponse>(query.queryKey, (old) =>
+            old
+              ? {
+                  ...old,
+                  threads: old.threads.filter((t) => t.id !== threadId),
+                  total: Math.max(0, old.total - 1),
+                }
+              : old
+          );
         }
       }
 
@@ -431,6 +453,22 @@ export function useBulkAction() {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
       const movingActions = ["archive", "trash", "spam", "move", "delete"];
+
+      // Dismiss removes the selected threads from the Failed view only.
+      if (action === "dismiss") {
+        for (const query of qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() })) {
+          if (query.queryKey[3] !== "failed") continue;
+          qc.setQueryData<ThreadListResponse>(query.queryKey, (old) => {
+            if (!old) return old;
+            const remaining = old.threads.filter((t) => !threadIds.includes(t.id));
+            return {
+              ...old,
+              threads: remaining,
+              total: Math.max(0, old.total - (old.threads.length - remaining.length)),
+            };
+          });
+        }
+      }
 
       // Capture where an undo should restore the threads. When any selected
       // thread was in the inbox, undo restores the batch to the inbox.
