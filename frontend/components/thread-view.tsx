@@ -331,6 +331,16 @@ export function ThreadView({
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-2">
         {emails.map((email, i) => {
           const isLast = i === emails.length - 1;
+          // Dismiss acts on the whole thread: every undismissed failure goes
+          // at once, so the thread fully leaves the Failed view.
+          const failedIds = emails
+            .filter(
+              (e) =>
+                e.direction === "outbound" &&
+                (e.status === "failed" || e.status === "bounced") &&
+                !e.dismissed_at
+            )
+            .map((e) => e.id);
           return (
             <div key={email.id} ref={isLast ? lastMessageRef : undefined}>
               <EmailMessage
@@ -338,6 +348,8 @@ export function ThreadView({
                 defaultExpanded={isLast}
                 onReply={(em, mode) => handleReply(em, mode)}
                 stripTracking={stripTrackingParams}
+                failedIds={failedIds}
+                onDismissed={label === "failed" ? onBack : undefined}
               />
             </div>
           );
@@ -387,11 +399,15 @@ function EmailMessage({
   defaultExpanded = true,
   onReply,
   stripTracking = true,
+  failedIds,
+  onDismissed,
 }: {
   email: Email;
   defaultExpanded?: boolean;
   onReply?: (email: Email, mode: "reply" | "replyAll" | "forward") => void;
   stripTracking?: boolean;
+  failedIds?: string[];
+  onDismissed?: () => void;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showImages, setShowImages] = useState(false);
@@ -464,7 +480,7 @@ function EmailMessage({
         {email.direction === "outbound" &&
           (email.status === "failed" || email.status === "bounced") &&
           !email.dismissed_at && (
-            <RetrySendBanner email={email} />
+            <RetrySendBanner email={email} failedIds={failedIds} onDismissed={onDismissed} />
           )}
         <div className="text-xs text-muted-foreground mb-3 space-y-0.5">
           <p>To: {parseAddresses(email.to_addresses).join(", ")}</p>
@@ -551,7 +567,15 @@ function EmailMessage({
 
 // ─── Retry failed send ─────────────────────────────────────────────────
 
-function RetrySendBanner({ email }: { email: Email }) {
+function RetrySendBanner({
+  email,
+  failedIds,
+  onDismissed,
+}: {
+  email: Email;
+  failedIds?: string[];
+  onDismissed?: () => void;
+}) {
   const [busy, setBusy] = useState<"retry" | "dismiss" | null>(null);
   const qc = useQueryClient();
 
@@ -573,11 +597,15 @@ function RetrySendBanner({ email }: { email: Email }) {
     if (busy) return;
     setBusy("dismiss");
     try {
-      await api.post(`/api/emails/${email.id}/dismiss`);
-      toast.success("Dismissed. The email leaves the Failed view.");
+      const ids = failedIds?.length ? failedIds : [email.id];
+      await Promise.all(ids.map((id) => api.post(`/api/emails/${id}/dismiss`)));
+      toast.success("Dismissed. The thread leaves the Failed view.");
       qc.invalidateQueries({ queryKey: queryKeys.threads.detail(email.thread_id) });
       qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+      // In the Failed view, dismiss moves the thread out — leave the pane,
+      // the same way archive and trash do.
+      onDismissed?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to dismiss");
     } finally {
