@@ -16,7 +16,7 @@ Options:
 
 | Flag | Meaning |
 |---|---|
-| `--url <server>` | Self-hosted server URL (default: https://inboxes.net) |
+| `--url <server>` | Self-hosted server URL (default: https://app.inboxes.net) |
 | `--key <key>` | Use an existing API key, skip the browser flow |
 | `--name <name>` | Name for the created key (shown in Settings → Agents) |
 | `--yes` | Accept defaults, no prompts |

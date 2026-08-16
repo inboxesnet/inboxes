@@ -18,7 +18,7 @@ const path = require("node:path");
 const readline = require("node:readline/promises");
 const { spawnSync } = require("node:child_process");
 
-const DEFAULT_URL = "https://inboxes.net";
+const DEFAULT_URL = "https://app.inboxes.net";
 
 function parseArgs(argv) {
   const args = { _: [] };

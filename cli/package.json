@@ -1,6 +1,6 @@
 {
   "name": "inboxes",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Connect coding agents to your Inboxes email server over MCP: npx inboxes setup",
   "bin": {
     "inboxes": "bin.js"
