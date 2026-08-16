@@ -213,17 +213,14 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 	// The key works — record that.
 	dh.setAPIKeyStatus(ctx, orgID, "valid")
 
+	// The list endpoint returns id/name/status only. It carries NO records
+	// array — DNS records come from the per-domain detail endpoint. The DNS
+	// check below must never read record state from this response.
 	var resendResp struct {
 		Data []struct {
 			ID     string `json:"id"`
 			Name   string `json:"name"`
 			Status string `json:"status"`
-			Records []struct {
-				Type   string `json:"record"`
-				Name   string `json:"name"`
-				Value  string `json:"value"`
-				Status string `json:"status"`
-			} `json:"records"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBytes, &resendResp); err != nil {
@@ -233,30 +230,18 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 
 	// Build map of domain info from Resend
 	type resendDomainInfo struct {
+		id     string
 		status string
-		spf    bool
-		dkim   bool
 	}
 	resendDomains := make(map[string]resendDomainInfo, len(resendResp.Data))
 	for _, d := range resendResp.Data {
-		info := resendDomainInfo{status: d.Status}
-		for _, rec := range d.Records {
-			if rec.Status == "verified" || rec.Status == "success" {
-				switch rec.Type {
-				case "SPF", "MX":
-					info.spf = true
-				case "DKIM":
-					info.dkim = true
-				}
-			}
-		}
-		resendDomains[d.Name] = info
+		resendDomains[d.Name] = resendDomainInfo{id: d.ID, status: d.Status}
 	}
 
 	// Check local domains against Resend. Deleted domains stay deleted —
 	// the heartbeat must never resurrect them.
 	localRows, err := dh.DB.Query(ctx,
-		`SELECT id, domain, status FROM domains WHERE org_id = $1 AND status != 'deleted'`, orgID)
+		`SELECT id, domain, status, dns_ok FROM domains WHERE org_id = $1 AND status != 'deleted'`, orgID)
 	if err != nil {
 		slog.Error("domain heartbeat: failed to list local domains", "org_id", orgID, "error", err)
 		return
@@ -266,7 +251,8 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 	localDomainNames := make(map[string]bool)
 	for localRows.Next() {
 		var id, domain, status string
-		if localRows.Scan(&id, &domain, &status) != nil {
+		var dnsOK bool
+		if localRows.Scan(&id, &domain, &status, &dnsOK) != nil {
 			continue
 		}
 		localDomainNames[domain] = true
@@ -312,34 +298,104 @@ func (dh *DomainHeartbeat) checkOrg(ctx context.Context, orgID string) {
 			})
 		}
 
-		// Check DNS verification from Resend response (stateless — no DB columns needed)
-		if inResend {
-			var degraded []string
-			if !info.spf {
-				degraded = append(degraded, "SPF")
-			}
-			if !info.dkim {
-				degraded = append(degraded, "DKIM")
-			}
-			// Only alert for domains that were verified before. A pending
-			// domain has incomplete DNS by definition.
-			if len(degraded) > 0 && (status == "active" || status == "verified") {
-				slog.Warn("domain heartbeat: DNS verification missing",
-					"org_id", orgID, "domain_id", id, "domain", domain, "missing", degraded)
-				dh.Bus.Publish(ctx, event.Event{
-					EventType: event.DomainDnsDegraded,
-					OrgID:     orgID,
-					DomainID:  id,
-					Payload: map[string]interface{}{
-						"domain":   domain,
-						"degraded": degraded,
-					},
-				})
-			}
+		// DNS verification needs the per-domain detail endpoint — the list
+		// response carries no records. Only a previously verified domain is
+		// checked: a pending domain has incomplete DNS by definition.
+		if inResend && (status == "active" || status == "verified") {
+			dh.checkDomainDNS(ctx, orgID, id, domain, info.id, dnsOK)
 		}
 	}
 
 	// Detect Resend domains not in our DB
+	dh.detectUnknownDomains(ctx, orgID, resendDomainNamesOnly(resendDomains), localDomainNames)
+}
+
+func resendDomainNamesOnly[V any](m map[string]V) map[string]bool {
+	names := make(map[string]bool, len(m))
+	for name := range m {
+		names[name] = true
+	}
+	return names
+}
+
+// checkDomainDNS fetches one domain's records from the Resend detail endpoint
+// and verifies SPF and DKIM. Two hard rules: a response without record data
+// gives no verdict (absent data must never alert), and the alert fires only
+// on the ok -> degraded transition, tracked in domains.dns_ok.
+func (dh *DomainHeartbeat) checkDomainDNS(ctx context.Context, orgID, domainID, domain, resendID string, dnsOK bool) {
+	if resendID == "" {
+		return
+	}
+	respBytes, err := dh.ResendSvc.Fetch(ctx, orgID, "GET", "/domains/"+resendID, nil)
+	if err != nil {
+		slog.Warn("domain heartbeat: domain detail fetch failed, skipping DNS check",
+			"org_id", orgID, "domain", domain, "error", err)
+		return
+	}
+	var detail struct {
+		Records []struct {
+			Type   string `json:"record"`
+			Status string `json:"status"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(respBytes, &detail); err != nil || len(detail.Records) == 0 {
+		slog.Warn("domain heartbeat: no record data in domain detail, skipping DNS check",
+			"org_id", orgID, "domain", domain)
+		return
+	}
+
+	var spf, dkim bool
+	for _, rec := range detail.Records {
+		if rec.Status == "verified" || rec.Status == "success" {
+			switch rec.Type {
+			case "SPF", "MX":
+				spf = true
+			case "DKIM":
+				dkim = true
+			}
+		}
+	}
+	var degraded []string
+	if !spf {
+		degraded = append(degraded, "SPF")
+	}
+	if !dkim {
+		degraded = append(degraded, "DKIM")
+	}
+
+	if len(degraded) == 0 {
+		if !dnsOK {
+			if _, err := dh.DB.Exec(ctx,
+				`UPDATE domains SET dns_ok = true, updated_at = now() WHERE id = $1`, domainID); err != nil {
+				slog.Error("heartbeat: failed to store dns_ok", "error", err, "domain_id", domainID)
+			}
+			slog.Info("domain heartbeat: DNS verification recovered", "org_id", orgID, "domain", domain)
+		}
+		return
+	}
+
+	if !dnsOK {
+		// Already alerted for this degradation — stay quiet until it recovers.
+		return
+	}
+	if _, err := dh.DB.Exec(ctx,
+		`UPDATE domains SET dns_ok = false, updated_at = now() WHERE id = $1`, domainID); err != nil {
+		slog.Error("heartbeat: failed to store dns_ok", "error", err, "domain_id", domainID)
+	}
+	slog.Warn("domain heartbeat: DNS verification missing",
+		"org_id", orgID, "domain_id", domainID, "domain", domain, "missing", degraded)
+	dh.Bus.Publish(ctx, event.Event{
+		EventType: event.DomainDnsDegraded,
+		OrgID:     orgID,
+		DomainID:  domainID,
+		Payload: map[string]interface{}{
+			"domain":   domain,
+			"degraded": degraded,
+		},
+	})
+}
+
+func (dh *DomainHeartbeat) detectUnknownDomains(ctx context.Context, orgID string, resendDomains map[string]bool, localDomainNames map[string]bool) {
 	for resendDomain := range resendDomains {
 		if localDomainNames[resendDomain] {
 			continue
