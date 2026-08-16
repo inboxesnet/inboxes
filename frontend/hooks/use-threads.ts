@@ -384,6 +384,9 @@ export function useThreadAction() {
         qc.invalidateQueries({ queryKey: queryKeys.search.all });
       };
 
+      // Reconcile the sidebar badges with the server after every action.
+      qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+
       let label: string | null = null;
       let undo: (() => Promise<unknown>) | null = null;
 
@@ -652,11 +655,10 @@ export function useBulkAction() {
         qc.invalidateQueries({ queryKey: queryKeys.search.all });
       };
 
-      // Dismiss changes the Failed count, and no WS label update covers it —
-      // the sidebar badge (nested under unreadCounts) only clears on refetch.
-      if (action === "dismiss") {
-        refresh();
-      }
+      // Always reconcile with the server. The optimistic deltas above only
+      // cover threads present in the cache, so the sidebar badges drift when
+      // the selection spans threads outside the cached pages.
+      refresh();
 
       let text: string | null = null;
       let undo: (() => Promise<unknown>) | null = null;
