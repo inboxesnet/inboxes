@@ -70,7 +70,7 @@ func TestContactSuggest_RankedByFrequency(t *testing.T) {
 	t.Parallel()
 	h := &ContactHandler{
 		Store: &store.MockStore{
-			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error) {
+			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error) {
 				// Store returns results pre-ranked by frequency (most frequent first)
 				return []map[string]any{
 					{"email": "alice@example.com", "name": "Alice", "count": 42},
@@ -107,7 +107,7 @@ func TestContactSuggest_SingleChar(t *testing.T) {
 	var capturedQuery string
 	h := &ContactHandler{
 		Store: &store.MockStore{
-			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error) {
+			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error) {
 				capturedQuery = query
 				return []map[string]any{}, nil
 			},
@@ -130,7 +130,7 @@ func TestContactSuggest_LimitPassedToStore(t *testing.T) {
 	var capturedLimit int
 	h := &ContactHandler{
 		Store: &store.MockStore{
-			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error) {
+			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error) {
 				capturedLimit = limit
 				return []map[string]any{}, nil
 			},
@@ -152,7 +152,7 @@ func TestContactSuggest_Success(t *testing.T) {
 
 	h := &ContactHandler{
 		Store: &store.MockStore{
-			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error) {
+			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error) {
 				return []map[string]any{
 					{"email": "alice@example.com", "name": "Alice"},
 					{"email": "alex@example.com", "name": "Alex"},
@@ -186,7 +186,7 @@ func TestContactSuggest_EmptyQuery(t *testing.T) {
 	storeCalled := false
 	h := &ContactHandler{
 		Store: &store.MockStore{
-			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error) {
+			SuggestContactsFn: func(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error) {
 				storeCalled = true
 				return nil, nil
 			},

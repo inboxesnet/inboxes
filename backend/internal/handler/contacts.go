@@ -21,7 +21,16 @@ func (h *ContactHandler) Suggest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	suggestions, err := h.Store.SuggestContacts(r.Context(), claims.OrgID, query, 10)
+	var aliasLabels []string
+	if claims.Role != "admin" {
+		aliasAddrs, _ := h.Store.GetUserAliasAddresses(r.Context(), claims.UserID)
+		aliasLabels = make([]string, len(aliasAddrs))
+		for i, addr := range aliasAddrs {
+			aliasLabels[i] = "alias:" + addr
+		}
+	}
+
+	suggestions, err := h.Store.SuggestContacts(r.Context(), claims.OrgID, query, 10, claims.Role, aliasLabels)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to search contacts")
 		return

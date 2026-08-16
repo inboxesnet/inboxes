@@ -51,7 +51,23 @@ func (h *SetupHandler) Status(w http.ResponseWriter, r *http.Request) {
 }
 
 // ValidateKey checks a Resend API key and returns available domains.
+// Same guards as Setup: self-hosted only, and only before setup completes.
+// Otherwise this public route works as a free Resend key validator.
 func (h *SetupHandler) ValidateKey(w http.ResponseWriter, r *http.Request) {
+	if h.StripeKey != "" {
+		writeError(w, http.StatusForbidden, "setup not available in commercial mode")
+		return
+	}
+	count, err := h.Store.SetupCountUsers(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check setup status")
+		return
+	}
+	if count > 0 {
+		writeError(w, http.StatusForbidden, "setup already completed")
+		return
+	}
+
 	var req struct {
 		APIKey string `json:"api_key"`
 	}

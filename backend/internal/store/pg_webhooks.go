@@ -29,8 +29,8 @@ func (s *PgStore) GetOrgWebhookSecret(ctx context.Context, orgID string) (encSec
 func (s *PgStore) CheckWebhookDedup(ctx context.Context, orgID, resendEmailID, eventType string) (bool, error) {
 	var exists bool
 	err := s.q.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM emails WHERE resend_email_id = $1)`,
-		resendEmailID,
+		`SELECT EXISTS(SELECT 1 FROM emails WHERE resend_email_id = $1 AND org_id = $2)`,
+		resendEmailID, orgID,
 	).Scan(&exists)
 	return exists, err
 }
@@ -43,8 +43,8 @@ func (s *PgStore) InsertWebhookDedup(ctx context.Context, orgID, resendEmailID, 
 
 func (s *PgStore) UpdateEmailStatus(ctx context.Context, orgID, resendEmailID, status string) (int64, error) {
 	tag, err := s.q.Exec(ctx,
-		"UPDATE emails SET status = $1, updated_at = now() WHERE resend_email_id = $2",
-		status, resendEmailID,
+		"UPDATE emails SET status = $1, updated_at = now() WHERE resend_email_id = $2 AND org_id = $3",
+		status, resendEmailID, orgID,
 	)
 	if err != nil {
 		return 0, err
@@ -55,8 +55,8 @@ func (s *PgStore) UpdateEmailStatus(ctx context.Context, orgID, resendEmailID, s
 func (s *PgStore) GetEmailThreadByResendID(ctx context.Context, orgID, resendEmailID string) (emailID, threadID, domainID string, err error) {
 	var subject string
 	err = s.q.QueryRow(ctx,
-		"SELECT id, thread_id, domain_id, subject FROM emails WHERE resend_email_id = $1",
-		resendEmailID,
+		"SELECT id, thread_id, domain_id, subject FROM emails WHERE resend_email_id = $1 AND org_id = $2",
+		resendEmailID, orgID,
 	).Scan(&emailID, &threadID, &domainID, &subject)
 	return
 }

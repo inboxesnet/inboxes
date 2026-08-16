@@ -159,7 +159,7 @@ type MockStore struct {
 	HardDeleteOrgFn             func(ctx context.Context, orgID string) (int64, error)
 
 	// ---- Contacts ----
-	SuggestContactsFn func(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error)
+	SuggestContactsFn func(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error)
 
 	// ---- Webhooks ----
 	GetOrgWebhookSecretFn      func(ctx context.Context, orgID string) (string, string, string, *string, error)
@@ -1130,9 +1130,9 @@ func (m *MockStore) HardDeleteOrg(ctx context.Context, orgID string) (int64, err
 // ContactStore
 // ===========================================================================
 
-func (m *MockStore) SuggestContacts(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error) {
+func (m *MockStore) SuggestContacts(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error) {
 	if m.SuggestContactsFn != nil {
-		return m.SuggestContactsFn(ctx, orgID, query, limit)
+		return m.SuggestContactsFn(ctx, orgID, query, limit, role, aliasLabels)
 	}
 	return []map[string]any{}, nil
 }

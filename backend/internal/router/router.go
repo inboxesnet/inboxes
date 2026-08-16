@@ -266,7 +266,9 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Delete("/api/orgs/hard", orgs.HardDelete)
 
 			// Aliases
-			r.Get("/api/aliases", aliases.List)
+			// Full alias list includes every assignee's name and email, so it
+			// is admin-only. Members use /api/users/me/aliases.
+			r.With(middleware.RequireAdmin).Get("/api/aliases", aliases.List)
 			r.With(middleware.RequireAdmin).Post("/api/aliases", aliases.Create)
 			r.With(middleware.RequireAdmin).Patch("/api/aliases/{id}", aliases.Update)
 			r.With(middleware.RequireAdmin).Delete("/api/aliases/{id}", aliases.Delete)

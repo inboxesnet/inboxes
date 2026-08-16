@@ -240,7 +240,7 @@ type OrgStore interface {
 // ---- Contacts ----
 
 type ContactStore interface {
-	SuggestContacts(ctx context.Context, orgID, query string, limit int) ([]map[string]any, error)
+	SuggestContacts(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error)
 }
 
 // ---- Webhooks ----
