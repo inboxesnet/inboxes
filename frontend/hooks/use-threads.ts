@@ -652,6 +652,12 @@ export function useBulkAction() {
         qc.invalidateQueries({ queryKey: queryKeys.search.all });
       };
 
+      // Dismiss changes the Failed count, and no WS label update covers it —
+      // the sidebar badge (nested under unreadCounts) only clears on refetch.
+      if (action === "dismiss") {
+        refresh();
+      }
+
       let text: string | null = null;
       let undo: (() => Promise<unknown>) | null = null;
 
