@@ -188,7 +188,7 @@ func TestThreadArchive_Success(t *testing.T) {
 			GetThreadDomainIDFn: func(ctx context.Context, threadID, orgID string) (string, error) {
 				return "d1", nil
 			},
-			RemoveLabelFn: func(ctx context.Context, threadID, label string) error {
+			RemoveLabelFn: func(ctx context.Context, threadID, orgID, label string) error {
 				if label == "inbox" {
 					removeLabelCalled = true
 				}
@@ -270,7 +270,7 @@ func TestThreadStar_Success(t *testing.T) {
 			GetThreadDomainIDFn: func(ctx context.Context, threadID, orgID string) (string, error) {
 				return "d1", nil
 			},
-			HasLabelFn: func(ctx context.Context, threadID, label string) bool {
+			HasLabelFn: func(ctx context.Context, threadID, orgID, label string) bool {
 				return false // not currently starred
 			},
 			AddLabelFn: func(ctx context.Context, threadID, orgID, label string) error {
@@ -308,10 +308,10 @@ func TestThreadUnstar_Success(t *testing.T) {
 			GetThreadDomainIDFn: func(ctx context.Context, threadID, orgID string) (string, error) {
 				return "d1", nil
 			},
-			HasLabelFn: func(ctx context.Context, threadID, label string) bool {
+			HasLabelFn: func(ctx context.Context, threadID, orgID, label string) bool {
 				return true // currently starred
 			},
-			RemoveLabelFn: func(ctx context.Context, threadID, label string) error {
+			RemoveLabelFn: func(ctx context.Context, threadID, orgID, label string) error {
 				if label == "starred" {
 					removeLabelCalled = true
 				}
@@ -420,7 +420,7 @@ func TestBulkAction_Untrash(t *testing.T) {
 						}
 						return nil
 					},
-					BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, label string) error {
+					BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, orgID, label string) error {
 						removeLabelCalls[label] = true
 						return nil
 					},
@@ -488,7 +488,7 @@ func TestThread_Mute_Toggle(t *testing.T) {
 			GetThreadDomainIDFn: func(ctx context.Context, threadID, orgID string) (string, error) {
 				return "d1", nil
 			},
-			HasLabelFn: func(ctx context.Context, threadID, label string) bool {
+			HasLabelFn: func(ctx context.Context, threadID, orgID, label string) bool {
 				return false // not currently muted
 			},
 			AddLabelFn: func(ctx context.Context, threadID, orgID, label string) error {
@@ -526,10 +526,10 @@ func TestThread_Unmute_Toggle(t *testing.T) {
 			GetThreadDomainIDFn: func(ctx context.Context, threadID, orgID string) (string, error) {
 				return "d1", nil
 			},
-			HasLabelFn: func(ctx context.Context, threadID, label string) bool {
+			HasLabelFn: func(ctx context.Context, threadID, orgID, label string) bool {
 				return true // currently muted
 			},
-			RemoveLabelFn: func(ctx context.Context, threadID, label string) error {
+			RemoveLabelFn: func(ctx context.Context, threadID, orgID, label string) error {
 				if label == "muted" {
 					removeLabelCalled = true
 				}
@@ -652,7 +652,7 @@ func TestThread_PermanentDelete_OnlyFromTrash(t *testing.T) {
 			GetThreadDomainIDFn: func(ctx context.Context, threadID, orgID string) (string, error) {
 				return "d1", nil
 			},
-			HasLabelFn: func(ctx context.Context, threadID, label string) bool {
+			HasLabelFn: func(ctx context.Context, threadID, orgID, label string) bool {
 				return false // not in trash
 			},
 		},
@@ -682,12 +682,12 @@ func TestThread_PermanentDelete_FromTrash_Success(t *testing.T) {
 			GetThreadDomainIDFn: func(ctx context.Context, threadID, orgID string) (string, error) {
 				return "d1", nil
 			},
-			HasLabelFn: func(ctx context.Context, threadID, label string) bool {
+			HasLabelFn: func(ctx context.Context, threadID, orgID, label string) bool {
 				return label == "trash" // is in trash
 			},
 			WithTxFn: func(ctx context.Context, fn func(store.Store) error) error {
 				return fn(&store.MockStore{
-					RemoveAllLabelsFn: func(ctx context.Context, threadID string) error {
+					RemoveAllLabelsFn: func(ctx context.Context, threadID, orgID string) error {
 						removeAllCalled = true
 						return nil
 					},
@@ -728,7 +728,7 @@ func TestBulkAction_SelectAll(t *testing.T) {
 			ResolveFilteredThreadIDsFn: func(ctx context.Context, orgID, label, domainID, role string, aliasAddrs []string) ([]string, error) {
 				return []string{"t1", "t2", "t3"}, nil
 			},
-			BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, label string) error {
+			BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, orgID, label string) error {
 				resolvedIDs = threadIDs
 				return nil
 			},
@@ -826,7 +826,7 @@ func TestBulkAction_RemoveCustomLabel(t *testing.T) {
 	var capturedLabel string
 	h := &ThreadHandler{
 		Store: &store.MockStore{
-			BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, label string) error {
+			BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, orgID, label string) error {
 				capturedLabel = label
 				return nil
 			},
@@ -952,7 +952,7 @@ func TestThread_Spam_NotSpam(t *testing.T) {
 			},
 			WithTxFn: func(ctx context.Context, fn func(store.Store) error) error {
 				return fn(&store.MockStore{
-					RemoveLabelFn: func(ctx context.Context, threadID, label string) error {
+					RemoveLabelFn: func(ctx context.Context, threadID, orgID, label string) error {
 						if label == "spam" {
 							spamRemoved = true
 						}
@@ -995,7 +995,7 @@ func TestBulkArchive_Success(t *testing.T) {
 	bulkRemoveCalled := false
 	h := &ThreadHandler{
 		Store: &store.MockStore{
-			BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, label string) error {
+			BulkRemoveLabelFn: func(ctx context.Context, threadIDs []string, orgID, label string) error {
 				if label == "inbox" && len(threadIDs) == 2 {
 					bulkRemoveCalled = true
 				}

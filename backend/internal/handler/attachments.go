@@ -116,18 +116,53 @@ func sanitizeFilename(name string) string {
 	return clean
 }
 
+// canAccessAttachment reports whether the caller may read an attachment.
+// Admins may read any org attachment. Members may read attachments they
+// uploaded, plus attachments on emails in threads their aliases can see.
+func (h *AttachmentHandler) canAccessAttachment(r *http.Request, claims *middleware.Claims, attachmentID, ownerUserID string) bool {
+	if claims.Role == "admin" || ownerUserID == claims.UserID {
+		return true
+	}
+	ctx := r.Context()
+	aliasAddrs, err := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
+	if err != nil {
+		return false
+	}
+	aliasLabels := make([]string, len(aliasAddrs))
+	for i, addr := range aliasAddrs {
+		aliasLabels[i] = "alias:" + addr
+	}
+	var visible bool
+	if err := h.Store.Q().QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM emails e
+			WHERE e.org_id = $1 AND e.attachment_ids @> to_jsonb($2::text)
+			AND EXISTS (SELECT 1 FROM thread_labels tl
+			            WHERE tl.thread_id = e.thread_id AND tl.label = ANY($3::text[]))
+		)`,
+		claims.OrgID, attachmentID, aliasLabels,
+	).Scan(&visible); err != nil {
+		return false
+	}
+	return visible
+}
+
 // Meta returns attachment metadata without the binary data.
 func (h *AttachmentHandler) Meta(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	attachmentID := chi.URLParam(r, "id")
 
-	var filename, contentType string
+	var filename, contentType, ownerUserID string
 	var size int
 	err := h.Store.Q().QueryRow(r.Context(),
-		`SELECT filename, content_type, size FROM attachments WHERE id = $1 AND org_id = $2`,
+		`SELECT filename, content_type, size, user_id FROM attachments WHERE id = $1 AND org_id = $2`,
 		attachmentID, claims.OrgID,
-	).Scan(&filename, &contentType, &size)
+	).Scan(&filename, &contentType, &size, &ownerUserID)
 	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	if !h.canAccessAttachment(r, claims, attachmentID, ownerUserID) {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return
 	}
@@ -147,14 +182,18 @@ func (h *AttachmentHandler) Download(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 	attachmentID := chi.URLParam(r, "id")
 
-	var filename, contentType string
+	var filename, contentType, ownerUserID string
 	var size int
 	var data []byte
 	err := h.Store.Q().QueryRow(r.Context(),
-		`SELECT filename, content_type, size, data FROM attachments WHERE id = $1 AND org_id = $2`,
+		`SELECT filename, content_type, size, data, user_id FROM attachments WHERE id = $1 AND org_id = $2`,
 		attachmentID, claims.OrgID,
-	).Scan(&filename, &contentType, &size, &data)
+	).Scan(&filename, &contentType, &size, &data, &ownerUserID)
 	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	if !h.canAccessAttachment(r, claims, attachmentID, ownerUserID) {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return
 	}

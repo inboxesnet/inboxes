@@ -93,11 +93,25 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// If replying into an existing thread, verify it belongs to the caller's org.
+	// If replying into an existing thread, verify it belongs to the caller's
+	// org and that the caller's aliases can see it. Without the visibility
+	// check a member could inject messages into threads they cannot read.
 	if req.ReplyTo != "" {
 		if _, err := h.Store.GetThreadDomainID(ctx, req.ReplyTo, claims.OrgID); err != nil {
 			writeError(w, http.StatusNotFound, "thread not found")
 			return
+		}
+		if claims.Role != "admin" {
+			aliasAddrs, _ := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
+			aliasLabels := make([]string, len(aliasAddrs))
+			for i, addr := range aliasAddrs {
+				aliasLabels[i] = "alias:" + addr
+			}
+			visible, _ := h.Store.CheckThreadVisibility(ctx, req.ReplyTo, aliasLabels)
+			if !visible {
+				writeError(w, http.StatusNotFound, "thread not found")
+				return
+			}
 		}
 	}
 
@@ -339,17 +353,22 @@ func (h *EmailHandler) Retry(w http.ResponseWriter, r *http.Request) {
 	emailID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	var status, direction, threadID, domainID string
+	var status, direction, threadID, domainID, emailUserID string
 	err := h.Store.Q().QueryRow(ctx,
-		`SELECT status, direction, thread_id, domain_id FROM emails WHERE id = $1 AND org_id = $2`,
+		`SELECT status, direction, thread_id, domain_id, user_id FROM emails WHERE id = $1 AND org_id = $2`,
 		emailID, claims.OrgID,
-	).Scan(&status, &direction, &threadID, &domainID)
+	).Scan(&status, &direction, &threadID, &domainID, &emailUserID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "email not found")
 		return
 	}
 	if direction != "outbound" {
 		writeError(w, http.StatusBadRequest, "only outbound emails can be retried")
+		return
+	}
+	// Only the original sender (or an admin) can re-send the stored payload.
+	if emailUserID != claims.UserID && claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "only the sender can retry this email")
 		return
 	}
 	if status != "failed" && status != "bounced" && status != "queued" {

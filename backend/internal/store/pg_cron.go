@@ -5,22 +5,27 @@ import (
 	"log/slog"
 )
 
-func (s *PgStore) PurgeExpiredTrash(ctx context.Context) (int64, error) {
-	// Soft-delete threads with trash label past expiry
+func (s *PgStore) PurgeExpiredTrash(ctx context.Context, orgID string) (int64, error) {
+	// Soft-delete threads with trash label past expiry. An empty orgID purges
+	// every org (instance-owner maintenance); a set orgID purges one tenant.
 	tag, err := s.q.Exec(ctx,
 		`WITH expired AS (
 			SELECT t.id FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id AND tl.label = 'trash'
 			WHERE t.trash_expires_at < now() AND t.deleted_at IS NULL
+			AND ($1 = '' OR t.org_id::text = $1)
 		)
-		UPDATE threads SET deleted_at = now(), updated_at = now() WHERE id IN (SELECT id FROM expired)`)
+		UPDATE threads SET deleted_at = now(), updated_at = now() WHERE id IN (SELECT id FROM expired)`,
+		orgID)
 	if err != nil {
 		return 0, err
 	}
 
 	// Clean up orphaned labels
 	if _, err := s.q.Exec(ctx,
-		`DELETE FROM thread_labels WHERE thread_id IN (SELECT id FROM threads WHERE deleted_at IS NOT NULL)`); err != nil {
+		`DELETE FROM thread_labels WHERE thread_id IN (SELECT id FROM threads WHERE deleted_at IS NOT NULL
+		 AND ($1 = '' OR org_id::text = $1))`,
+		orgID); err != nil {
 		slog.Error("cron: label cleanup failed", "error", err)
 	}
 

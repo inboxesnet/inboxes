@@ -183,18 +183,18 @@ func TestThreadArchive(t *testing.T) {
 
 	ctx := context.Background()
 	// Verify inbox label exists before archive
-	if !testStore.HasLabel(ctx, threadID, "inbox") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "inbox") {
 		t.Fatal("expected thread to have inbox label before archive")
 	}
 
 	// Archive = remove inbox label
-	err := testStore.RemoveLabel(ctx, threadID, "inbox")
+	err := testStore.RemoveLabel(ctx, threadID, orgID, "inbox")
 	if err != nil {
 		t.Fatalf("RemoveLabel failed: %v", err)
 	}
 
 	// Verify inbox label is removed
-	if testStore.HasLabel(ctx, threadID, "inbox") {
+	if testStore.HasLabel(ctx, threadID, orgID, "inbox") {
 		t.Fatal("expected inbox label to be removed after archive")
 	}
 
@@ -226,7 +226,7 @@ func TestThreadTrash(t *testing.T) {
 		t.Fatalf("SetTrashExpiry failed: %v", err)
 	}
 
-	if !testStore.HasLabel(ctx, threadID, "trash") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "trash") {
 		t.Fatal("expected thread to have trash label")
 	}
 
@@ -257,7 +257,7 @@ func TestThreadStar(t *testing.T) {
 		t.Fatalf("AddLabel starred failed: %v", err)
 	}
 
-	if !testStore.HasLabel(ctx, threadID, "starred") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "starred") {
 		t.Fatal("expected starred label")
 	}
 
@@ -283,12 +283,12 @@ func TestThreadUnstar(t *testing.T) {
 
 	// Star then unstar
 	testStore.AddLabel(ctx, threadID, orgID, "starred")
-	if !testStore.HasLabel(ctx, threadID, "starred") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "starred") {
 		t.Fatal("expected starred label after star")
 	}
 
-	testStore.RemoveLabel(ctx, threadID, "starred")
-	if testStore.HasLabel(ctx, threadID, "starred") {
+	testStore.RemoveLabel(ctx, threadID, orgID, "starred")
+	if testStore.HasLabel(ctx, threadID, orgID, "starred") {
 		t.Fatal("expected starred label to be removed after unstar")
 	}
 }
@@ -367,13 +367,13 @@ func TestThreadMoveToSent(t *testing.T) {
 	ctx := context.Background()
 
 	// Remove inbox, add sent
-	testStore.RemoveLabel(ctx, threadID, "inbox")
+	testStore.RemoveLabel(ctx, threadID, orgID, "inbox")
 	testStore.AddLabel(ctx, threadID, orgID, "sent")
 
-	if testStore.HasLabel(ctx, threadID, "inbox") {
+	if testStore.HasLabel(ctx, threadID, orgID, "inbox") {
 		t.Fatal("expected inbox label to be removed")
 	}
-	if !testStore.HasLabel(ctx, threadID, "sent") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "sent") {
 		t.Fatal("expected sent label to be added")
 	}
 
@@ -398,13 +398,13 @@ func TestThreadBulkArchive(t *testing.T) {
 	threadIDs := []string{tid1, tid2, tid3}
 
 	ctx := context.Background()
-	err := testStore.BulkRemoveLabel(ctx, threadIDs, "inbox")
+	err := testStore.BulkRemoveLabel(ctx, threadIDs, orgID, "inbox")
 	if err != nil {
 		t.Fatalf("BulkRemoveLabel failed: %v", err)
 	}
 
 	for _, tid := range threadIDs {
-		if testStore.HasLabel(ctx, tid, "inbox") {
+		if testStore.HasLabel(ctx, tid, orgID, "inbox") {
 			t.Fatalf("thread %s still has inbox label after bulk archive", tid)
 		}
 	}
@@ -442,7 +442,7 @@ func TestThreadBulkTrash(t *testing.T) {
 	}
 
 	for _, tid := range threadIDs {
-		if !testStore.HasLabel(ctx, tid, "trash") {
+		if !testStore.HasLabel(ctx, tid, orgID, "trash") {
 			t.Fatalf("thread %s missing trash label after bulk trash", tid)
 		}
 	}
@@ -577,7 +577,7 @@ func TestThreadLabels(t *testing.T) {
 	}
 
 	// Remove custom label
-	err = testStore.RemoveLabel(ctx, threadID, "important")
+	err = testStore.RemoveLabel(ctx, threadID, orgID, "important")
 	if err != nil {
 		t.Fatalf("RemoveLabel failed: %v", err)
 	}
@@ -628,7 +628,7 @@ func TestThreadUntrash(t *testing.T) {
 	}
 
 	// Untrash: remove trash label, add inbox label back
-	err = testStore.RemoveLabel(ctx, threadID, "trash")
+	err = testStore.RemoveLabel(ctx, threadID, orgID, "trash")
 	if err != nil {
 		t.Fatalf("RemoveLabel trash failed: %v", err)
 	}
@@ -690,7 +690,7 @@ func TestThreadSpamToInbox(t *testing.T) {
 	_ = inboxThreads
 
 	// Move back to inbox: remove spam, add inbox
-	err = testStore.RemoveLabel(ctx, threadID, "spam")
+	err = testStore.RemoveLabel(ctx, threadID, orgID, "spam")
 	if err != nil {
 		t.Fatalf("RemoveLabel spam failed: %v", err)
 	}
@@ -727,7 +727,7 @@ func TestThreadMuteFlag(t *testing.T) {
 	ctx := context.Background()
 
 	// Initially not muted
-	if testStore.HasLabel(ctx, threadID, "muted") {
+	if testStore.HasLabel(ctx, threadID, orgID, "muted") {
 		t.Fatal("expected thread not to have muted label initially")
 	}
 
@@ -738,7 +738,7 @@ func TestThreadMuteFlag(t *testing.T) {
 	}
 
 	// Verify muted label is present
-	if !testStore.HasLabel(ctx, threadID, "muted") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "muted") {
 		t.Fatal("expected thread to have muted label after mute")
 	}
 
@@ -756,13 +756,13 @@ func TestThreadMuteFlag(t *testing.T) {
 	}
 
 	// Unmute the thread by removing "muted" label
-	err = testStore.RemoveLabel(ctx, threadID, "muted")
+	err = testStore.RemoveLabel(ctx, threadID, orgID, "muted")
 	if err != nil {
 		t.Fatalf("RemoveLabel muted failed: %v", err)
 	}
 
 	// Verify muted label is removed
-	if testStore.HasLabel(ctx, threadID, "muted") {
+	if testStore.HasLabel(ctx, threadID, orgID, "muted") {
 		t.Fatal("expected muted label to be removed after unmute")
 	}
 
@@ -826,7 +826,7 @@ func TestThreadBulkTrashAndUndo(t *testing.T) {
 	_ = inboxThreads2
 
 	// Undo: remove trash label from all
-	err = testStore.BulkRemoveLabel(ctx, threadIDs, "trash")
+	err = testStore.BulkRemoveLabel(ctx, threadIDs, orgID, "trash")
 	if err != nil {
 		t.Fatalf("BulkRemoveLabel trash failed: %v", err)
 	}
@@ -945,10 +945,10 @@ func TestThreadMoveToSpamRestoresFromTrash(t *testing.T) {
 	}
 
 	// The trash label and expiry must be gone.
-	if testStore.HasLabel(ctx, threadID, "trash") {
+	if testStore.HasLabel(ctx, threadID, orgID, "trash") {
 		t.Fatal("expected trash label removed after move to spam")
 	}
-	if !testStore.HasLabel(ctx, threadID, "spam") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "spam") {
 		t.Fatal("expected spam label after move to spam")
 	}
 	var expires *string
@@ -987,10 +987,10 @@ func TestThreadBulkSpamRestoresFromTrash(t *testing.T) {
 	}
 
 	for _, tid := range threadIDs {
-		if testStore.HasLabel(ctx, tid, "trash") {
+		if testStore.HasLabel(ctx, tid, orgID, "trash") {
 			t.Fatalf("thread %s still has trash label after bulk spam", tid)
 		}
-		if !testStore.HasLabel(ctx, tid, "spam") {
+		if !testStore.HasLabel(ctx, tid, orgID, "spam") {
 			t.Fatalf("thread %s missing spam label after bulk spam", tid)
 		}
 	}

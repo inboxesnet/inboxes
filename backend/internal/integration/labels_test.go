@@ -140,15 +140,15 @@ func TestThreadLabelOperations(t *testing.T) {
 	}
 
 	// HasLabel
-	if !testStore.HasLabel(ctx, threadID, "starred") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "starred") {
 		t.Error("expected HasLabel('starred') to return true")
 	}
-	if testStore.HasLabel(ctx, threadID, "nonexistent") {
+	if testStore.HasLabel(ctx, threadID, orgID, "nonexistent") {
 		t.Error("expected HasLabel('nonexistent') to return false")
 	}
 
 	// RemoveLabel
-	err = testStore.RemoveLabel(ctx, threadID, "starred")
+	err = testStore.RemoveLabel(ctx, threadID, orgID, "starred")
 	if err != nil {
 		t.Fatalf("RemoveLabel: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestBulkLabelOperations(t *testing.T) {
 
 	// Verify all three threads have the label
 	for _, tid := range threadIDs {
-		if !testStore.HasLabel(ctx, tid, "urgent") {
+		if !testStore.HasLabel(ctx, tid, orgID, "urgent") {
 			t.Errorf("expected thread %s to have label 'urgent'", tid)
 		}
 	}
@@ -212,13 +212,13 @@ func TestBulkLabelOperations(t *testing.T) {
 	}
 
 	// BulkRemoveLabel
-	err = testStore.BulkRemoveLabel(ctx, threadIDs, "urgent")
+	err = testStore.BulkRemoveLabel(ctx, threadIDs, orgID, "urgent")
 	if err != nil {
 		t.Fatalf("BulkRemoveLabel: %v", err)
 	}
 
 	for _, tid := range threadIDs {
-		if testStore.HasLabel(ctx, tid, "urgent") {
+		if testStore.HasLabel(ctx, tid, orgID, "urgent") {
 			t.Errorf("expected thread %s to NOT have label 'urgent' after bulk remove", tid)
 		}
 	}

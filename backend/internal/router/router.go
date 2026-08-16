@@ -193,14 +193,16 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequirePlan(stripeKey, db))
 
-			// Onboarding
+			// Onboarding. All writes are admin-only: connect swaps the org's
+			// Resend key, and addresses writes alias_users rows — a member
+			// could otherwise grant themselves any mailbox in the org.
 			r.Get("/api/onboarding/status", onboarding.Status)
-			r.Post("/api/onboarding/connect", onboarding.Connect)
-			r.Post("/api/onboarding/domains", onboarding.SelectDomains)
-			r.Post("/api/onboarding/webhook", onboarding.SetupWebhook)
+			r.With(middleware.RequireAdmin).Post("/api/onboarding/connect", onboarding.Connect)
+			r.With(middleware.RequireAdmin).Post("/api/onboarding/domains", onboarding.SelectDomains)
+			r.With(middleware.RequireAdmin).Post("/api/onboarding/webhook", onboarding.SetupWebhook)
 			r.Get("/api/onboarding/addresses", onboarding.GetAddresses)
-			r.Post("/api/onboarding/addresses", onboarding.SetupAddresses)
-			r.Post("/api/onboarding/complete", onboarding.Complete)
+			r.With(middleware.RequireAdmin).Post("/api/onboarding/addresses", onboarding.SetupAddresses)
+			r.With(middleware.RequireAdmin).Post("/api/onboarding/complete", onboarding.Complete)
 
 			// Threads
 			r.Get("/api/threads", threads.List)
@@ -240,14 +242,14 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			// Domains
 			r.Get("/api/domains", domains.List)
 			r.Get("/api/domains/all", domains.ListAll)
-			r.Post("/api/domains", domains.Create)
-			r.Post("/api/domains/{id}/verify", domains.Verify)
+			r.With(middleware.RequireAdmin).Post("/api/domains", domains.Create)
+			r.With(middleware.RequireAdmin).Post("/api/domains/{id}/verify", domains.Verify)
 			r.With(middleware.RequireAdmin).Post("/api/domains/{id}/webhook", domains.ReregisterWebhook)
 			r.With(middleware.RequireAdmin).Delete("/api/domains/{id}", domains.Delete)
 			r.Patch("/api/domains/reorder", domains.Reorder)
 			r.With(middleware.RequireAdmin).Patch("/api/domains/visibility", domains.UpdateVisibility)
 			r.Get("/api/domains/unread-counts", domains.UnreadCounts)
-			r.Post("/api/domains/sync", domains.Sync)
+			r.With(middleware.RequireAdmin).Post("/api/domains/sync", domains.Sync)
 			r.Get("/api/domains/discovered", domains.DiscoveredDomains)
 			r.Post("/api/domains/discovered/{id}/dismiss", domains.DismissDiscoveredDomain)
 

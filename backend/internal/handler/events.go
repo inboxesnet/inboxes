@@ -47,13 +47,38 @@ func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Non-admins only get events for threads their aliases can see. This
+	// mirrors the WS hub: broadcast event types and events without a thread
+	// (or whose thread has no alias labels) go to every org member.
+	isAdmin := claims.Role == "admin"
+	var aliasLabels []string
+	if !isAdmin {
+		addrs, aliasErr := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
+		if aliasErr != nil {
+			// Fail closed: without the alias list we cannot scope thread events.
+			writeError(w, http.StatusInternalServerError, "failed to fetch events")
+			return
+		}
+		aliasLabels = make([]string, len(addrs))
+		for i, addr := range addrs {
+			aliasLabels[i] = "alias:" + addr
+		}
+	}
+	broadcastTypes := []string{"sync.completed", "plan.changed", "thread.bulk_action"}
+
 	rows, err := h.Store.Q().Query(ctx,
 		`SELECT id, event_type, domain_id, thread_id, payload, created_at
 		 FROM events
 		 WHERE org_id = $1 AND id > $2 AND created_at > $4
+		 AND ($5 OR thread_id IS NULL OR event_type = ANY($6::text[])
+		      OR NOT EXISTS (SELECT 1 FROM thread_labels tl
+		                     WHERE tl.thread_id = events.thread_id AND tl.label LIKE 'alias:%')
+		      OR EXISTS (SELECT 1 FROM thread_labels tl
+		                 WHERE tl.thread_id = events.thread_id AND tl.label = ANY($7::text[])))
 		 ORDER BY id ASC
 		 LIMIT $3`,
 		claims.OrgID, sinceID, limit, time.Now().Add(-maxAge),
+		isAdmin, broadcastTypes, aliasLabels,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to fetch events")

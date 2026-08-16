@@ -53,17 +53,17 @@ type MockStore struct {
 	SoftDeleteThreadFn         func(ctx context.Context, threadID, orgID string) (int64, error)
 	SetTrashExpiryFn           func(ctx context.Context, threadIDs []string, orgID string) error
 	BulkUpdateUnreadFn         func(ctx context.Context, threadIDs []string, orgID string, unreadCount int) (int64, error)
-	FilterTrashThreadIDsFn     func(ctx context.Context, threadIDs []string) ([]string, error)
+	FilterTrashThreadIDsFn     func(ctx context.Context, threadIDs []string, orgID string) ([]string, error)
 	BulkSoftDeleteFn           func(ctx context.Context, threadIDs []string, orgID string) (int64, error)
 	ResolveFilteredThreadIDsFn func(ctx context.Context, orgID, label, domainID, role string, aliasAddrs []string) ([]string, error)
 	CreateThreadFn             func(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet, lastSender string) (string, error)
 	AddLabelFn                 func(ctx context.Context, threadID, orgID, label string) error
-	RemoveLabelFn              func(ctx context.Context, threadID, label string) error
-	RemoveAllLabelsFn          func(ctx context.Context, threadID string) error
-	HasLabelFn                 func(ctx context.Context, threadID, label string) bool
+	RemoveLabelFn              func(ctx context.Context, threadID, orgID, label string) error
+	RemoveAllLabelsFn          func(ctx context.Context, threadID, orgID string) error
+	HasLabelFn                 func(ctx context.Context, threadID, orgID, label string) bool
 	GetLabelsFn                func(ctx context.Context, threadID string) []string
 	BulkAddLabelFn             func(ctx context.Context, threadIDs []string, orgID, label string) error
-	BulkRemoveLabelFn          func(ctx context.Context, threadIDs []string, label string) error
+	BulkRemoveLabelFn          func(ctx context.Context, threadIDs []string, orgID, label string) error
 
 	// ---- Emails ----
 	LoadAttachmentsForResendFn func(ctx context.Context, ids []string, orgID string) ([]map[string]string, error)
@@ -209,7 +209,7 @@ type MockStore struct {
 	GetSyncJobFn    func(ctx context.Context, jobID, orgID string) (map[string]any, error)
 
 	// ---- Cron ----
-	PurgeExpiredTrashFn    func(ctx context.Context) (int64, error)
+	PurgeExpiredTrashFn    func(ctx context.Context, orgID string) (int64, error)
 	CleanupStaleWebhooksFn func(ctx context.Context, orgIDs []string) error
 
 	// ---- Worker ----
@@ -463,9 +463,9 @@ func (m *MockStore) BulkUpdateUnread(ctx context.Context, threadIDs []string, or
 	return 0, nil
 }
 
-func (m *MockStore) FilterTrashThreadIDs(ctx context.Context, threadIDs []string) ([]string, error) {
+func (m *MockStore) FilterTrashThreadIDs(ctx context.Context, threadIDs []string, orgID string) ([]string, error) {
 	if m.FilterTrashThreadIDsFn != nil {
-		return m.FilterTrashThreadIDsFn(ctx, threadIDs)
+		return m.FilterTrashThreadIDsFn(ctx, threadIDs, orgID)
 	}
 	return []string{}, nil
 }
@@ -498,23 +498,23 @@ func (m *MockStore) AddLabel(ctx context.Context, threadID, orgID, label string)
 	return nil
 }
 
-func (m *MockStore) RemoveLabel(ctx context.Context, threadID, label string) error {
+func (m *MockStore) RemoveLabel(ctx context.Context, threadID, orgID, label string) error {
 	if m.RemoveLabelFn != nil {
-		return m.RemoveLabelFn(ctx, threadID, label)
+		return m.RemoveLabelFn(ctx, threadID, orgID, label)
 	}
 	return nil
 }
 
-func (m *MockStore) RemoveAllLabels(ctx context.Context, threadID string) error {
+func (m *MockStore) RemoveAllLabels(ctx context.Context, threadID, orgID string) error {
 	if m.RemoveAllLabelsFn != nil {
-		return m.RemoveAllLabelsFn(ctx, threadID)
+		return m.RemoveAllLabelsFn(ctx, threadID, orgID)
 	}
 	return nil
 }
 
-func (m *MockStore) HasLabel(ctx context.Context, threadID, label string) bool {
+func (m *MockStore) HasLabel(ctx context.Context, threadID, orgID, label string) bool {
 	if m.HasLabelFn != nil {
-		return m.HasLabelFn(ctx, threadID, label)
+		return m.HasLabelFn(ctx, threadID, orgID, label)
 	}
 	return false
 }
@@ -533,9 +533,9 @@ func (m *MockStore) BulkAddLabel(ctx context.Context, threadIDs []string, orgID,
 	return nil
 }
 
-func (m *MockStore) BulkRemoveLabel(ctx context.Context, threadIDs []string, label string) error {
+func (m *MockStore) BulkRemoveLabel(ctx context.Context, threadIDs []string, orgID, label string) error {
 	if m.BulkRemoveLabelFn != nil {
-		return m.BulkRemoveLabelFn(ctx, threadIDs, label)
+		return m.BulkRemoveLabelFn(ctx, threadIDs, orgID, label)
 	}
 	return nil
 }
@@ -1396,9 +1396,9 @@ func (m *MockStore) GetSyncJob(ctx context.Context, jobID, orgID string) (map[st
 // CronStore
 // ===========================================================================
 
-func (m *MockStore) PurgeExpiredTrash(ctx context.Context) (int64, error) {
+func (m *MockStore) PurgeExpiredTrash(ctx context.Context, orgID string) (int64, error) {
 	if m.PurgeExpiredTrashFn != nil {
-		return m.PurgeExpiredTrashFn(ctx)
+		return m.PurgeExpiredTrashFn(ctx, orgID)
 	}
 	return 0, nil
 }

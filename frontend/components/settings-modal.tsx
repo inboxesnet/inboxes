@@ -1061,7 +1061,8 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
   // Auto-recheck pending domains every 15s while the Domains tab is open,
   // so a DNS change flips the status without a manual Verify click.
   useEffect(() => {
-    if (activeTab !== "domains") return;
+    // Verify is an admin-only endpoint; members skip the background recheck.
+    if (activeTab !== "domains" || user?.role !== "admin") return;
     const pending = allDomains.filter((d) => d.status === "pending");
     if (pending.length === 0) return;
     const interval = setInterval(async () => {
@@ -2108,7 +2109,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                     )}
 
                     {/* Discovered domains from Resend */}
-                    {discoveredDomains.length > 0 && (
+                    {isAdmin && discoveredDomains.length > 0 && (
                       <Card className="border-amber-500/50 bg-amber-500/5">
                         <CardHeader>
                           <CardTitle className="text-sm">Found in Resend</CardTitle>
@@ -2182,19 +2183,21 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                               {visibleIds.size} of {allDomains.length} active
                             </span>
                           </button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleRefreshDomains}
-                            disabled={refreshingDomains}
-                          >
-                            {refreshingDomains ? (
-                              <Spinner className="mr-2" />
-                            ) : (
-                              <RefreshCw className="h-3.5 w-3.5 mr-2" />
-                            )}
-                            Refresh
-                          </Button>
+                          {isAdmin && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleRefreshDomains}
+                              disabled={refreshingDomains}
+                            >
+                              {refreshingDomains ? (
+                                <Spinner className="mr-2" />
+                              ) : (
+                                <RefreshCw className="h-3.5 w-3.5 mr-2" />
+                              )}
+                              Refresh
+                            </Button>
+                          )}
                         </div>
                         {allDomains.map((d, idx) => {
                           const active = visibleIds.has(d.id);

@@ -274,7 +274,7 @@ func TestPurgeExpiredTrash(t *testing.T) {
 	}
 
 	// Run purge
-	affected, err := testStore.PurgeExpiredTrash(ctx)
+	affected, err := testStore.PurgeExpiredTrash(ctx, "")
 	if err != nil {
 		t.Fatalf("PurgeExpiredTrash: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestPurgeExpiredTrash_FutureUntouched(t *testing.T) {
 	}
 
 	// Run purge -- should NOT affect this thread
-	_, err := testStore.PurgeExpiredTrash(ctx)
+	_, err := testStore.PurgeExpiredTrash(ctx, "")
 	if err != nil {
 		t.Fatalf("PurgeExpiredTrash: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestPurgeExpiredTrash_FutureUntouched(t *testing.T) {
 	}
 
 	// Verify it still has the trash label
-	if !testStore.HasLabel(ctx, threadID, "trash") {
+	if !testStore.HasLabel(ctx, threadID, orgID, "trash") {
 		t.Error("expected thread to still have 'trash' label")
 	}
 }

@@ -61,6 +61,25 @@ func (h *ThreadHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// threadVisible reports whether the caller may act on the thread. Admins see
+// every thread in the org; members need an alias label match. Callers must
+// verify org ownership separately (for example via GetThreadDomainID).
+func (h *ThreadHandler) threadVisible(ctx context.Context, claims *middleware.Claims, threadID string) bool {
+	if claims.Role == "admin" {
+		return true
+	}
+	aliasAddrs, _ := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
+	aliasLabels := make([]string, len(aliasAddrs))
+	for i, addr := range aliasAddrs {
+		aliasLabels[i] = "alias:" + addr
+	}
+	visible, err := h.Store.CheckThreadVisibility(ctx, threadID, aliasLabels)
+	if err != nil {
+		slog.Warn("threads: visibility check failed", "thread_id", threadID, "error", err)
+	}
+	return visible
+}
+
 func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
@@ -73,24 +92,9 @@ func (h *ThreadHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Alias visibility check for non-admins
-	if claims.Role != "admin" {
-		aliasAddrs, _ := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
-		if aliasAddrs == nil {
-			aliasAddrs = []string{}
-		}
-		aliasLabels := make([]string, len(aliasAddrs))
-		for i, addr := range aliasAddrs {
-			aliasLabels[i] = "alias:" + addr
-		}
-		visible, err := h.Store.CheckThreadVisibility(ctx, threadID, aliasLabels)
-		if err != nil {
-			slog.Warn("threads: visibility check failed", "thread_id", threadID, "error", err)
-		}
-		if !visible {
-			writeError(w, http.StatusNotFound, "thread not found")
-			return
-		}
+	if !h.threadVisible(ctx, claims, threadID) {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
 	}
 
 	// Fetch emails
@@ -186,7 +190,7 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Action {
 	case "archive":
-		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, "inbox"); err != nil {
+		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "inbox"); err != nil {
 			slog.Error("threads: bulk archive failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to archive threads")
 			return
@@ -250,10 +254,10 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 				if err := tx.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, "inbox"); err != nil {
 					return err
 				}
-				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "trash"); err != nil {
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "trash"); err != nil {
 					return err
 				}
-				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "spam"); err != nil {
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "spam"); err != nil {
 					return err
 				}
 				_, err := tx.Q().Exec(ctx,
@@ -270,7 +274,7 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 				if err := tx.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, "spam"); err != nil {
 					return err
 				}
-				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "trash"); err != nil {
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "trash"); err != nil {
 					return err
 				}
 				_, err := tx.Q().Exec(ctx,
@@ -279,13 +283,13 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 				return err
 			case "archive":
 				// Archive is a destination: it also restores from trash/spam.
-				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "inbox"); err != nil {
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "inbox"); err != nil {
 					return err
 				}
-				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "trash"); err != nil {
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "trash"); err != nil {
 					return err
 				}
-				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, "spam"); err != nil {
+				if err := tx.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "spam"); err != nil {
 					return err
 				}
 				_, err := tx.Q().Exec(ctx,
@@ -325,7 +329,7 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "cannot use reserved label name")
 			return
 		}
-		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, req.Label); err != nil {
+		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, req.Label); err != nil {
 			slog.Error("threads: bulk remove label failed", "label", req.Label, "error", err)
 		}
 		affected = int64(len(req.ThreadIDs))
@@ -337,13 +341,13 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 		affected = int64(len(req.ThreadIDs))
 
 	case "unmute":
-		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, "muted"); err != nil {
+		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "muted"); err != nil {
 			slog.Error("threads: bulk unmute failed", "error", err)
 		}
 		affected = int64(len(req.ThreadIDs))
 
 	case "delete":
-		trashIDs, err := h.Store.FilterTrashThreadIDs(ctx, req.ThreadIDs)
+		trashIDs, err := h.Store.FilterTrashThreadIDs(ctx, req.ThreadIDs, claims.OrgID)
 		if err != nil {
 			slog.Error("threads: bulk delete filter failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to delete threads")
@@ -353,7 +357,7 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 		if len(trashIDs) > 0 {
 			if err := h.Store.WithTx(ctx, func(tx store.Store) error {
 				for _, tid := range trashIDs {
-					if err := tx.RemoveAllLabels(ctx, tid); err != nil {
+					if err := tx.RemoveAllLabels(ctx, tid, claims.OrgID); err != nil {
 						return err
 					}
 				}
@@ -411,24 +415,9 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Alias visibility check for non-admins
-	if claims.Role != "admin" {
-		aliasAddrs, _ := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
-		if aliasAddrs == nil {
-			aliasAddrs = []string{}
-		}
-		aliasLabels := make([]string, len(aliasAddrs))
-		for i, addr := range aliasAddrs {
-			aliasLabels[i] = "alias:" + addr
-		}
-		visible, err := h.Store.CheckThreadVisibility(ctx, threadID, aliasLabels)
-		if err != nil {
-			slog.Warn("threads: visibility check failed", "thread_id", threadID, "error", err)
-		}
-		if !visible {
-			writeError(w, http.StatusNotFound, "thread not found")
-			return
-		}
+	if !h.threadVisible(ctx, claims, threadID) {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
 	}
 
 	// Reject reserved custom labels early (system labels are handled in the switch)
@@ -454,10 +443,10 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 			if err := tx.AddLabel(ctx, threadID, claims.OrgID, "inbox"); err != nil {
 				return err
 			}
-			if err := tx.RemoveLabel(ctx, threadID, "trash"); err != nil {
+			if err := tx.RemoveLabel(ctx, threadID, claims.OrgID, "trash"); err != nil {
 				return err
 			}
-			if err := tx.RemoveLabel(ctx, threadID, "spam"); err != nil {
+			if err := tx.RemoveLabel(ctx, threadID, claims.OrgID, "spam"); err != nil {
 				return err
 			}
 			_, err := tx.Q().Exec(ctx, "UPDATE threads SET trash_expires_at = NULL, updated_at = now() WHERE id = $1 AND org_id = $2",
@@ -474,7 +463,7 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 			if err := tx.AddLabel(ctx, threadID, claims.OrgID, "spam"); err != nil {
 				return err
 			}
-			if err := tx.RemoveLabel(ctx, threadID, "trash"); err != nil {
+			if err := tx.RemoveLabel(ctx, threadID, claims.OrgID, "trash"); err != nil {
 				return err
 			}
 			_, err := tx.Q().Exec(ctx, "UPDATE threads SET trash_expires_at = NULL, updated_at = now() WHERE id = $1 AND org_id = $2",
@@ -482,13 +471,13 @@ func (h *ThreadHandler) Move(w http.ResponseWriter, r *http.Request) {
 			return err
 		case "archive":
 			// Archive is a destination: it also restores from trash/spam.
-			if err := tx.RemoveLabel(ctx, threadID, "inbox"); err != nil {
+			if err := tx.RemoveLabel(ctx, threadID, claims.OrgID, "inbox"); err != nil {
 				return err
 			}
-			if err := tx.RemoveLabel(ctx, threadID, "trash"); err != nil {
+			if err := tx.RemoveLabel(ctx, threadID, claims.OrgID, "trash"); err != nil {
 				return err
 			}
-			if err := tx.RemoveLabel(ctx, threadID, "spam"); err != nil {
+			if err := tx.RemoveLabel(ctx, threadID, claims.OrgID, "spam"); err != nil {
 				return err
 			}
 			_, err := tx.Q().Exec(ctx, "UPDATE threads SET trash_expires_at = NULL, updated_at = now() WHERE id = $1 AND org_id = $2",
@@ -523,7 +512,11 @@ func (h *ThreadHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	domainID, _ := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
 
 	n, err := h.Store.UpdateThreadUnread(ctx, threadID, claims.OrgID, 0)
 	if err != nil || n == 0 {
@@ -554,7 +547,11 @@ func (h *ThreadHandler) MarkUnread(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	domainID, _ := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
 
 	n, err := h.Store.UpdateThreadUnread(ctx, threadID, claims.OrgID, 1)
 	if err != nil || n == 0 {
@@ -586,7 +583,7 @@ func (h *ThreadHandler) Star(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
-	if err != nil {
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
 		writeError(w, http.StatusNotFound, "thread not found")
 		return
 	}
@@ -602,13 +599,13 @@ func (h *ThreadHandler) Star(w http.ResponseWriter, r *http.Request) {
 	if req.Starred != nil {
 		wantStarred = *req.Starred
 	} else {
-		wantStarred = !h.Store.HasLabel(ctx, threadID, "starred")
+		wantStarred = !h.Store.HasLabel(ctx, threadID, claims.OrgID, "starred")
 	}
 
 	if wantStarred {
 		h.Store.AddLabel(ctx, threadID, claims.OrgID, "starred")
 	} else {
-		h.Store.RemoveLabel(ctx, threadID, "starred")
+		h.Store.RemoveLabel(ctx, threadID, claims.OrgID, "starred")
 	}
 
 	evtType := event.ThreadStarred
@@ -635,14 +632,14 @@ func (h *ThreadHandler) Mute(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
-	if err != nil {
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
 		writeError(w, http.StatusNotFound, "thread not found")
 		return
 	}
 
-	muted := h.Store.HasLabel(ctx, threadID, "muted")
+	muted := h.Store.HasLabel(ctx, threadID, claims.OrgID, "muted")
 	if muted {
-		h.Store.RemoveLabel(ctx, threadID, "muted")
+		h.Store.RemoveLabel(ctx, threadID, claims.OrgID, "muted")
 	} else {
 		h.Store.AddLabel(ctx, threadID, claims.OrgID, "muted")
 	}
@@ -671,12 +668,12 @@ func (h *ThreadHandler) Archive(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
-	if err != nil {
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
 		writeError(w, http.StatusNotFound, "thread not found")
 		return
 	}
 
-	if err := h.Store.RemoveLabel(ctx, threadID, "inbox"); err != nil {
+	if err := h.Store.RemoveLabel(ctx, threadID, claims.OrgID, "inbox"); err != nil {
 		slog.Error("threads: archive removeLabel failed", "thread_id", threadID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to archive thread")
 		return
@@ -702,7 +699,7 @@ func (h *ThreadHandler) Trash(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
-	if err != nil {
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
 		writeError(w, http.StatusNotFound, "thread not found")
 		return
 	}
@@ -748,7 +745,7 @@ func (h *ThreadHandler) Snooze(w http.ResponseWriter, r *http.Request) {
 	}
 
 	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
-	if err != nil {
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
 		writeError(w, http.StatusNotFound, "thread not found")
 		return
 	}
@@ -806,7 +803,7 @@ func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {
 	readJSON(r, &req)
 
 	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
-	if err != nil {
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
 		writeError(w, http.StatusNotFound, "thread not found")
 		return
 	}
@@ -816,7 +813,7 @@ func (h *ThreadHandler) Spam(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.Store.WithTx(ctx, func(tx store.Store) error {
 		if req.Action == "not_spam" {
-			if err := tx.RemoveLabel(ctx, threadID, "spam"); err != nil {
+			if err := tx.RemoveLabel(ctx, threadID, claims.OrgID, "spam"); err != nil {
 				return err
 			}
 			if err := tx.AddLabel(ctx, threadID, claims.OrgID, "inbox"); err != nil {
@@ -854,17 +851,21 @@ func (h *ThreadHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	threadID := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	domainID, _ := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	domainID, err := h.Store.GetThreadDomainID(ctx, threadID, claims.OrgID)
+	if err != nil || !h.threadVisible(ctx, claims, threadID) {
+		writeError(w, http.StatusNotFound, "thread not found")
+		return
+	}
 
 	// Only allow deleting threads that have trash label
-	if !h.Store.HasLabel(ctx, threadID, "trash") {
+	if !h.Store.HasLabel(ctx, threadID, claims.OrgID, "trash") {
 		writeError(w, http.StatusNotFound, "thread not found or not in trash")
 		return
 	}
 
 	var deleted int64
 	if err := h.Store.WithTx(ctx, func(tx store.Store) error {
-		if err := tx.RemoveAllLabels(ctx, threadID); err != nil {
+		if err := tx.RemoveAllLabels(ctx, threadID, claims.OrgID); err != nil {
 			return err
 		}
 		n, err := tx.SoftDeleteThread(ctx, threadID, claims.OrgID)

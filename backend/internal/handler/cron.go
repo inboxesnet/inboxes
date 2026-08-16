@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
 )
@@ -15,8 +16,28 @@ type CronHandler struct {
 	ResendSvc *service.ResendService
 }
 
+// isInstanceOwner reports whether the caller has users.is_owner set. Only the
+// instance owner may run maintenance across every org on the instance.
+func (h *CronHandler) isInstanceOwner(r *http.Request, userID string) bool {
+	var isOwner bool
+	if err := h.Store.Q().QueryRow(r.Context(),
+		"SELECT is_owner FROM users WHERE id = $1", userID,
+	).Scan(&isOwner); err != nil {
+		return false
+	}
+	return isOwner
+}
+
 func (h *CronHandler) PurgeTrash(w http.ResponseWriter, r *http.Request) {
-	purged, err := h.Store.PurgeExpiredTrash(r.Context())
+	claims := middleware.GetCurrentUser(r.Context())
+
+	// An org admin purges their own org. The instance owner purges all orgs.
+	orgID := claims.OrgID
+	if h.isInstanceOwner(r, claims.UserID) {
+		orgID = ""
+	}
+
+	purged, err := h.Store.PurgeExpiredTrash(r.Context(), orgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to purge trash")
 		return
@@ -31,10 +52,20 @@ func (h *CronHandler) PurgeTrash(w http.ResponseWriter, r *http.Request) {
 // that match our URL pattern but aren't the currently active webhook.
 func (h *CronHandler) CleanupWebhooks(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	claims := middleware.GetCurrentUser(r.Context())
 
-	rows, err := h.Store.Q().Query(ctx,
-		`SELECT id, resend_webhook_id FROM orgs WHERE resend_webhook_id IS NOT NULL AND resend_webhook_id != ''`,
-	)
+	// An org admin cleans up their own org's webhooks. The instance owner
+	// sweeps every org. Without this scope, any tenant's admin could delete
+	// other tenants' Resend webhooks and break their inbound mail.
+	query := `SELECT id, resend_webhook_id FROM orgs
+	          WHERE resend_webhook_id IS NOT NULL AND resend_webhook_id != ''`
+	args := []interface{}{}
+	if !h.isInstanceOwner(r, claims.UserID) {
+		query += ` AND id = $1`
+		args = append(args, claims.OrgID)
+	}
+
+	rows, err := h.Store.Q().Query(ctx, query, args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to query orgs")
 		return

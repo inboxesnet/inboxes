@@ -90,20 +90,22 @@ type ThreadStore interface {
 	SoftDeleteThread(ctx context.Context, threadID, orgID string) (int64, error)
 	SetTrashExpiry(ctx context.Context, threadIDs []string, orgID string) error
 	BulkUpdateUnread(ctx context.Context, threadIDs []string, orgID string, unreadCount int) (int64, error)
-	FilterTrashThreadIDs(ctx context.Context, threadIDs []string) ([]string, error)
+	FilterTrashThreadIDs(ctx context.Context, threadIDs []string, orgID string) ([]string, error)
 	BulkSoftDelete(ctx context.Context, threadIDs []string, orgID string) (int64, error)
 	ResolveFilteredThreadIDs(ctx context.Context, orgID, label, domainID, role string, aliasAddrs []string) ([]string, error)
 	GetLabelCounts(ctx context.Context, orgID, domainID, userID, role string, aliasAddrs []string) (map[string]any, error)
 	CreateThread(ctx context.Context, orgID, userID, domainID, subject string, participantsJSON []byte, snippet, lastSender string) (string, error)
 
-	// Label operations (work on both pool and tx)
+	// Label operations (work on both pool and tx).
+	// All mutations are org-scoped so a client-supplied thread ID can never
+	// touch another org's labels.
 	AddLabel(ctx context.Context, threadID, orgID, label string) error
-	RemoveLabel(ctx context.Context, threadID, label string) error
-	RemoveAllLabels(ctx context.Context, threadID string) error
-	HasLabel(ctx context.Context, threadID, label string) bool
+	RemoveLabel(ctx context.Context, threadID, orgID, label string) error
+	RemoveAllLabels(ctx context.Context, threadID, orgID string) error
+	HasLabel(ctx context.Context, threadID, orgID, label string) bool
 	GetLabels(ctx context.Context, threadID string) []string
 	BulkAddLabel(ctx context.Context, threadIDs []string, orgID, label string) error
-	BulkRemoveLabel(ctx context.Context, threadIDs []string, label string) error
+	BulkRemoveLabel(ctx context.Context, threadIDs []string, orgID, label string) error
 }
 
 // ---- Emails ----
@@ -309,7 +311,9 @@ type SyncStore interface {
 // ---- Cron ----
 
 type CronStore interface {
-	PurgeExpiredTrash(ctx context.Context) (int64, error)
+	// PurgeExpiredTrash purges expired trash for one org, or for every org
+	// when orgID is empty (instance-owner maintenance only).
+	PurgeExpiredTrash(ctx context.Context, orgID string) (int64, error)
 	CleanupStaleWebhooks(ctx context.Context, orgIDs []string) error
 }
 

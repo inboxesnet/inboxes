@@ -466,12 +466,12 @@ func (s *PgStore) BulkUpdateUnread(ctx context.Context, threadIDs []string, orgI
 	return tag.RowsAffected(), nil
 }
 
-func (s *PgStore) FilterTrashThreadIDs(ctx context.Context, threadIDs []string) ([]string, error) {
+func (s *PgStore) FilterTrashThreadIDs(ctx context.Context, threadIDs []string, orgID string) ([]string, error) {
 	// Permanent delete is allowed from trash and spam.
 	rows, err := s.q.Query(ctx,
 		`SELECT DISTINCT thread_id FROM thread_labels
-		 WHERE thread_id = ANY($1::uuid[]) AND label IN ('trash', 'spam')`,
-		threadIDs)
+		 WHERE thread_id = ANY($1::uuid[]) AND org_id = $2 AND label IN ('trash', 'spam')`,
+		threadIDs, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -590,31 +590,35 @@ func (s *PgStore) CreateThread(ctx context.Context, orgID, userID, domainID, sub
 // ---- Label operations ----
 
 func (s *PgStore) AddLabel(ctx context.Context, threadID, orgID, label string) error {
+	// Insert only when the thread belongs to the org, so a client-supplied
+	// thread ID cannot attach labels to another org's thread.
 	_, err := s.q.Exec(ctx,
-		`INSERT INTO thread_labels (thread_id, org_id, label) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+		`INSERT INTO thread_labels (thread_id, org_id, label)
+		 SELECT t.id, $2, $3 FROM threads t WHERE t.id = $1 AND t.org_id = $2
+		 ON CONFLICT DO NOTHING`,
 		threadID, orgID, label)
 	return err
 }
 
-func (s *PgStore) RemoveLabel(ctx context.Context, threadID, label string) error {
+func (s *PgStore) RemoveLabel(ctx context.Context, threadID, orgID, label string) error {
 	_, err := s.q.Exec(ctx,
-		`DELETE FROM thread_labels WHERE thread_id = $1 AND label = $2`,
-		threadID, label)
+		`DELETE FROM thread_labels WHERE thread_id = $1 AND org_id = $2 AND label = $3`,
+		threadID, orgID, label)
 	return err
 }
 
-func (s *PgStore) RemoveAllLabels(ctx context.Context, threadID string) error {
+func (s *PgStore) RemoveAllLabels(ctx context.Context, threadID, orgID string) error {
 	_, err := s.q.Exec(ctx,
-		`DELETE FROM thread_labels WHERE thread_id = $1`,
-		threadID)
+		`DELETE FROM thread_labels WHERE thread_id = $1 AND org_id = $2`,
+		threadID, orgID)
 	return err
 }
 
-func (s *PgStore) HasLabel(ctx context.Context, threadID, label string) bool {
+func (s *PgStore) HasLabel(ctx context.Context, threadID, orgID, label string) bool {
 	var exists bool
 	if err := s.q.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM thread_labels WHERE thread_id = $1 AND label = $2)`,
-		threadID, label).Scan(&exists); err != nil {
+		`SELECT EXISTS(SELECT 1 FROM thread_labels WHERE thread_id = $1 AND org_id = $2 AND label = $3)`,
+		threadID, orgID, label).Scan(&exists); err != nil {
 		slog.Warn("HasLabel: query failed", "thread_id", threadID, "label", label, "error", err)
 		return false
 	}
@@ -642,18 +646,19 @@ func (s *PgStore) GetLabels(ctx context.Context, threadID string) []string {
 }
 
 func (s *PgStore) BulkAddLabel(ctx context.Context, threadIDs []string, orgID, label string) error {
+	// Insert only for threads that belong to the org (see AddLabel).
 	_, err := s.q.Exec(ctx,
 		`INSERT INTO thread_labels (thread_id, org_id, label)
-		 SELECT unnest($1::uuid[]), $2, $3
+		 SELECT t.id, $2, $3 FROM threads t WHERE t.id = ANY($1::uuid[]) AND t.org_id = $2
 		 ON CONFLICT DO NOTHING`,
 		threadIDs, orgID, label)
 	return err
 }
 
-func (s *PgStore) BulkRemoveLabel(ctx context.Context, threadIDs []string, label string) error {
+func (s *PgStore) BulkRemoveLabel(ctx context.Context, threadIDs []string, orgID, label string) error {
 	_, err := s.q.Exec(ctx,
-		`DELETE FROM thread_labels WHERE thread_id = ANY($1::uuid[]) AND label = $2`,
-		threadIDs, label)
+		`DELETE FROM thread_labels WHERE thread_id = ANY($1::uuid[]) AND org_id = $2 AND label = $3`,
+		threadIDs, orgID, label)
 	return err
 }
 
