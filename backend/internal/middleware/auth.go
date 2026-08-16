@@ -206,6 +206,25 @@ func SetTokenCookie(w http.ResponseWriter, token, appURL string) {
 		c.Domain = d
 	}
 	http.SetCookie(w, c)
+
+	// Marker cookie for the marketing site. It carries no secret; it only
+	// signals "a session exists" so inboxes.net can redirect signed-in
+	// visitors to the app. Not HttpOnly on purpose: the marketing page
+	// reads it from document.cookie. Lifetime tracks the token cookie,
+	// including sliding renewal.
+	m := &http.Cookie{
+		Name:     "inboxes_user",
+		Value:    "1",
+		Path:     "/",
+		MaxAge:   7 * 24 * 60 * 60,
+		HttpOnly: false,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	}
+	if d := cookieDomain(appURL); d != "" {
+		m.Domain = d
+	}
+	http.SetCookie(w, m)
 }
 
 func ClearTokenCookie(w http.ResponseWriter, appURL string) {
@@ -223,6 +242,20 @@ func ClearTokenCookie(w http.ResponseWriter, appURL string) {
 		c.Domain = d
 	}
 	http.SetCookie(w, c)
+
+	m := &http.Cookie{
+		Name:     "inboxes_user",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: false,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	}
+	if d := cookieDomain(appURL); d != "" {
+		m.Domain = d
+	}
+	http.SetCookie(w, m)
 }
 
 // RequireOwner restricts access to the instance owner (is_owner = true).

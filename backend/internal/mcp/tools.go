@@ -82,6 +82,24 @@ func toolDefinitions(role string) []toolDef {
 			}, "thread_id"),
 		},
 		{
+			Name: "modify_thread",
+			Description: "Use when the user asks to clean up, organize, or act on mail — " +
+				"'archive that', 'trash these', 'mark it read', 'snooze until Monday', " +
+				"'this is spam'. Applies one action to one thread. For suspected " +
+				"harassment or unwanted senders, prefer the spam action over any " +
+				"unsubscribe attempt.",
+			InputSchema: obj(map[string]interface{}{
+				"thread_id": str("Thread ID from list_threads or search_threads"),
+				"action": map[string]interface{}{
+					"type": "string",
+					"enum": []string{"archive", "trash", "restore", "spam", "not_spam",
+						"read", "unread", "star", "unstar", "mute", "unmute", "snooze", "unsnooze"},
+					"description": "restore moves a thread back to the inbox from archive/trash/spam",
+				},
+				"snooze_until": str("RFC 3339 time, required for the snooze action, e.g. 2026-08-18T09:00:00Z"),
+			}, "thread_id", "action"),
+		},
+		{
 			Name: "list_drafts",
 			Description: "Use when the user asks about pending, unsent, or saved drafts. " +
 				"Returns this user's drafts.",
@@ -230,6 +248,9 @@ func (s *Server) callTool(r *http.Request, id *TokenIdentity, name string, rawAr
 		}
 		return s.simpleGet(id, "/api/threads/"+url.PathEscape(args.ThreadID))
 
+	case "modify_thread":
+		return s.modifyThread(id, rawArgs)
+
 	case "list_drafts":
 		var args struct {
 			Domain string `json:"domain"`
@@ -335,6 +356,73 @@ func (s *Server) resolveDomain(id *TokenIdentity, nameOrID string) (string, erro
 		}
 	}
 	return "", fmt.Errorf("domain %q not found; call list_domains to see available domains", nameOrID)
+}
+
+// modifyThread maps one action to the existing single-thread routes (and the
+// bulk route where it alone offers explicit non-toggle semantics).
+func (s *Server) modifyThread(id *TokenIdentity, rawArgs json.RawMessage) map[string]interface{} {
+	var args struct {
+		ThreadID    string `json:"thread_id"`
+		Action      string `json:"action"`
+		SnoozeUntil string `json:"snooze_until"`
+	}
+	if err := json.Unmarshal(rawArgs, &args); err != nil || args.ThreadID == "" || args.Action == "" {
+		return toolText("thread_id and action are required", true)
+	}
+	tid := url.PathEscape(args.ThreadID)
+
+	var method, path string
+	var body interface{}
+	switch args.Action {
+	case "archive":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/archive"
+	case "trash":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/trash"
+	case "restore":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/move"
+		body = map[string]string{"label": "inbox"}
+	case "spam":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/spam"
+		body = map[string]string{}
+	case "not_spam":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/spam"
+		body = map[string]string{"action": "not_spam"}
+	case "read":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/read"
+	case "unread":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/unread"
+	case "star":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/star"
+		body = map[string]bool{"starred": true}
+	case "unstar":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/star"
+		body = map[string]bool{"starred": false}
+	case "mute", "unmute":
+		// The single-thread route toggles; the bulk route takes the explicit
+		// action, which is what an agent needs for idempotency.
+		method, path = http.MethodPatch, "/api/threads/bulk"
+		body = map[string]interface{}{"action": args.Action, "thread_ids": []string{args.ThreadID}}
+	case "snooze":
+		if args.SnoozeUntil == "" {
+			return toolText("snooze_until is required for the snooze action", true)
+		}
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/snooze"
+		body = map[string]string{"until": args.SnoozeUntil}
+	case "unsnooze":
+		method, path = http.MethodPatch, "/api/threads/"+tid+"/snooze"
+		body = map[string]interface{}{"until": nil}
+	default:
+		return toolText("unknown action: "+args.Action, true)
+	}
+
+	status, respBody, err := s.callAPI(id, method, path, body)
+	if err != nil {
+		return toolText(err.Error(), true)
+	}
+	if status >= 300 {
+		return toolText(apiError(status, respBody), true)
+	}
+	return toolText(map[string]string{"thread_id": args.ThreadID, "action": args.Action, "status": "done"}, false)
 }
 
 func (s *Server) createDraft(id *TokenIdentity, rawArgs json.RawMessage) map[string]interface{} {

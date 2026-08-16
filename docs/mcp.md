@@ -64,6 +64,7 @@ Keys and OAuth connections are listed and revocable in Settings → Agents.
 | `list_threads` | all | By label; accepts a domain name |
 | `search_threads` | all | Full-text; alias-scoped for members |
 | `get_thread` | all | Full conversation bodies |
+| `modify_thread` | all | archive/trash/restore/spam/read/star/mute/snooze, one action per call |
 | `list_drafts` | all | The user's drafts |
 | `create_draft` | all | Accepts domain **names**; two-step create+body |
 | `update_draft` | all | Partial updates |

@@ -295,6 +295,92 @@ func TestMCPMemberVisibilityInheritance(t *testing.T) {
 	}
 }
 
+func TestMCPModifyThread(t *testing.T) {
+	ctx := context.Background()
+	h, _ := newFullRouter(t)
+	orgID, adminID := seedOrg(t, fmt.Sprintf("mcpmod-%s", t.Name()), fmt.Sprintf("mcpmod-%s@test.com", t.Name()), "password123")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, fmt.Sprintf("mcpmod-%s.example.com", strings.ToLower(t.Name())))
+	threadID := seedThread(t, orgID, adminID, domainID, "Modify me")
+
+	key := createAgentKey(t, h, adminID, orgID, "admin")
+
+	act := func(action string, extra map[string]any) (string, bool) {
+		argsMap := map[string]any{"thread_id": threadID, "action": action}
+		for k, v := range extra {
+			argsMap[k] = v
+		}
+		resp := mcpCall(t, h, key, "tools/call", map[string]any{
+			"name": "modify_thread", "arguments": argsMap,
+		})
+		return toolResultText(t, resp)
+	}
+
+	hasLabel := func(label string) bool {
+		return testStore.HasLabel(ctx, threadID, orgID, label)
+	}
+
+	if text, isErr := act("archive", nil); isErr {
+		t.Fatalf("archive: %s", text)
+	}
+	if hasLabel("inbox") {
+		t.Error("archive did not remove inbox label")
+	}
+
+	if text, isErr := act("restore", nil); isErr {
+		t.Fatalf("restore: %s", text)
+	}
+	if !hasLabel("inbox") {
+		t.Error("restore did not re-add inbox label")
+	}
+
+	if text, isErr := act("star", nil); isErr {
+		t.Fatalf("star: %s", text)
+	}
+	if !hasLabel("starred") {
+		t.Error("star did not add label")
+	}
+
+	if text, isErr := act("mute", nil); isErr {
+		t.Fatalf("mute: %s", text)
+	}
+	if !hasLabel("muted") {
+		t.Error("mute did not add label")
+	}
+	// Idempotent: mute again must not toggle off.
+	act("mute", nil)
+	if !hasLabel("muted") {
+		t.Error("second mute toggled the label off — must be idempotent")
+	}
+
+	if text, isErr := act("snooze", map[string]any{"snooze_until": time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)}); isErr {
+		t.Fatalf("snooze: %s", text)
+	}
+	var snoozedUntil *time.Time
+	testPool.QueryRow(ctx, "SELECT snoozed_until FROM threads WHERE id = $1", threadID).Scan(&snoozedUntil)
+	if snoozedUntil == nil {
+		t.Error("snooze did not set snoozed_until")
+	}
+
+	if text, isErr := act("spam", nil); isErr {
+		t.Fatalf("spam: %s", text)
+	}
+	if !hasLabel("spam") {
+		t.Error("spam did not add label")
+	}
+
+	// A member without alias access must be blocked from modifying it.
+	memberID := seedUser(t, orgID, fmt.Sprintf("mcpmod-m-%s@test.com", t.Name()), "member")
+	testStore.AddLabel(ctx, threadID, orgID, "alias:someoneelse@example.com")
+	memberKey := createAgentKey(t, h, memberID, orgID, "member")
+	resp := mcpCall(t, h, memberKey, "tools/call", map[string]any{
+		"name": "modify_thread", "arguments": map[string]any{"thread_id": threadID, "action": "trash"},
+	})
+	if text, isErr := toolResultText(t, resp); !isErr {
+		t.Fatalf("member modified a thread outside their aliases: %s", text)
+	}
+}
+
 func TestMCPRevokedKeyRejected(t *testing.T) {
 	ctx := context.Background()
 	h, _ := newFullRouter(t)
