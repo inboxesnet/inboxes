@@ -106,11 +106,15 @@ export function TipTapEditor({
     },
   });
 
-  // Update content when prop changes (e.g. loading a draft)
+  // Update content when prop changes (e.g. loading a draft). Never resync
+  // while the editor has focus: the parent echoes onChange output back into
+  // this prop, and setContent would rebuild the document and move the cursor
+  // mid-keystroke.
   useEffect(() => {
-    if (editor && content !== undefined && editor.getHTML() !== content) {
-      editor.commands.setContent(content || "");
-    }
+    if (!editor || content === undefined) return;
+    if (editor.isFocused) return;
+    if (editor.getHTML() === content) return;
+    editor.commands.setContent(content || "");
   }, [content]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const insertEmoji = useCallback(
