@@ -28,7 +28,12 @@ type Claims struct {
 	Role   string `json:"role"`
 }
 
-func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool) func(http.Handler) http.Handler {
+// tokenRenewAge is the token age after which the middleware reissues the
+// cookie. Active users stay logged in; an idle session still expires with
+// the 7-day token lifetime.
+const tokenRenewAge = 24 * time.Hour
+
+func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool, appURL string) func(http.Handler) http.Handler {
 	blacklist := service.NewTokenBlacklist(rdb)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +104,25 @@ func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool) func(htt
 				if r.Header.Get("X-Requested-With") == "" {
 					http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 					return
+				}
+			}
+
+			// Sliding renewal: reissue the cookie once the token is older
+			// than tokenRenewAge. The role comes fresh from the DB so a
+			// role change does not persist in renewed tokens.
+			if !issuedAt.IsZero() && time.Since(issuedAt) > tokenRenewAge {
+				role := claims.Role
+				if db != nil {
+					var dbRole string
+					if qErr := db.QueryRow(r.Context(),
+						"SELECT role FROM users WHERE id = $1", claims.UserID,
+					).Scan(&dbRole); qErr == nil {
+						role = dbRole
+					}
+				}
+				if newToken, jti, genErr := GenerateToken(secret, claims.UserID, claims.OrgID, role); genErr == nil {
+					SetTokenCookie(w, newToken, appURL)
+					blacklist.RegisterSession(r.Context(), claims.UserID, jti)
 				}
 			}
 

@@ -89,7 +89,7 @@ func TestGetCurrentUser_WithClaims(t *testing.T) {
 
 func TestAuthMiddleware_NoCookie(t *testing.T) {
 	t.Parallel()
-	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called")
 	}))
 	req := httptest.NewRequest("GET", "/", nil)
@@ -102,7 +102,7 @@ func TestAuthMiddleware_NoCookie(t *testing.T) {
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	t.Parallel()
-	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called")
 	}))
 	req := httptest.NewRequest("GET", "/", nil)
@@ -122,7 +122,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	}
 
 	called := false
-	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		claims := GetCurrentUser(r.Context())
 		if claims == nil {
@@ -166,7 +166,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 		t.Fatalf("sign expired token: %v", err)
 	}
 
-	handler := AuthMiddleware(testSecret, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(testSecret, nil, nil, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("next handler should not be called for expired token")
 	}))
 
@@ -335,4 +335,82 @@ func TestCookieDomain(t *testing.T) {
 // Suppress lint about unused imports
 func init() {
 	_ = strings.Contains
+}
+
+func TestAuthMiddleware_SlidingRenewal(t *testing.T) {
+	t.Parallel()
+	// A token older than tokenRenewAge gets a fresh cookie.
+	now := time.Now()
+	oldClaims := &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        "old-jti",
+			IssuedAt:  jwt.NewNumericDate(now.Add(-25 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(6 * 24 * time.Hour)),
+		},
+		UserID: "user1",
+		OrgID:  "org1",
+		Role:   "member",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, oldClaims)
+	tokenStr, err := token.SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	handler := AuthMiddleware(testSecret, nil, nil, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: "token", Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	var renewed string
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "token" {
+			renewed = c.Value
+		}
+	}
+	if renewed == "" {
+		t.Fatal("expected a renewed token cookie, got none")
+	}
+	newClaims := &Claims{}
+	if _, err := jwt.ParseWithClaims(renewed, newClaims, func(t *jwt.Token) (interface{}, error) {
+		return []byte(testSecret), nil
+	}); err != nil {
+		t.Fatalf("parse renewed token: %v", err)
+	}
+	if newClaims.UserID != "user1" || newClaims.OrgID != "org1" || newClaims.Role != "member" {
+		t.Errorf("renewed claims: got %+v", newClaims)
+	}
+	if newClaims.ID == "old-jti" {
+		t.Error("renewed token kept the old JTI")
+	}
+	if time.Until(newClaims.ExpiresAt.Time) < 6*24*time.Hour {
+		t.Errorf("renewed expiry too short: %v", time.Until(newClaims.ExpiresAt.Time))
+	}
+}
+
+func TestAuthMiddleware_NoRenewalForFreshToken(t *testing.T) {
+	t.Parallel()
+	tokenStr, _, err := GenerateToken(testSecret, "user1", "org1", "member")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+
+	handler := AuthMiddleware(testSecret, nil, nil, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: "token", Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "token" {
+			t.Error("fresh token must not be renewed")
+		}
+	}
 }

@@ -140,7 +140,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 	// Protected
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.AuthMiddleware(secret, rdb, db))
+		r.Use(middleware.AuthMiddleware(secret, rdb, db, appURL))
 
 		// Always accessible (even without active plan)
 		r.Post("/api/auth/logout", auth.Logout)
