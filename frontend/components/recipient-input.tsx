@@ -122,6 +122,9 @@ export function RecipientInput({
       e.preventDefault();
       setSelectedIndex((prev) => Math.max(prev - 1, 0));
     } else if (e.key === "Escape") {
+      // preventDefault marks the key as consumed so the compose window
+      // does not also close on the same press.
+      if (showSuggestions) e.preventDefault();
       setShowSuggestions(false);
     }
   }

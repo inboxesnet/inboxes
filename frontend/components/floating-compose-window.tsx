@@ -168,9 +168,18 @@ export function FloatingComposeWindow() {
     return `hello@${domain}`;
   }
 
-  // Initialize form from composeData when window opens
+  // Initialize form from composeData when window opens. Initialize once per
+  // composeData object: a minimize/restore cycle re-runs this effect with the
+  // same data, and a re-init would wipe everything typed since open.
+  const initializedDataRef = useRef<object | null>(null);
   useEffect(() => {
+    if (composeState === "closed") {
+      initializedDataRef.current = null;
+      return;
+    }
+    if (composeData && initializedDataRef.current === composeData) return;
     if (composeState === "open" && composeData) {
+      initializedDataRef.current = composeData;
       // Cancel any pending autosave from the previous content. Without this
       // a queued save could write the new content into the old draft.
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -429,6 +438,12 @@ export function FloatingComposeWindow() {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
       handleSend(e);
+    } else if (e.key === "Escape" && !e.defaultPrevented) {
+      // Inner popups (emoji, recipient suggestions) consume Escape with
+      // preventDefault. Otherwise Escape closes the window; handleClose
+      // saves a dirty draft first.
+      e.stopPropagation();
+      handleClose();
     }
   }
 

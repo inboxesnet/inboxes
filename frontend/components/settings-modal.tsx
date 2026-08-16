@@ -2879,6 +2879,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                                     variant="ghost"
                                     size="icon"
                                     className="h-7 w-7"
+                                    title="Rename label"
                                     onClick={() => { setEditingLabelId(label.id); setEditingLabelName(label.name); }}
                                   >
                                     <Pencil className="h-3 w-3" />
@@ -2887,6 +2888,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                                     variant="ghost"
                                     size="icon"
                                     className="h-7 w-7 text-destructive hover:text-destructive"
+                                    title="Delete label"
                                     onClick={() => handleDeleteLabel(label.id)}
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
