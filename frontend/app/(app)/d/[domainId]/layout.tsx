@@ -22,6 +22,7 @@ import { DomainSidebar } from "@/components/domain-sidebar";
 import { FloatingComposeWindow } from "@/components/floating-compose-window";
 import type { Tab as SettingsTab } from "@/components/settings-modal";
 import { NotificationListener } from "@/components/notification-listener";
+import { NotificationBell } from "@/components/notification-bell";
 import { KeyboardShortcuts } from "@/components/keyboard-shortcuts";
 import { DragPreview } from "@/components/drag-preview";
 import { Spinner } from "@/components/ui/spinner";
@@ -180,6 +181,7 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
 
           {/* Top-right toolbar (desktop only) */}
           <div className="hidden md:flex print:hidden absolute top-0 right-0 z-20 h-14 items-center gap-1 pr-3">
+            <NotificationBell />
             <button
               onClick={() => setTheme(nextTheme(theme))}
               className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
