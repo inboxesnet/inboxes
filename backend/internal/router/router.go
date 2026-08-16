@@ -197,6 +197,10 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		// Events catchup (for WS reconnection)
 		r.Get("/api/events", events.Since)
 
+		// Bell notification center
+		r.Get("/api/notifications", events.Notifications)
+		r.Post("/api/notifications/read", events.MarkNotificationsRead)
+
 		// OAuth consent (the frontend consent page calls this while logged in)
 		r.Post("/api/oauth/approve", oauth.Approve)
 
@@ -248,6 +252,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			// Emails
 			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/emails/send", emails.Send)
 			r.With(middleware.RateLimitByIP(rdb, 20, 60), middleware.RateLimitByUser(rdb, 30, 60)).Post("/api/emails/{id}/retry", emails.Retry)
+			r.Post("/api/emails/{id}/dismiss", emails.Dismiss)
 			r.Post("/api/emails/{id}/cancel-send", emails.CancelSend)
 			r.Get("/api/emails/search", emails.Search)
 

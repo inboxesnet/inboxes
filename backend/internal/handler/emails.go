@@ -396,8 +396,9 @@ func (h *EmailHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to reset send job")
 		return
 	}
+	// A retry un-dismisses the email: the user acts on it again.
 	if _, err := h.Store.Q().Exec(ctx,
-		`UPDATE emails SET status = 'queued', updated_at = now() WHERE id = $1`,
+		`UPDATE emails SET status = 'queued', dismissed_at = NULL, updated_at = now() WHERE id = $1`,
 		emailID,
 	); err != nil {
 		slog.Error("email retry: failed to reset email status", "email_id", emailID, "error", err)
@@ -425,6 +426,65 @@ func (h *EmailHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		"email_id": emailID,
 		"job_id":   jobID,
 		"status":   "queued",
+	})
+}
+
+// Dismiss marks a failed or bounced outbound email as handled. The email
+// stays in the database, so sync cannot resurrect it, but the Failed view
+// hides it. A later retry clears the flag.
+func (h *EmailHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	emailID := chi.URLParam(r, "id")
+	ctx := r.Context()
+
+	var status, direction, threadID, domainID, emailUserID string
+	err := h.Store.Q().QueryRow(ctx,
+		`SELECT status, direction, thread_id, domain_id, user_id FROM emails WHERE id = $1 AND org_id = $2`,
+		emailID, claims.OrgID,
+	).Scan(&status, &direction, &threadID, &domainID, &emailUserID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "email not found")
+		return
+	}
+	if direction != "outbound" {
+		writeError(w, http.StatusBadRequest, "only outbound emails can be dismissed")
+		return
+	}
+	if emailUserID != claims.UserID && claims.Role != "admin" {
+		writeError(w, http.StatusForbidden, "only the sender can dismiss this email")
+		return
+	}
+	if status != "failed" && status != "bounced" {
+		writeError(w, http.StatusConflict, "email is not in a failed state")
+		return
+	}
+
+	if _, err := h.Store.Q().Exec(ctx,
+		`UPDATE emails SET dismissed_at = now(), updated_at = now() WHERE id = $1`,
+		emailID,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to dismiss email")
+		return
+	}
+
+	if h.Bus != nil {
+		h.Bus.Publish(ctx, event.Event{
+			EventType: event.EmailStatusUpdated,
+			OrgID:     claims.OrgID,
+			DomainID:  domainID,
+			ThreadID:  threadID,
+			Payload: map[string]interface{}{
+				"email_id":  emailID,
+				"status":    status,
+				"dismissed": true,
+			},
+		})
+	}
+
+	slog.Info("email dismiss: dismissed", "email_id", emailID, "user", claims.UserID)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"email_id":  emailID,
+		"dismissed": true,
 	})
 }
 

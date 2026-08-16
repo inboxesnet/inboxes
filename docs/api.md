@@ -399,6 +399,22 @@ If a sync job is already running, returns the existing job with `"already_active
 
 Returns `410 Gone` if the `since` ID points to an event older than the catchup window (default 48 hours), signaling the client to do a full data refetch.
 
+### Notifications (Bell)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/notifications` | Recent warning events, newest first, with the caller's read state |
+| `POST` | `/api/notifications/read` | Move the caller's read cursor forward |
+
+**GET /api/notifications** — query params: `limit` (int, default 50, max 100). Only warning event types appear: `domain.disconnected`, `domain.reconnected`, `domain.dns_degraded`, `domain.not_found`, failed/bounced/complained `email.status_updated`, and cancelled/past_due `plan.changed`. The window is 30 days. Non-admins get thread-bound events scoped to their aliases.
+
+**Response (200):**
+```json
+{ "events": [{"id": 123, "event": "domain.dns_degraded", "read": false, "payload": {}, "created_at": "..."}], "unread_count": 1, "read_cursor": 100 }
+```
+
+**POST /api/notifications/read** — body `{"last_id": 123}`. Sets the per-user cursor to `max(current, last_id)`. Returns `204`.
+
 ---
 
 ## Admin-Only Endpoints
@@ -606,7 +622,9 @@ Response:
 { "threads": [...], "total": 123, "page": 1, "limit": 50 }
 ```
 
-**POST /api/emails/{id}/retry**: Re-queues an outbound email in `failed`, `bounced`, or stuck `queued` state. Returns `202 Accepted` and publishes an `email.status_updated` event.
+**POST /api/emails/{id}/retry**: Re-queues an outbound email in `failed`, `bounced`, or stuck `queued` state. Returns `202 Accepted` and publishes an `email.status_updated` event. A retry also clears `dismissed_at`.
+
+**POST /api/emails/{id}/dismiss**: Marks a `failed` or `bounced` outbound email as handled. The row keeps its `dismissed_at` timestamp, so sync cannot resurrect it, and the Failed view hides it. Sender-or-admin only. Returns `200`.
 
 ### Bounces
 

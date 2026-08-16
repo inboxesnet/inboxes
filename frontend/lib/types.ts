@@ -95,6 +95,7 @@ export interface Email {
   sent_as_alias: string;
   spam_score: number;
   is_read?: boolean;
+  dismissed_at?: string;
   created_at: string;
 }
 

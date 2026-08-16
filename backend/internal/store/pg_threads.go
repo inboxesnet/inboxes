@@ -109,14 +109,16 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 		countQuery = `SELECT COUNT(*) FROM threads t
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
-				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced'))`
+				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
+				AND fe.dismissed_at IS NULL)`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 			t.trash_expires_at, t.snoozed_until
 			FROM threads t
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
-				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced'))`
+				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
+				AND fe.dismissed_at IS NULL)`
 		args = append(args, orgID)
 		argIdx = 2
 
@@ -287,7 +289,7 @@ func (s *PgStore) GetThreadEmails(ctx context.Context, threadID, orgID string) (
 	emailRows, err := s.q.Query(ctx,
 		`SELECT id, direction, from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses, subject,
 		 body_html, body_plain, status, attachments, message_id, in_reply_to, references_header,
-		 delivered_via_alias, sent_as_alias, is_read, created_at
+		 delivered_via_alias, sent_as_alias, is_read, dismissed_at, attachment_ids, created_at
 		 FROM emails WHERE thread_id = $1 AND org_id = $2 ORDER BY created_at ASC`, threadID, orgID,
 	)
 	if err != nil {
@@ -303,11 +305,13 @@ func (s *PgStore) GetThreadEmails(ctx context.Context, threadID, orgID string) (
 		var deliveredViaAlias, sentAsAlias *string
 		var attachments, refsHeader json.RawMessage
 		var isRead bool
+		var dismissedAt *time.Time
+		var attachmentIDs json.RawMessage
 		var eCreatedAt time.Time
 
 		emailRows.Scan(&eID, &dir, &from, &eTo, &eCC, &eBCC, &eReplyTo, &eSubject,
 			&bodyHTML, &bodyPlain, &eStatus, &attachments, &messageID, &inReplyTo, &refsHeader,
-			&deliveredViaAlias, &sentAsAlias, &isRead, &eCreatedAt)
+			&deliveredViaAlias, &sentAsAlias, &isRead, &dismissedAt, &attachmentIDs, &eCreatedAt)
 
 		email := map[string]any{
 			"id":                 eID,
@@ -343,6 +347,12 @@ func (s *PgStore) GetThreadEmails(ctx context.Context, threadID, orgID string) (
 		}
 		if sentAsAlias != nil {
 			email["sent_as_alias"] = *sentAsAlias
+		}
+		if dismissedAt != nil {
+			email["dismissed_at"] = *dismissedAt
+		}
+		if attachmentIDs != nil {
+			email["attachment_ids"] = attachmentIDs
 		}
 		emails = append(emails, email)
 	}
@@ -522,6 +532,14 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND t.snoozed_until IS NOT NULL AND t.snoozed_until > now()
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
+		args = append(args, orgID)
+		argIdx = 2
+	case "failed":
+		query = `SELECT t.id FROM threads t
+			WHERE t.org_id = $1 AND t.deleted_at IS NULL
+			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
+				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
+				AND fe.dismissed_at IS NULL)`
 		args = append(args, orgID)
 		argIdx = 2
 	default:
@@ -718,7 +736,8 @@ func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, r
 		`SELECT COUNT(DISTINCT t.id) FROM threads t
 		 WHERE t.org_id = $1 AND t.domain_id = $2 AND t.deleted_at IS NULL
 		 AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
-			AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced'))`+aliasFilter,
+			AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
+			AND fe.dismissed_at IS NULL)`+aliasFilter,
 		baseArgs...,
 	).Scan(&failedCount); err != nil {
 		return nil, err

@@ -462,7 +462,8 @@ function EmailMessage({
 
       <div className="px-4 pb-4">
         {email.direction === "outbound" &&
-          (email.status === "failed" || email.status === "bounced") && (
+          (email.status === "failed" || email.status === "bounced") &&
+          !email.dismissed_at && (
             <RetrySendBanner email={email} />
           )}
         <div className="text-xs text-muted-foreground mb-3 space-y-0.5">
@@ -551,12 +552,12 @@ function EmailMessage({
 // ─── Retry failed send ─────────────────────────────────────────────────
 
 function RetrySendBanner({ email }: { email: Email }) {
-  const [retrying, setRetrying] = useState(false);
+  const [busy, setBusy] = useState<"retry" | "dismiss" | null>(null);
   const qc = useQueryClient();
 
   async function handleRetry() {
-    if (retrying) return;
-    setRetrying(true);
+    if (busy) return;
+    setBusy("retry");
     try {
       await api.post(`/api/emails/${email.id}/retry`);
       toast.success("Email queued to send again.");
@@ -564,7 +565,23 @@ function RetrySendBanner({ email }: { email: Email }) {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to retry");
     } finally {
-      setRetrying(false);
+      setBusy(null);
+    }
+  }
+
+  async function handleDismiss() {
+    if (busy) return;
+    setBusy("dismiss");
+    try {
+      await api.post(`/api/emails/${email.id}/dismiss`);
+      toast.success("Dismissed. The email leaves the Failed view.");
+      qc.invalidateQueries({ queryKey: queryKeys.threads.detail(email.thread_id) });
+      qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+      qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to dismiss");
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -578,10 +595,17 @@ function RetrySendBanner({ email }: { email: Email }) {
       </span>
       <button
         onClick={handleRetry}
-        disabled={retrying}
+        disabled={busy !== null}
         className="font-medium underline underline-offset-2 disabled:opacity-50"
       >
-        {retrying ? "Retrying…" : "Retry send"}
+        {busy === "retry" ? "Retrying…" : "Retry send"}
+      </button>
+      <button
+        onClick={handleDismiss}
+        disabled={busy !== null}
+        className="font-medium underline underline-offset-2 disabled:opacity-50"
+      >
+        {busy === "dismiss" ? "Dismissing…" : "Dismiss"}
       </button>
     </div>
   );
