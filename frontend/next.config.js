@@ -14,6 +14,20 @@ const nextConfig = {
         source: "/api/:path*",
         destination: `${backend}/api/:path*`,
       },
+      // MCP endpoint and OAuth discovery metadata live on the backend but
+      // outside /api — the MCP spec fixes their paths at the domain root.
+      {
+        source: "/mcp",
+        destination: `${backend}/mcp`,
+      },
+      {
+        source: "/.well-known/oauth-protected-resource",
+        destination: `${backend}/.well-known/oauth-protected-resource`,
+      },
+      {
+        source: "/.well-known/oauth-authorization-server",
+        destination: `${backend}/.well-known/oauth-authorization-server`,
+      },
     ];
   },
 };
