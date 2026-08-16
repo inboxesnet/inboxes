@@ -30,7 +30,7 @@ test.describe("Search", () => {
       test.skip(true, "Not authenticated — skipping search tests");
     }
     // Wait for app shell
-    await page.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+    await page.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
   });
 
   test("search input visible", async ({ page }) => {

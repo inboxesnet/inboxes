@@ -8,33 +8,61 @@ import {
 } from "./fixtures/helpers";
 
 test.describe("Auth", () => {
+  // These tests exercise the login/signup pages. Start without the shared
+  // admin session from global-setup.
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   // -------------------------------------------------------------------------
   // Signup
   // -------------------------------------------------------------------------
+
+  // Self-hosted mode closes registration after the first user exists. Each
+  // signup test first checks which state the page shows and asserts the
+  // matching behavior.
+
+  async function signupIsOpen(page: import("@playwright/test").Page) {
+    return page
+      .locator("#email")
+      .isVisible()
+      .catch(() => false);
+  }
 
   test("signup page renders form fields", async ({ page }) => {
     const auth = new AuthPage(page);
     await auth.gotoSignup();
 
-    await expect(page.locator("#orgName")).toBeVisible();
-    await expect(page.locator("#name")).toBeVisible();
-    await expect(page.locator("#email")).toBeVisible();
-    await expect(page.locator("#password")).toBeVisible();
-    await expect(page.locator('button:has-text("Create account")')).toBeVisible();
+    if (await signupIsOpen(page)) {
+      await expect(page.locator("#orgName")).toBeVisible();
+      await expect(page.locator("#name")).toBeVisible();
+      await expect(page.locator("#email")).toBeVisible();
+      await expect(page.locator("#password")).toBeVisible();
+      await expect(page.locator('button:has-text("Create account")')).toBeVisible();
+    } else {
+      await expect(page.getByText("Registration closed")).toBeVisible();
+      await expect(page.locator('a[href="/login"]')).toBeVisible();
+    }
   });
 
   test("successful signup redirects to onboarding or verify-email", async ({ page }) => {
     const auth = new AuthPage(page);
+    await auth.gotoSignup();
+    if (!(await signupIsOpen(page))) {
+      test.skip(true, "Registration closed (self-hosted mode)");
+      return;
+    }
     const email = uniqueEmail("signup");
-
     await auth.signup(email, VALID_PASSWORD, "E2E Org");
     await auth.expectSignedUp();
   });
 
   test("signup with weak password shows validation error", async ({ page }) => {
     const auth = new AuthPage(page);
+    await auth.gotoSignup();
+    if (!(await signupIsOpen(page))) {
+      test.skip(true, "Registration closed (self-hosted mode)");
+      return;
+    }
     const email = uniqueEmail("weak-pw");
-
     await auth.signup(email, WEAK_PASSWORD, "E2E Org");
 
     // Client-side validatePassword fires before API call
@@ -55,26 +83,19 @@ test.describe("Auth", () => {
     await expect(page.getByText("Welcome back")).toBeVisible();
   });
 
-  test("successful login redirects away from login page", async ({ page }) => {
-    // Pre-create account via API
-    const email = uniqueEmail("login");
-    const signupRes = await apiSignup(email, VALID_PASSWORD, "E2E Login Org");
-    expect(signupRes.ok).toBe(true);
+  const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL || "e2e-admin@e2e-test.com";
+  const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "TestPass1";
 
-    // Now login via the UI
+  test("successful login redirects away from login page", async ({ page }) => {
+    // Use the seeded instance admin; self-hosted mode cannot create users.
     const auth = new AuthPage(page);
-    await auth.login(email, VALID_PASSWORD);
+    await auth.login(ADMIN_EMAIL, ADMIN_PASSWORD);
     await auth.expectLoggedIn();
   });
 
   test("wrong password shows error message", async ({ page }) => {
-    // Pre-create account via API
-    const email = uniqueEmail("wrong-pw");
-    const signupRes = await apiSignup(email, VALID_PASSWORD, "E2E WrongPw Org");
-    expect(signupRes.ok).toBe(true);
-
     const auth = new AuthPage(page);
-    await auth.login(email, "WrongPassword1");
+    await auth.login(ADMIN_EMAIL, "WrongPassword1");
 
     await auth.expectError();
   });
@@ -95,6 +116,12 @@ test.describe("Auth", () => {
   });
 
   test("signup with duplicate email shows error", async ({ page }) => {
+    const auth = new AuthPage(page);
+    await auth.gotoSignup();
+    if (!(await signupIsOpen(page))) {
+      test.skip(true, "Registration closed (self-hosted mode)");
+      return;
+    }
     const email = uniqueEmail("dup");
 
     // Create account via API first
@@ -102,7 +129,6 @@ test.describe("Auth", () => {
     expect(signupRes.ok).toBe(true);
 
     // Attempt to signup again with the same email via UI
-    const auth = new AuthPage(page);
     await auth.signup(email, VALID_PASSWORD, "E2E Dup Org 2");
 
     // Should show an error about the email already existing

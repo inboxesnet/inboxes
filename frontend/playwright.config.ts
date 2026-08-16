@@ -8,8 +8,10 @@ export default defineConfig({
   workers: 1,
   reporter: "html",
   timeout: 30000,
+  globalSetup: "./e2e/global-setup.ts",
   use: {
     baseURL: process.env.E2E_BASE_URL || "http://localhost:3000",
+    storageState: "e2e/.auth/admin.json",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },

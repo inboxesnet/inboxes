@@ -131,7 +131,7 @@ test.describe("Settings Modal", () => {
 
     const panel = settings.panel;
     await expect(
-      panel.locator("label", { hasText: "Email" }),
+      panel.locator("label").filter({ hasText: /^Email$/ }).first(),
     ).toBeVisible();
     // The email input should be disabled
     const emailInput = panel.locator("input[disabled]").first();
@@ -269,10 +269,30 @@ test.describe("Settings Modal", () => {
 
     // Submit the password form
     const passwordForm = panel.locator('form:has(label:has-text("Current password"))');
-    await passwordForm.locator('button:has-text("Save")').first().click();
+    await passwordForm.locator('button:has-text("Update password")').first().click();
 
     // Wait for success message
     await expect(page.getByText("Password updated")).toBeVisible({ timeout: 5000 });
+
+    // Restore the original password so later runs can log in. The change
+    // revokes existing sessions, so refresh this context's cookies first.
+    const { refreshAdminStorageState } = await import("./fixtures/helpers");
+    process.env.E2E_ADMIN_PASSWORD = "NewTestPass1";
+    await refreshAdminStorageState(page);
+    await page.reload();
+    await settings.openSettings();
+    await settings.expectOpen();
+    const restoreInputs = settings.panel.locator('input[type="password"]');
+    await restoreInputs.nth(0).fill("NewTestPass1");
+    await restoreInputs.nth(1).fill(VALID_PASSWORD);
+    await settings.panel
+      .locator('form:has(label:has-text("Current password"))')
+      .locator('button:has-text("Update password")')
+      .first()
+      .click();
+    await expect(page.getByText("Password updated")).toBeVisible({ timeout: 5000 });
+    process.env.E2E_ADMIN_PASSWORD = VALID_PASSWORD;
+    await refreshAdminStorageState(page);
   });
 
   // -------------------------------------------------------------------------
@@ -314,9 +334,9 @@ test.describe("Settings Modal", () => {
     await panel.locator('button:has-text("Create")').click();
     await expect(panel.getByText("Label To Rename")).toBeVisible({ timeout: 5000 });
 
-    // Click the edit (pencil) button on the label row
+    // Click the rename (pencil) button on the label row
     const labelRow = panel.locator("div.divide-y > div", { hasText: "Label To Rename" });
-    await labelRow.locator("button").first().click();
+    await labelRow.locator('button[title="Rename label"]').click();
 
     // An input should appear with the label name
     const renameInput = labelRow.locator("input");
@@ -346,9 +366,10 @@ test.describe("Settings Modal", () => {
 
     // Click the delete (trash) button on the label row
     const labelRow = panel.locator("div.divide-y > div", { hasText: "Label To Delete" });
-    // The trash button is the second button in the row actions
-    const deleteBtn = labelRow.locator("button.text-destructive, button:has(svg.lucide-trash-2)").first();
-    await deleteBtn.click();
+    await labelRow.locator('button[title="Delete label"]').click();
+
+    // A confirm dialog appears; confirm the delete
+    await page.locator('button:has-text("Delete")').last().click();
 
     // Verify the label is gone
     await expect(panel.getByText("Label To Delete")).not.toBeVisible({ timeout: 5000 });
@@ -433,8 +454,9 @@ test.describe("Settings Modal", () => {
     const nameInput = orgInputs.first();
     await nameInput.fill("Updated Org Name E2E");
 
-    // Save
-    await panel.locator('button:has-text("Save")').click();
+    // Save — the org tab has a second Save on the policy card; the org
+    // settings Save comes first.
+    await panel.locator('button:has-text("Save")').first().click();
 
     // Verify success
     await expect(page.getByText("Organization settings saved")).toBeVisible({ timeout: 5000 });
@@ -591,7 +613,7 @@ test.describe("Settings Modal", () => {
     // "Resend API Key" label, and a "Save" button
     await expect(panel.locator('label:has-text("Organization Name")')).toBeVisible({ timeout: 5000 });
     await expect(panel.locator('label:has-text("Resend API Key")')).toBeVisible();
-    await expect(panel.locator('button:has-text("Save")')).toBeVisible();
+    await expect(panel.locator('button:has-text("Save")').first()).toBeVisible();
   });
 
   // -------------------------------------------------------------------------

@@ -1,4 +1,6 @@
 import { Page } from "@playwright/test";
+import fs from "fs";
+import path from "path";
 
 // ---------------------------------------------------------------------------
 // Test data helpers
@@ -55,6 +57,60 @@ export async function apiLogin(email: string, password: string) {
  * Signup via API then inject the auth cookie into the Playwright browser context
  * so subsequent page navigations are authenticated.
  */
+// Self-hosted mode closes registration after the first user exists, and the
+// auth endpoints have strict per-IP rate limits. Reuse the admin session
+// that global-setup saved to disk instead of a login per test.
+const STORAGE_STATE_PATH = path.join(__dirname, "..", ".auth", "admin.json");
+
+function storedAdminCookies(): string[] | null {
+  try {
+    const state = JSON.parse(fs.readFileSync(STORAGE_STATE_PATH, "utf-8"));
+    const cookies = (state.cookies ?? []) as { name: string; value: string }[];
+    if (!cookies.length) return null;
+    return cookies.map((c) => `${c.name}=${c.value}`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Log in as the seeded admin and rewrite the storage-state file. Call this
+ * after an action that revokes sessions (e.g. a password change), so later
+ * tests get a valid session again.
+ */
+export async function refreshAdminStorageState(page: Page) {
+  const res = await apiLogin(
+    process.env.E2E_ADMIN_EMAIL || "e2e-admin@e2e-test.com",
+    process.env.E2E_ADMIN_PASSWORD || "TestPass1",
+  );
+  if (!res.ok) {
+    throw new Error(`admin re-login failed: ${res.status} ${await res.text()}`);
+  }
+  const setCookies = res.headers.getSetCookie?.() ?? [];
+  const cookies = setCookies.map((raw) => {
+    const [nameValue] = raw.split(";");
+    const [cookieName, ...rest] = nameValue.split("=");
+    return {
+      name: cookieName.trim(),
+      value: rest.join("="),
+      domain: "localhost",
+      path: "/",
+      expires: -1,
+      httpOnly: true,
+      secure: false,
+      sameSite: "Lax" as const,
+    };
+  });
+  fs.mkdirSync(path.dirname(STORAGE_STATE_PATH), { recursive: true });
+  fs.writeFileSync(
+    STORAGE_STATE_PATH,
+    JSON.stringify({ cookies, origins: [] }),
+  );
+  // Also refresh the current page's context so this test can continue.
+  await page.context().clearCookies();
+  await page.context().addCookies(cookies);
+}
+
 export async function signupAndAuthenticate(
   page: Page,
   email: string,
@@ -62,13 +118,15 @@ export async function signupAndAuthenticate(
   orgName: string,
   name = "Test User",
 ) {
-  const res = await apiSignup(email, password, orgName, name);
-  if (!res.ok) {
-    throw new Error(`API signup failed: ${res.status} ${await res.text()}`);
-  }
+  let setCookies = storedAdminCookies();
 
-  // Extract Set-Cookie headers and inject into Playwright context
-  const setCookies = res.headers.getSetCookie?.() ?? [];
+  if (!setCookies) {
+    const res = await apiSignup(email, password, orgName, name);
+    if (!res.ok) {
+      throw new Error(`API signup failed: ${res.status} ${await res.text()}`);
+    }
+    setCookies = res.headers.getSetCookie?.() ?? [];
+  }
   for (const raw of setCookies) {
     const [nameValue] = raw.split(";");
     const [cookieName, ...rest] = nameValue.split("=");

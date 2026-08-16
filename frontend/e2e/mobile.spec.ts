@@ -80,7 +80,7 @@ test.describe("Mobile Layout", () => {
     // The mobile sidebar has a header with domain name and a close (X) button
     // Look for the mobile sidebar container (w-[85vw] max-w-[320px])
     // or just check for the Compose button in the sidebar
-    const composeButton = page.locator("button:has-text('Compose')").first();
+    const composeButton = page.locator("button:has-text('Compose'):visible").first();
     await expect(composeButton).toBeVisible({ timeout: 5000 });
 
     // Sidebar nav labels should be visible
@@ -97,7 +97,7 @@ test.describe("Mobile Layout", () => {
     await hamburger.click();
 
     // Wait for sidebar to appear
-    const composeButton = page.locator("button:has-text('Compose')").first();
+    const composeButton = page.locator("button:has-text('Compose'):visible").first();
     await expect(composeButton).toBeVisible({ timeout: 5000 });
 
     // The mobile sidebar header has an X close button
@@ -128,7 +128,7 @@ test.describe("Mobile Layout", () => {
     await hamburger.click();
 
     // Wait for sidebar
-    await expect(page.locator("button:has-text('Compose')").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.locator("button:has-text('Compose'):visible").first()).toBeVisible({ timeout: 5000 });
 
     // Mobile sidebar bottom area has: Theme toggle, Keyboard shortcuts, Settings, Log out
     await expect(page.locator("button:has-text('Settings')").first()).toBeVisible();
@@ -146,7 +146,7 @@ test.describe("Mobile Layout", () => {
     await hamburger.click();
 
     // Wait for sidebar to appear
-    const composeButton = page.locator("button:has-text('Compose')").first();
+    const composeButton = page.locator("button:has-text('Compose'):visible").first();
     await expect(composeButton).toBeVisible({ timeout: 5000 });
 
     // Click a folder/label in the sidebar (e.g. "Inbox", "Sent", "Drafts")
@@ -182,7 +182,7 @@ test.describe("Mobile Layout", () => {
     const hamburger = page.locator('button[aria-label="Open sidebar"]');
     await hamburger.click();
 
-    const composeButton = page.locator("button:has-text('Compose')").first();
+    const composeButton = page.locator("button:has-text('Compose'):visible").first();
     await expect(composeButton).toBeVisible({ timeout: 5000 });
     await composeButton.click();
 
@@ -213,7 +213,7 @@ test.describe("Mobile Layout", () => {
 
     // Wait for sidebar content
     await expect(
-      page.locator("button:has-text('Compose')").first(),
+      page.locator("button:has-text('Compose'):visible").first(),
     ).toBeVisible({ timeout: 5000 });
 
     // The mobile sidebar has a horizontal domain icon strip:

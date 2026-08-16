@@ -30,7 +30,7 @@ test.describe("Real-time Updates", () => {
     }
 
     // Wait for the app to load
-    await page.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+    await page.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
 
     // Simulate going offline by disabling network
     await page.context().setOffline(true);
@@ -72,7 +72,7 @@ test.describe("Real-time Updates", () => {
       return;
     }
 
-    await page.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+    await page.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
 
     // Get the page title — it may contain unread counts like "(3) Inboxes"
     const title = await page.title();
@@ -112,7 +112,7 @@ test.describe("Real-time Updates", () => {
         return;
       }
 
-      await pageA.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+      await pageA.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
 
       // Create second context (Tab B) with same cookies
       const contextB = await browser.newContext();
@@ -122,7 +122,7 @@ test.describe("Real-time Updates", () => {
 
       await pageB.goto(pageA.url());
       await pageB.waitForLoadState("networkidle");
-      await pageB.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+      await pageB.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
 
       // Both tabs are now loaded. Verify they both show the same domain/inbox
       const urlA = pageA.url();
@@ -159,7 +159,7 @@ test.describe("Real-time Updates", () => {
         return;
       }
 
-      await pageA.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+      await pageA.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
 
       // Check if there are threads to work with
       const hasThreads = await pageA

@@ -30,7 +30,7 @@ export class ComposePage {
   async openCompose() {
     // The sidebar compose button contains a PenSquare icon + "Compose" text.
     // On desktop the sidebar is always visible.
-    await this.page.locator("button:has-text('Compose')").first().click();
+    await this.page.locator("button:has-text('Compose'):visible").first().click();
     // Wait for the dialog to appear
     await expect(this.dialog).toBeVisible({ timeout: 5000 });
   }
@@ -132,12 +132,17 @@ export class ComposePage {
 
   /** Assert the Cc input row is visible. */
   async expectCcVisible() {
-    await expect(this.dialog.locator("label", { hasText: "Cc" })).toBeVisible();
+    // The dialog renders desktop and mobile layouts; match the visible one.
+    await expect(
+      this.dialog.locator("label:visible", { hasText: "Cc" }).first(),
+    ).toBeVisible();
   }
 
   /** Assert the Bcc input row is visible. */
   async expectBccVisible() {
-    await expect(this.dialog.locator("label", { hasText: "Bcc" })).toBeVisible();
+    await expect(
+      this.dialog.locator("label:visible", { hasText: "Bcc" }).first(),
+    ).toBeVisible();
   }
 
   /** Assert a recipient chip is displayed with the given email. */

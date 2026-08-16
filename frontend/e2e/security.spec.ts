@@ -16,6 +16,10 @@ import { test, expect } from "@playwright/test";
 const API_BASE = process.env.E2E_API_URL || "http://localhost:8080";
 
 test.describe("Security", () => {
+  // These tests assert unauthenticated behavior. Start without the shared
+  // admin session from global-setup; authed tests inject cookies themselves.
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   // -------------------------------------------------------------------------
   // 1. Protected routes redirect to login
   // -------------------------------------------------------------------------
@@ -36,8 +40,13 @@ test.describe("Security", () => {
   test("protected route /d/any-id/inbox redirects to login", async ({ page }) => {
     await page.goto("/d/nonexistent-domain-id/inbox");
 
-    await expect(page).toHaveURL(/\/login/, { timeout: 10000 });
-    await expect(page.getByText("Welcome back")).toBeVisible({ timeout: 5000 });
+    // Domain routes show a "session expired" dialog on 401 instead of a hard
+    // redirect (this avoids a redirect loop). Accept either behavior; both
+    // deny access and route the user to login.
+    const sessionExpired = page.getByText(/session expired/i);
+    await expect(
+      page.getByText("Welcome back").or(sessionExpired).first(),
+    ).toBeVisible({ timeout: 10000 });
   });
 
   // -------------------------------------------------------------------------
@@ -109,7 +118,8 @@ test.describe("Security", () => {
     // Attempt rapid login attempts to trigger rate limiting
     const emailInput = page.locator('input[type="email"]');
     const passwordInput = page.locator('input[type="password"]');
-    const loginButton = page.locator('button[type="submit"]');
+    // The login button has no explicit type attribute; match it by text.
+    const loginButton = page.locator('button:has-text("Sign in")');
 
     // Send many login attempts in quick succession
     for (let i = 0; i < 12; i++) {
@@ -130,31 +140,34 @@ test.describe("Security", () => {
   // 8. Dark mode toggle on login page persists across reload
   // -------------------------------------------------------------------------
   test("dark mode toggle persists across reload", async ({ page }) => {
-    await page.goto("/login");
-    await expect(page.getByText("Welcome back")).toBeVisible({ timeout: 5000 });
+    // The theme toggle lives in the app header and cycles
+    // Light -> Dark -> System (title="Theme: ...").
+    const { signupAndAuthenticate, uniqueEmail, VALID_PASSWORD } = await import(
+      "./fixtures/helpers"
+    );
+    await signupAndAuthenticate(page, uniqueEmail("theme"), VALID_PASSWORD, "E2E Theme Org");
+    await page.goto("/");
 
-    // Find the theme toggle button (title="Dark mode" or title="Light mode")
-    const themeToggle = page.locator('button[title="Dark mode"], button[title="Light mode"]');
-    await expect(themeToggle).toBeVisible({ timeout: 5000 });
+    const themeToggle = page.locator('button[title^="Theme:"]');
+    await expect(themeToggle).toBeVisible({ timeout: 15000 });
 
     // Get initial theme state
     const initialTitle = await themeToggle.getAttribute("title");
-    const isInitiallyLight = initialTitle === "Dark mode"; // "Dark mode" title means we're in light mode
 
-    // Click to toggle
+    // Click to cycle to the next theme
     await themeToggle.click();
     await page.waitForTimeout(500);
 
-    // Verify it toggled
+    // Verify it changed
     const newTitle = await themeToggle.getAttribute("title");
     expect(newTitle).not.toBe(initialTitle);
 
     // Reload the page
     await page.reload();
-    await expect(page.getByText("Welcome back")).toBeVisible({ timeout: 5000 });
+    const afterReloadToggle = page.locator('button[title^="Theme:"]');
+    await expect(afterReloadToggle).toBeVisible({ timeout: 15000 });
 
     // Verify the theme persisted
-    const afterReloadToggle = page.locator('button[title="Dark mode"], button[title="Light mode"]');
     const afterReloadTitle = await afterReloadToggle.getAttribute("title");
     expect(afterReloadTitle).toBe(newTitle);
   });

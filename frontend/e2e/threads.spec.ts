@@ -39,7 +39,7 @@ test.describe("Thread List & Thread View", () => {
       test.skip(true, "Not authenticated — skipping thread tests");
     }
     // Wait for sidebar to render (signals that domain data is loaded)
-    await page.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+    await page.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
   });
 
   test("thread list loads on inbox page", async ({ page }) => {

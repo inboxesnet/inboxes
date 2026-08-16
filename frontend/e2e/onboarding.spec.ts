@@ -6,6 +6,10 @@ import {
 } from "./fixtures/helpers";
 
 test.describe("Onboarding", () => {
+  // Start without the shared admin session from global-setup. Tests that
+  // need auth inject cookies through signupAndAuthenticate.
+  test.use({ storageState: { cookies: [], origins: [] } });
+
   // -------------------------------------------------------------------------
   // Auth guard
   // -------------------------------------------------------------------------
@@ -102,11 +106,12 @@ test.describe("Onboarding", () => {
       timeout: 10000,
     });
 
-    // All four step labels should be present (they are in the progress bar)
-    await expect(page.getByText("Connect Resend")).toBeVisible();
-    await expect(page.getByText("Your Domains")).toBeVisible();
-    await expect(page.getByText("Import Emails")).toBeVisible();
-    await expect(page.getByText("Set Up Addresses")).toBeVisible();
+    // All four step labels should be present (they are in the progress bar;
+    // a step label can also appear as a card title, so match the first)
+    await expect(page.getByText("Connect Resend").first()).toBeVisible();
+    await expect(page.getByText("Your Domains").first()).toBeVisible();
+    await expect(page.getByText("Import Emails").first()).toBeVisible();
+    await expect(page.getByText("Set Up Addresses").first()).toBeVisible();
   });
 
   // -------------------------------------------------------------------------

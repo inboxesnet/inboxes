@@ -28,7 +28,7 @@ test.describe("Compose Window", () => {
       test.skip(true, "Not authenticated — skipping compose tests");
     }
     // Wait for the app shell to be ready (sidebar compose button should be visible)
-    await page.waitForSelector("button:has-text('Compose')", { timeout: 15000 });
+    await page.waitForSelector("button:has-text('Compose'):visible", { timeout: 15000 });
   });
 
   test("compose button opens compose window", async ({ page }) => {
@@ -74,8 +74,8 @@ test.describe("Compose Window", () => {
     await compose.openCompose();
     // Cc and Bcc should not be visible initially
     const dialog = page.locator('div[role="dialog"][aria-label="Compose email"]').last();
-    await expect(dialog.locator("label", { hasText: /^Cc$/ })).not.toBeVisible();
-    await expect(dialog.locator("label", { hasText: /^Bcc$/ })).not.toBeVisible();
+    await expect(dialog.locator("label:visible", { hasText: /^Cc$/ })).toHaveCount(0);
+    await expect(dialog.locator("label:visible", { hasText: /^Bcc$/ })).toHaveCount(0);
     // Toggle
     await compose.toggleCcBcc();
     await compose.expectCcVisible();
@@ -128,7 +128,7 @@ test.describe("Compose Window", () => {
     const testSubject = "Already Open " + Date.now();
     await compose.fillSubject(testSubject);
     // Try to open compose again via sidebar button
-    await page.locator("button:has-text('Compose')").first().click();
+    await page.locator("button:has-text('Compose'):visible").first().click();
     // The existing compose should still be visible with the same subject
     // (not replaced with a new blank one)
     await compose.expectOpen();

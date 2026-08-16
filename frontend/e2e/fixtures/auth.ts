@@ -25,7 +25,7 @@ export class AuthPage {
     await this.page.goto("/signup");
     // Signup page fetches /api/setup/status before rendering the form.
     // Wait for either the form OR the "blocked" card to appear.
-    await this.page.waitForSelector("#email, h2:has-text('Registration closed')", {
+    await this.page.waitForSelector("#email, h3:has-text('Registration closed')", {
       timeout: 10000,
     });
   }
