@@ -26,9 +26,10 @@ import { usePreferences } from "@/contexts/preferences-context";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn, validatePassword } from "@/lib/utils";
 import type { User, Domain, BillingInfo } from "@/lib/types";
-import { Check, ChevronDown, ChevronUp, Forward, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronUp, Forward, Minus, RefreshCw, User as UserIcon, Globe, CreditCard, Users, AtSign, Trash2, RotateCw, UserX, UserPlus, X, Star, Pencil, Wrench, Building2, Tag } from "lucide-react";
+import { AgentsTab } from "@/components/settings-agents-tab";
 
-export type Tab = "profile" | "domains" | "team" | "aliases" | "labels" | "rules" | "organization" | "billing" | "system" | "jobs";
+export type Tab = "profile" | "domains" | "team" | "aliases" | "labels" | "rules" | "agents" | "organization" | "billing" | "system" | "jobs";
 
 interface SettingsModalProps {
   open: boolean;
@@ -1725,6 +1726,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     { key: "aliases", label: "Aliases", icon: <AtSign className="h-4 w-4" /> },
     { key: "labels", label: "Labels", icon: <Tag className="h-4 w-4" /> },
     { key: "rules", label: "Rules", icon: <Forward className="h-4 w-4" /> },
+    { key: "agents", label: "Agents", icon: <Bot className="h-4 w-4" /> },
     { key: "organization", label: "Organization", icon: <Building2 className="h-4 w-4" />, adminOnly: true },
     ...(commercial
       ? [{ key: "billing" as Tab, label: "Billing", icon: <CreditCard className="h-4 w-4" /> }]
@@ -2907,6 +2909,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
                 )}
 
                 {activeTab === "rules" && <RulesTab isAdmin={isAdmin} />}
+                {activeTab === "agents" && <AgentsTab isAdmin={isAdmin} />}
 
                 {activeTab === "organization" && isAdmin && (
                   <div className="space-y-6">

@@ -17,6 +17,7 @@ import (
 	"github.com/inboxes/backend/internal/config"
 	"github.com/inboxes/backend/internal/db"
 	"github.com/inboxes/backend/internal/event"
+	"github.com/inboxes/backend/internal/mcp"
 	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/router"
 	"github.com/inboxes/backend/internal/service"
@@ -136,6 +137,9 @@ func main() {
 	wsHub := ws.NewHub(rdb, st, cfg.WSMaxConnsPerUser, cfg.WSTokenCheckInterval)
 	util.SafeGo("ws-hub", func() { wsHub.Run(ctx) })
 
+	// MCP server for agent access; the router hands itself back to it.
+	mcpSrv := mcp.NewServer(pool, cfg.SessionSecret, cfg.PublicURL)
+
 	// Router
 	r := router.New(pool, rdb, encSvc, resendSvc, bus, wsHub, orgLimiterMap, router.Config{
 		Secret:              cfg.SessionSecret,
@@ -146,6 +150,7 @@ func main() {
 		StripeWebhookSecret: cfg.StripeWebhookSecret,
 		EventCatchupMaxAge:  cfg.EventCatchupMaxAge,
 		AppCtx:              ctx,
+		MCP:                 mcpSrv,
 	})
 
 	// Server

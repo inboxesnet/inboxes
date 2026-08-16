@@ -133,6 +133,7 @@ vi.mock("lucide-react", () => {
       <span data-testid={`icon-${name}`} className={className} />
     );
   return {
+    Bot: icon("bot"),
     Check: icon("check"),
     Minus: icon("minus"),
     RefreshCw: icon("refresh"),

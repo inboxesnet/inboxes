@@ -10,6 +10,7 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/handler"
+	"github.com/inboxes/backend/internal/mcp"
 	"github.com/inboxes/backend/internal/middleware"
 	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/service"
@@ -28,6 +29,10 @@ type Config struct {
 	StripeWebhookSecret string
 	EventCatchupMaxAge  time.Duration
 	AppCtx              context.Context
+	// MCP is the agent endpoint. When set, the router mounts /mcp plus the
+	// OAuth authorization-server routes, and hands the finished router back
+	// to the MCP server for in-process tool calls.
+	MCP *mcp.Server
 }
 
 func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService, resendSvc *service.ResendService, bus *event.Bus, wsHub *ws.Hub, limiterMap *queue.OrgLimiterMap, cfg Config) *chi.Mux {
@@ -74,6 +79,16 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		StripeWebhookSecret: cfg.StripeWebhookSecret,
 		AppURL:              appURL,
 	}
+
+	oauth := &handler.OAuthHandler{Store: st, AppURL: appURL, PublicURL: cfg.PublicURL}
+	agentKeys := &handler.AgentKeyHandler{Store: st}
+
+	// OAuth discovery + endpoints for MCP clients (public, rate-limited)
+	r.With(middleware.RateLimitByIP(rdb, 60, 60)).Get("/.well-known/oauth-protected-resource", oauth.ProtectedResourceMetadata)
+	r.With(middleware.RateLimitByIP(rdb, 60, 60)).Get("/.well-known/oauth-authorization-server", oauth.AuthorizationServerMetadata)
+	r.With(middleware.RateLimitByIP(rdb, 10, 60)).Post("/api/oauth/register", oauth.Register)
+	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Post("/api/oauth/token", oauth.Token)
+	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Get("/api/oauth/client", oauth.ClientInfo)
 
 	// Health
 	r.With(middleware.RateLimitByIP(rdb, 30, 60)).Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +194,14 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 
 		// Events catchup (for WS reconnection)
 		r.Get("/api/events", events.Since)
+
+		// OAuth consent (the frontend consent page calls this while logged in)
+		r.Post("/api/oauth/approve", oauth.Approve)
+
+		// Agent credentials (per-user MCP keys and OAuth tokens)
+		r.Get("/api/agent-keys", agentKeys.List)
+		r.With(middleware.RateLimitByUser(rdb, 10, 60)).Post("/api/agent-keys", agentKeys.Create)
+		r.Delete("/api/agent-keys/{id}", agentKeys.Revoke)
 
 		// Admin-only routes
 		r.Group(func(r chi.Router) {
@@ -301,6 +324,13 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.Get("/api/attachments/{id}", attachments.Download)
 		})
 	})
+
+	// MCP endpoint. Its own bearer auth; tools call back into this router
+	// as the token's user, so every existing check applies unchanged.
+	if cfg.MCP != nil {
+		r.With(middleware.RateLimitByIP(rdb, 120, 60)).Handle("/mcp", cfg.MCP)
+		cfg.MCP.SetAPIHandler(r)
+	}
 
 	return r
 }

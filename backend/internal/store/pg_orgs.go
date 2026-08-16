@@ -16,16 +16,16 @@ func (s *PgStore) GetOrgSettings(ctx context.Context, orgID string) (map[string]
 	var apiKeyStatus string
 	var apiKeyCheckedAt, lastWebhookAt *time.Time
 	var hasWebhook bool
-	var forwardingEnabled, autoReplyEnabled, externalForwardingAllowed bool
+	var forwardingEnabled, autoReplyEnabled, externalForwardingAllowed, agentSendEnabled bool
 
 	err := s.q.QueryRow(ctx,
 		`SELECT name, onboarding_completed, (resend_api_key_encrypted IS NOT NULL) as has_key, resend_rps,
 		        auto_poll_enabled, auto_poll_interval, api_key_status, api_key_checked_at,
 		        (resend_webhook_id IS NOT NULL AND resend_webhook_id != '') AS has_webhook, last_webhook_at,
-		        forwarding_enabled, auto_reply_enabled, external_forwarding_allowed
+		        forwarding_enabled, auto_reply_enabled, external_forwarding_allowed, agent_send_enabled
 		 FROM orgs WHERE id = $1`, orgID,
 	).Scan(&name, &onboardingCompleted, &hasAPIKey, &resendRPS, &autoPollEnabled, &autoPollInterval, &apiKeyStatus, &apiKeyCheckedAt, &hasWebhook, &lastWebhookAt,
-		&forwardingEnabled, &autoReplyEnabled, &externalForwardingAllowed)
+		&forwardingEnabled, &autoReplyEnabled, &externalForwardingAllowed, &agentSendEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -44,6 +44,7 @@ func (s *PgStore) GetOrgSettings(ctx context.Context, orgID string) (map[string]
 		"forwarding_enabled":   forwardingEnabled,
 		"auto_reply_enabled":   autoReplyEnabled,
 		"external_forwarding_allowed": externalForwardingAllowed,
+		"agent_send_enabled":   agentSendEnabled,
 	}, nil
 }
 

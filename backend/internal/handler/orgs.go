@@ -47,6 +47,7 @@ func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		"forwarding_enabled":   settings["forwarding_enabled"],
 		"auto_reply_enabled":   settings["auto_reply_enabled"],
 		"external_forwarding_allowed": settings["external_forwarding_allowed"],
+		"agent_send_enabled":   settings["agent_send_enabled"],
 	}
 	if h.StripeKey == "" {
 		resp["auto_poll_enabled"] = settings["auto_poll_enabled"]
@@ -67,10 +68,22 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		ForwardingEnabled         *bool `json:"forwarding_enabled"`
 		AutoReplyEnabled          *bool `json:"auto_reply_enabled"`
 		ExternalForwardingAllowed *bool `json:"external_forwarding_allowed"`
+		AgentSendEnabled          *bool `json:"agent_send_enabled"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+
+	// Agent policy: the org-level switch that lets connected agents send.
+	if req.AgentSendEnabled != nil {
+		if _, err := h.Store.Q().Exec(r.Context(),
+			`UPDATE orgs SET agent_send_enabled = $1, updated_at = now() WHERE id = $2`,
+			*req.AgentSendEnabled, claims.OrgID,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update agent policy")
+			return
+		}
 	}
 
 	// Rules policy: which automation the org allows.

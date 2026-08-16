@@ -31,7 +31,10 @@ func ValidateContentType(next http.Handler) http.Handler {
 			ct := r.Header.Get("Content-Type")
 			if ct != "" {
 				ct = strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
-				if ct != "application/json" && ct != "multipart/form-data" {
+				// The OAuth token endpoint receives form bodies per the
+				// OAuth spec; every other mutation stays JSON or multipart.
+				formOK := ct == "application/x-www-form-urlencoded" && r.URL.Path == "/api/oauth/token"
+				if ct != "application/json" && ct != "multipart/form-data" && !formOK {
 					http.Error(w, `{"error":"unsupported content type"}`, http.StatusUnsupportedMediaType)
 					return
 				}

@@ -111,6 +111,8 @@ func cleanupOrg(t *testing.T, orgID string) {
 
 	// Now delete tables that have org_id directly.
 	tablesWithOrgID := []string{
+		"agent_tokens",
+		"oauth_codes",
 		"events",
 		"thread_labels",
 		"email_bounces",
