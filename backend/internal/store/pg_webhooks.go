@@ -41,9 +41,13 @@ func (s *PgStore) InsertWebhookDedup(ctx context.Context, orgID, resendEmailID, 
 	return nil
 }
 
+// UpdateEmailStatus sets a new status and reports affected rows. The
+// IS DISTINCT FROM guard makes a replayed webhook a no-op: zero rows means
+// "no such email" or "status unchanged" — callers must tell the two apart
+// before they retry or publish an event.
 func (s *PgStore) UpdateEmailStatus(ctx context.Context, orgID, resendEmailID, status string) (int64, error) {
 	tag, err := s.q.Exec(ctx,
-		"UPDATE emails SET status = $1, updated_at = now() WHERE resend_email_id = $2 AND org_id = $3",
+		"UPDATE emails SET status = $1, updated_at = now() WHERE resend_email_id = $2 AND org_id = $3 AND status IS DISTINCT FROM $1",
 		status, resendEmailID, orgID,
 	)
 	if err != nil {

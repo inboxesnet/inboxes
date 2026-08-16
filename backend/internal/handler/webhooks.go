@@ -258,6 +258,19 @@ func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, 
 	}
 
 	if rowsAffected == 0 {
+		// The email may exist with the same status already. Svix replays
+		// webhooks after downtime; a replay must not publish a new event,
+		// or the bell re-alerts an old bounce on every restart.
+		var existingID string
+		if err := h.Store.Q().QueryRow(dbCtx,
+			"SELECT id FROM emails WHERE resend_email_id = $1 AND org_id = $2",
+			statusData.EmailID, orgID,
+		).Scan(&existingID); err == nil {
+			slog.Info("webhook: status unchanged, skipping replayed event",
+				"resend_email_id", statusData.EmailID, "status", status)
+			return
+		}
+
 		// Email not yet inserted (race: status webhook arrived before fetch job completed)
 		if attempt >= 3 {
 			slog.Warn("webhook: email not found after retries, dropping status update",
@@ -426,4 +439,3 @@ func verifySvixSignature(payload []byte, headers http.Header, secret string) err
 
 	return fmt.Errorf("no matching signature found")
 }
-

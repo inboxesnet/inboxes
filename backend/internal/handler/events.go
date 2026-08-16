@@ -127,7 +127,8 @@ func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 // shows. Transient events stay out — toasts cover them.
 const warningEventsWhere = `(
 	event_type IN ('domain.disconnected','domain.not_found','domain.dns_degraded','domain.reconnected')
-	OR (event_type = 'email.status_updated' AND payload->>'status' IN ('failed','bounced','complained'))
+	OR (event_type = 'email.status_updated' AND payload->>'status' IN ('failed','bounced','complained')
+	    AND payload->>'dismissed' IS NULL)
 	OR (event_type = 'plan.changed' AND payload->>'plan' IN ('cancelled','past_due'))
 )`
 

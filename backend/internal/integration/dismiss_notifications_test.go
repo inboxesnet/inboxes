@@ -171,6 +171,7 @@ func TestNotificationsBell(t *testing.T) {
 	insertEvent("email.status_updated", `{"status":"delivered"}`)                        // healthy — must not appear
 	dnsID := insertEvent("domain.dns_degraded", `{"domain":"x.com","degraded":["SPF"]}`) // warning
 	lastID := insertEvent("email.status_updated", `{"status":"bounced"}`)                // warning
+	insertEvent("email.status_updated", `{"status":"bounced","dismissed":true}`)         // dismiss — must not appear
 
 	h := &handler.EventHandler{Store: testStore}
 	getNotifications := func() map[string]any {
