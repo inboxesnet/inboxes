@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 type toolDef struct {
@@ -54,9 +55,9 @@ func toolDefinitions(role string) []toolDef {
 				"label — e.g. 'what's new', 'show my inbox', 'anything from today'. " +
 				"Returns email threads for one label, newest first.",
 			InputSchema: obj(map[string]interface{}{
-				"label":     str("Label to list: inbox (default), archive, trash, spam, starred, snoozed, or a custom label"),
-				"domain":    str("Optional domain name (e.g. example.com) to filter by"),
-				"page":      intP("Page number, starting at 1"),
+				"label":  str("Label to list: inbox (default), archive, trash, spam, starred, snoozed, or a custom label"),
+				"domain": str("Optional domain name (e.g. example.com) to filter by"),
+				"page":   intP("Page number, starting at 1"),
 			}),
 		},
 		{
@@ -149,6 +150,50 @@ func toolDefinitions(role string) []toolDef {
 				"draft_id":     str("Draft ID to send"),
 				"scheduled_at": str("Optional RFC 3339 time to schedule the send, e.g. 2026-08-17T09:00:00Z"),
 			}, "draft_id"),
+		},
+		{
+			Name: "cancel_scheduled_send",
+			Description: "Use when the user asks to stop or cancel an email that is scheduled to " +
+				"send later — 'don't send that tomorrow', 'cancel the scheduled reply'. " +
+				"The draft survives for editing. list_drafts shows scheduled_send_at on " +
+				"scheduled drafts.",
+			InputSchema: obj(map[string]interface{}{
+				"draft_id": str("Draft ID whose scheduled send to cancel"),
+			}, "draft_id"),
+		},
+		{
+			Name: "list_labels",
+			Description: "Use when the user mentions labels or asks how their mail is organized, " +
+				"and before manage_label when the exact label name is unclear. " +
+				"Returns the org's custom labels.",
+			InputSchema: obj(map[string]interface{}{}),
+		},
+		{
+			Name: "manage_label",
+			Description: "Use when the user asks to create, rename, or delete a label, or to put a " +
+				"label on a thread or take one off — 'label this urgent', 'rename Clients " +
+				"to Customers'. System labels (inbox, archive, trash, spam) cannot be managed.",
+			InputSchema: obj(map[string]interface{}{
+				"action": map[string]interface{}{
+					"type":        "string",
+					"enum":        []string{"create", "rename", "delete", "apply", "remove"},
+					"description": "apply/remove change one thread; create/rename/delete change the label itself",
+				},
+				"name":      str("Label name"),
+				"new_name":  str("New label name, required for the rename action"),
+				"thread_id": str("Thread ID, required for the apply and remove actions"),
+			}, "action", "name"),
+		},
+		{
+			Name: "get_attachment",
+			Description: "Use when the user asks about a file attached to an email after get_thread " +
+				"surfaced it. Takes an ID from an email's attachment_ids. Returns filename, " +
+				"type, and size; for small plain-text or CSV files it also returns the text " +
+				"content. Received attachments instead carry a download_url inside " +
+				"get_thread's attachments field.",
+			InputSchema: obj(map[string]interface{}{
+				"attachment_id": str("Attachment ID from an email's attachment_ids"),
+			}, "attachment_id"),
 		},
 	}
 
@@ -275,6 +320,32 @@ func (s *Server) callTool(r *http.Request, id *TokenIdentity, name string, rawAr
 	case "send_draft":
 		return s.sendDraft(r, id, rawArgs)
 
+	case "cancel_scheduled_send":
+		var args struct {
+			DraftID string `json:"draft_id"`
+		}
+		if err := json.Unmarshal(rawArgs, &args); err != nil || args.DraftID == "" {
+			return toolText("draft_id is required", true)
+		}
+		status, body, err := s.callAPI(id, http.MethodPost,
+			"/api/drafts/"+url.PathEscape(args.DraftID)+"/cancel-schedule", map[string]interface{}{})
+		if err != nil {
+			return toolText(err.Error(), true)
+		}
+		if status >= 300 {
+			return toolText(apiError(status, body), true)
+		}
+		return toolText(map[string]string{"draft_id": args.DraftID, "status": "cancelled"}, false)
+
+	case "list_labels":
+		return s.simpleGet(id, "/api/labels")
+
+	case "manage_label":
+		return s.manageLabel(id, rawArgs)
+
+	case "get_attachment":
+		return s.getAttachment(id, rawArgs)
+
 	case "list_users":
 		if id.Role != "admin" {
 			return toolText("admin only", true)
@@ -356,6 +427,172 @@ func (s *Server) resolveDomain(id *TokenIdentity, nameOrID string) (string, erro
 		}
 	}
 	return "", fmt.Errorf("domain %q not found; call list_domains to see available domains", nameOrID)
+}
+
+// resolveLabel accepts a label name or ID and returns the label ID, using
+// the caller's own label list.
+func (s *Server) resolveLabel(id *TokenIdentity, nameOrID string) (string, error) {
+	status, body, err := s.callAPI(id, http.MethodGet, "/api/labels", nil)
+	if err != nil {
+		return "", err
+	}
+	if status >= 300 {
+		return "", fmt.Errorf("%s", apiError(status, body))
+	}
+	var labels []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &labels); err != nil {
+		return "", fmt.Errorf("unexpected labels response")
+	}
+	for _, l := range labels {
+		if strings.EqualFold(l.Name, nameOrID) || l.ID == nameOrID {
+			return l.ID, nil
+		}
+	}
+	return "", fmt.Errorf("label %q not found; call list_labels to see available labels", nameOrID)
+}
+
+// manageLabel maps one action to the existing label routes. Apply/remove go
+// through the bulk route — the only route with explicit label/unlabel
+// semantics.
+func (s *Server) manageLabel(id *TokenIdentity, rawArgs json.RawMessage) map[string]interface{} {
+	var args struct {
+		Action   string `json:"action"`
+		Name     string `json:"name"`
+		NewName  string `json:"new_name"`
+		ThreadID string `json:"thread_id"`
+	}
+	if err := json.Unmarshal(rawArgs, &args); err != nil || args.Action == "" || args.Name == "" {
+		return toolText("action and name are required", true)
+	}
+
+	switch args.Action {
+	case "create":
+		status, body, err := s.callAPI(id, http.MethodPost, "/api/labels", map[string]string{"name": args.Name})
+		if err != nil {
+			return toolText(err.Error(), true)
+		}
+		if status >= 300 {
+			return toolText(apiError(status, body), true)
+		}
+		return toolText(body, false)
+
+	case "rename":
+		if args.NewName == "" {
+			return toolText("new_name is required for the rename action", true)
+		}
+		labelID, err := s.resolveLabel(id, args.Name)
+		if err != nil {
+			return toolText(err.Error(), true)
+		}
+		status, body, apiErr := s.callAPI(id, http.MethodPatch,
+			"/api/labels/"+url.PathEscape(labelID), map[string]string{"name": args.NewName})
+		if apiErr != nil {
+			return toolText(apiErr.Error(), true)
+		}
+		if status >= 300 {
+			return toolText(apiError(status, body), true)
+		}
+		return toolText(map[string]string{"label": args.NewName, "action": "renamed", "status": "done"}, false)
+
+	case "delete":
+		labelID, err := s.resolveLabel(id, args.Name)
+		if err != nil {
+			return toolText(err.Error(), true)
+		}
+		status, body, apiErr := s.callAPI(id, http.MethodDelete, "/api/labels/"+url.PathEscape(labelID), nil)
+		if apiErr != nil {
+			return toolText(apiErr.Error(), true)
+		}
+		if status >= 300 {
+			return toolText(apiError(status, body), true)
+		}
+		return toolText(map[string]string{"label": args.Name, "action": "deleted", "status": "done"}, false)
+
+	case "apply", "remove":
+		if args.ThreadID == "" {
+			return toolText("thread_id is required for the apply and remove actions", true)
+		}
+		bulkAction := "label"
+		if args.Action == "remove" {
+			bulkAction = "unlabel"
+		}
+		status, body, err := s.callAPI(id, http.MethodPatch, "/api/threads/bulk", map[string]interface{}{
+			"action": bulkAction, "label": args.Name, "thread_ids": []string{args.ThreadID},
+		})
+		if err != nil {
+			return toolText(err.Error(), true)
+		}
+		if status >= 300 {
+			return toolText(apiError(status, body), true)
+		}
+		return toolText(map[string]string{
+			"thread_id": args.ThreadID, "label": args.Name, "action": args.Action, "status": "done",
+		}, false)
+
+	default:
+		return toolText("unknown action: "+args.Action, true)
+	}
+}
+
+// getAttachment returns attachment metadata, plus inline content for small
+// text files. Binary content never goes through this path — callAPI wraps
+// non-JSON bodies as strings, which mangles bytes, and base64 blobs would
+// flood the agent's context anyway.
+func (s *Server) getAttachment(id *TokenIdentity, rawArgs json.RawMessage) map[string]interface{} {
+	var args struct {
+		AttachmentID string `json:"attachment_id"`
+	}
+	if err := json.Unmarshal(rawArgs, &args); err != nil || args.AttachmentID == "" {
+		return toolText("attachment_id is required", true)
+	}
+	aid := url.PathEscape(args.AttachmentID)
+
+	status, body, err := s.callAPI(id, http.MethodGet, "/api/attachments/"+aid+"/meta", nil)
+	if err != nil {
+		return toolText(err.Error(), true)
+	}
+	if status >= 300 {
+		return toolText(apiError(status, body), true)
+	}
+	var meta struct {
+		ID          string `json:"id"`
+		Filename    string `json:"filename"`
+		ContentType string `json:"content_type"`
+		Size        int    `json:"size"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return toolText("unexpected attachment metadata", true)
+	}
+
+	result := map[string]interface{}{
+		"id":           meta.ID,
+		"filename":     meta.Filename,
+		"content_type": meta.ContentType,
+		"size":         meta.Size,
+	}
+
+	const inlineTextCap = 100_000
+	isText := meta.ContentType == "text/plain" || meta.ContentType == "text/csv"
+	if isText && meta.Size <= inlineTextCap {
+		status, raw, err := s.callAPI(id, http.MethodGet, "/api/attachments/"+aid, nil)
+		if err == nil && status < 300 {
+			// callAPI wraps a non-JSON body as {"body": "<text>"}.
+			var wrapped struct {
+				Body string `json:"body"`
+			}
+			if json.Unmarshal(raw, &wrapped) == nil && wrapped.Body != "" {
+				result["content"] = wrapped.Body
+			} else {
+				result["content"] = string(raw)
+			}
+		}
+	} else {
+		result["note"] = "content not inlined (binary or too large) — open it in the Inboxes app"
+	}
+	return toolText(result, false)
 }
 
 // modifyThread maps one action to the existing single-thread routes (and the

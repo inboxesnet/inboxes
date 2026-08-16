@@ -69,6 +69,10 @@ Keys and OAuth connections are listed and revocable in Settings → Agents.
 | `create_draft` | all | Accepts domain **names**; two-step create+body |
 | `update_draft` | all | Partial updates |
 | `send_draft` | all | Gated by the org send switch; optional `scheduled_at` |
+| `cancel_scheduled_send` | all | Cancels a draft's scheduled send; the draft survives |
+| `list_labels` | all | The org's custom labels |
+| `manage_label` | all | create/rename/delete a label, apply/remove on a thread |
+| `get_attachment` | all | Metadata by attachment ID; inlines small text/CSV content |
 | `list_users` | admin | Org roster |
 | `invite_user` | admin | Sends a normal invite email |
 
