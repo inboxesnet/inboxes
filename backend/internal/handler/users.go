@@ -460,6 +460,16 @@ func (h *UserHandler) ChangeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Revoke the target's sessions so the new role takes effect at once. The
+	// role lives in the JWT, so without this a demoted admin keeps admin
+	// access until the token renews (up to 24 hours later).
+	blacklist := service.NewTokenBlacklist(h.RDB)
+	if err := blacklist.RevokeAllForUser(r.Context(), userID); err != nil {
+		slog.Error("users: session revocation failed on role change", "user_id", userID, "error", err)
+	}
+	blacklist.ClearSessions(r.Context(), userID)
+	h.clearStatusCache(r.Context(), userID)
+
 	slog.Info("user: role changed", "user_id", userID, "new_role", req.Role, "by", claims.UserID)
 	writeJSON(w, http.StatusOK, map[string]string{"role": req.Role})
 }

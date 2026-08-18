@@ -42,7 +42,10 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	r := chi.NewRouter()
 
 	r.Use(chiMiddleware.RequestID)
-	r.Use(chiMiddleware.RealIP)
+	// Trusted-proxy RealIP: honor forwarded IP headers only from a private/proxy
+	// peer (Coolify's Traefik). chi's RealIP trusts them from anyone, which lets
+	// a client spoof its IP and bypass every per-IP rate limit.
+	r.Use(middleware.RealIP)
 	r.Use(middleware.LoggingMiddleware)
 	r.Use(middleware.CORSMiddleware(appURL))
 	r.Use(chiMiddleware.Recoverer)

@@ -156,6 +156,8 @@ func oauthAccessToken(t *testing.T, h http.Handler, userID, orgID, role string) 
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
 	form.Set("code_verifier", verifier)
+	form.Set("client_id", client.ClientID)
+	form.Set("redirect_uri", "http://127.0.0.1:0/callback")
 	req = httptest.NewRequest(http.MethodPost, "/api/oauth/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec = httptest.NewRecorder()
@@ -562,7 +564,8 @@ func TestOAuthFullFlow(t *testing.T) {
 		t.Fatalf("refresh: %d %s", rec.Code, rec.Body.String())
 	}
 	var tok2 struct {
-		AccessToken string `json:"access_token"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	parseJSON(t, rec, &tok2)
 	if tok2.AccessToken == tok.AccessToken {
@@ -570,6 +573,31 @@ func TestOAuthFullFlow(t *testing.T) {
 	}
 	if mcpCall(t, h, tok2.AccessToken, "ping", nil)["result"] == nil {
 		t.Fatal("rotated token does not work")
+	}
+
+	// 7. Reuse detection: replaying the old (rotated-away) refresh token is a
+	// replay. The server must reject it and revoke the whole chain.
+	form = url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", tok.RefreshToken)
+	req = httptest.NewRequest(http.MethodPost, "/api/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		t.Fatal("a superseded refresh token must be rejected")
+	}
+
+	// 8. The reuse revokes the chain, so the current refresh token also stops.
+	form = url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", tok2.RefreshToken)
+	req = httptest.NewRequest(http.MethodPost, "/api/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		t.Fatal("refresh chain must be revoked after a reuse is detected")
 	}
 }
 

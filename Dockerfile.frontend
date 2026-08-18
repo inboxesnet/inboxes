@@ -10,10 +10,12 @@ COPY frontend/ .
 RUN npm run build
 
 FROM node:20-alpine
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
+COPY --chown=appuser:appgroup --from=builder /app/.next ./.next
+COPY --chown=appuser:appgroup --from=builder /app/public ./public
+COPY --chown=appuser:appgroup --from=builder /app/node_modules ./node_modules
+COPY --chown=appuser:appgroup --from=builder /app/package.json ./
+USER appuser
 EXPOSE 3000
 CMD ["npm", "start"]

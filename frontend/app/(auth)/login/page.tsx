@@ -33,9 +33,16 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [showSignup, setShowSignup] = useState(true);
 
-  // Only same-origin relative paths are valid post-login destinations.
+  // Only same-origin relative paths are valid post-login destinations. Reject a
+  // leading backslash too: browsers read "/\evil.com" as "//evil.com" and would
+  // redirect off-site after login.
   const rawNext = searchParams.get("next") || "";
-  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "";
+  const next =
+    rawNext.startsWith("/") &&
+    !rawNext.startsWith("//") &&
+    !rawNext.startsWith("/\\")
+      ? rawNext
+      : "";
 
   useEffect(() => {
     // A user with a valid session does not need the login form.

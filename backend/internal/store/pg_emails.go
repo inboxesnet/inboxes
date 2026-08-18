@@ -245,10 +245,10 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 		addArg(" AND e.search_vector @@ plainto_tsquery('english', $N)", f.Text)
 	}
 	if f.From != "" {
-		addArg(" AND e.from_address ILIKE $N", "%"+f.From+"%")
+		addArg(" AND e.from_address ILIKE $N", "%"+escapeLIKE(f.From)+"%")
 	}
 	if f.To != "" {
-		addArg(" AND (e.to_addresses::text ILIKE $N OR e.cc_addresses::text ILIKE $N)", "%"+f.To+"%")
+		addArg(" AND (e.to_addresses::text ILIKE $N OR e.cc_addresses::text ILIKE $N)", "%"+escapeLIKE(f.To)+"%")
 	}
 	if f.HasAttachment {
 		base += " AND COALESCE(jsonb_array_length(e.attachment_ids), 0) > 0"

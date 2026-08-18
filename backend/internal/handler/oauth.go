@@ -299,11 +299,14 @@ func (h *OAuthHandler) tokenFromCode(w http.ResponseWriter, r *http.Request, p m
 		h.tokenError(w, "invalid_grant", "code expired")
 		return
 	}
-	if p["client_id"] != "" && p["client_id"] != clientID {
+	// OAuth 2.1 requires a public client to send client_id on the code grant,
+	// and the redirect_uri must match the one the code was issued with. Both are
+	// mandatory here, not just checked when present.
+	if p["client_id"] == "" || p["client_id"] != clientID {
 		h.tokenError(w, "invalid_grant", "client_id mismatch")
 		return
 	}
-	if p["redirect_uri"] != "" && p["redirect_uri"] != redirectURI {
+	if p["redirect_uri"] == "" || p["redirect_uri"] != redirectURI {
 		h.tokenError(w, "invalid_grant", "redirect_uri mismatch")
 		return
 	}
@@ -359,12 +362,27 @@ func (h *OAuthHandler) tokenFromRefresh(w http.ResponseWriter, r *http.Request, 
 	}
 
 	ctx := r.Context()
+	refreshHash := mcp.HashToken(refresh)
+
+	// Reuse detection: a token that matches a superseded (rotated-away) hash is a
+	// replay. It means the token leaked. Revoke that token so neither the thief
+	// nor the victim can use the chain again, per OAuth 2.1 §4.14.2.
+	var reuseID string
+	if err := h.Store.Q().QueryRow(ctx,
+		`SELECT id FROM agent_tokens WHERE prev_refresh_hash = $1 AND revoked_at IS NULL`,
+		refreshHash,
+	).Scan(&reuseID); err == nil && reuseID != "" {
+		h.Store.Q().Exec(ctx, `UPDATE agent_tokens SET revoked_at = now() WHERE id = $1`, reuseID)
+		h.tokenError(w, "invalid_grant", "refresh token reuse detected")
+		return
+	}
+
 	var tokenID string
 	var createdAt time.Time
 	var revokedAt *time.Time
 	err := h.Store.Q().QueryRow(ctx,
 		`SELECT id, created_at, revoked_at FROM agent_tokens WHERE refresh_hash = $1`,
-		mcp.HashToken(refresh),
+		refreshHash,
 	).Scan(&tokenID, &createdAt, &revokedAt)
 	if err != nil {
 		h.tokenError(w, "invalid_grant", "unknown refresh token")
@@ -392,8 +410,8 @@ func (h *OAuthHandler) tokenFromRefresh(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if _, err := h.Store.Q().Exec(ctx,
-		`UPDATE agent_tokens SET token_hash = $1, refresh_hash = $2, expires_at = $3 WHERE id = $4`,
-		mcp.HashToken(access), mcp.HashToken(newRefresh), time.Now().Add(accessTokenTTL), tokenID,
+		`UPDATE agent_tokens SET token_hash = $1, refresh_hash = $2, prev_refresh_hash = $3, expires_at = $4 WHERE id = $5`,
+		mcp.HashToken(access), mcp.HashToken(newRefresh), refreshHash, time.Now().Add(accessTokenTTL), tokenID,
 	); err != nil {
 		h.tokenError(w, "server_error", "failed to rotate token")
 		return

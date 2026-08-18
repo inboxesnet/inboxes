@@ -141,6 +141,28 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	})
 	if txErr != nil {
 		if strings.Contains(txErr.Error(), "email already registered") {
+			// In hosted mode signup is public, so a distinct 409 lets anyone
+			// enumerate which emails have accounts. Return the same shape a new
+			// signup returns and notify the real owner instead of leaking.
+			if h.StripeKey != "" {
+				from := h.ResendSvc.GetSystemFrom(ctx)
+				if from == "" {
+					from = "noreply@inboxes.net"
+				}
+				if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+					"from":    from,
+					"to":      []string{req.Email},
+					"subject": "You already have an account",
+					"html":    "<p>Someone tried to create an account with this email. You already have one. If this was you, please log in instead.</p>",
+				}); err != nil {
+					slog.Error("auth: failed to send existing-account notice", "error", err)
+				}
+				writeJSON(w, http.StatusCreated, map[string]interface{}{
+					"requires_verification": true,
+					"email":                 req.Email,
+				})
+				return
+			}
 			writeError(w, http.StatusConflict, "email already registered")
 			return
 		}

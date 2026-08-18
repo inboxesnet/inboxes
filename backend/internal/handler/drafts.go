@@ -308,11 +308,26 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If the draft targets an existing thread, verify it belongs to the caller's org.
+	// If the draft targets an existing thread, verify it belongs to the caller's
+	// org and that the caller's aliases can see it. Without the visibility check
+	// a member could inject a message into a thread they cannot read, the same
+	// way the direct send path guards its reply_to_thread_id.
 	if threadID != nil && *threadID != "" {
 		if _, err := h.Store.GetThreadDomainID(ctx, *threadID, claims.OrgID); err != nil {
 			writeError(w, http.StatusNotFound, "thread not found")
 			return
+		}
+		if claims.Role != "admin" {
+			aliasAddrs, _ := h.Store.GetUserAliasAddresses(ctx, claims.UserID)
+			aliasLabels := make([]string, len(aliasAddrs))
+			for i, addr := range aliasAddrs {
+				aliasLabels[i] = "alias:" + addr
+			}
+			visible, _ := h.Store.CheckThreadVisibility(ctx, *threadID, aliasLabels)
+			if !visible {
+				writeError(w, http.StatusNotFound, "thread not found")
+				return
+			}
 		}
 	}
 

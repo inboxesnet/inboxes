@@ -4,6 +4,8 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -312,10 +314,13 @@ func TestAuth_ResetPasswordFlow(t *testing.T) {
 	t.Cleanup(func() { cleanupOrg(t, orgID) })
 
 	// Set reset token directly in DB (we can't call ForgotPassword without ResendSvc).
-	// Use raw SQL to set a token with a future expiry.
+	// The store hashes reset tokens, so store the SHA-256 hex here and submit the
+	// raw token below, exactly as the real email link does.
+	rawResetToken := "test-reset-token-123"
+	resetSum := sha256.Sum256([]byte(rawResetToken))
 	_, err := testPool.Exec(context.Background(),
 		"UPDATE users SET reset_token = $1, reset_expires_at = now() + interval '1 hour' WHERE email = $2",
-		"test-reset-token-123", "integ-reset@example.com",
+		hex.EncodeToString(resetSum[:]), "integ-reset@example.com",
 	)
 	if err != nil {
 		t.Fatalf("set reset token: %v", err)
@@ -483,20 +488,36 @@ func TestAuth_DuplicateEmailConflict(t *testing.T) {
 	}
 	t.Cleanup(func() { cleanupOrg(t, firstOrgID) })
 
-	// Second signup with same email
+	// Second signup with same email. In hosted mode the response must not reveal
+	// that the email already exists, or anyone could enumerate accounts. It must
+	// match a fresh signup: 201 with requires_verification and no error.
 	body2 := `{"email":"integ-conflict@example.com","password":"Password1","org_name":"Another Org"}`
 	req2 := httptest.NewRequest("POST", "/auth/signup", strings.NewReader(body2))
 	w2 := httptest.NewRecorder()
 	h.Signup(w2, req2)
 
-	if w2.Code != http.StatusConflict {
-		t.Errorf("Duplicate signup: got status %d, want %d; body: %s", w2.Code, http.StatusConflict, w2.Body.String())
+	if w2.Code != http.StatusCreated {
+		t.Errorf("Duplicate signup: got status %d, want %d; body: %s", w2.Code, http.StatusCreated, w2.Body.String())
 	}
 
 	var resp map[string]interface{}
 	json.NewDecoder(w2.Body).Decode(&resp)
-	if resp["error"] != "email already registered" {
-		t.Errorf("Duplicate signup: error = %v, want 'email already registered'", resp["error"])
+	if resp["error"] != nil {
+		t.Errorf("Duplicate signup leaked an error: %v", resp["error"])
+	}
+	if resp["requires_verification"] != true {
+		t.Errorf("Duplicate signup: requires_verification = %v, want true", resp["requires_verification"])
+	}
+
+	// The duplicate must not create a second account for the same email.
+	var userCount int
+	if err := testPool.QueryRow(context.Background(),
+		"SELECT COUNT(*) FROM users WHERE email = $1", "integ-conflict@example.com",
+	).Scan(&userCount); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if userCount != 1 {
+		t.Errorf("Duplicate signup created a second account: user count = %d, want 1", userCount)
 	}
 }
 

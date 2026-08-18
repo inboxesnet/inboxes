@@ -30,7 +30,7 @@ func (s *PgStore) InsertInvitedUser(ctx context.Context, orgID, email, name, rol
 		   invite_expires_at = $6,
 		   updated_at = now()
 		 RETURNING id`,
-		orgID, email, name, role, token, expiresAt,
+		orgID, email, name, role, hashSecretToken(token), expiresAt,
 	).Scan(&userID)
 	return userID, err
 }
@@ -53,7 +53,7 @@ func (s *PgStore) ReinviteUser(ctx context.Context, userID, orgID, token string,
 		`UPDATE users SET invite_token = $1, invite_expires_at = $2, updated_at = now()
 		 WHERE id = $3 AND org_id = $4 AND status IN ('invited', 'placeholder')
 		 RETURNING email`,
-		token, expiresAt, userID, orgID).Scan(&email)
+		hashSecretToken(token), expiresAt, userID, orgID).Scan(&email)
 	return email, err
 }
 

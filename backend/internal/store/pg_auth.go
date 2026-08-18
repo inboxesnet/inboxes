@@ -2,10 +2,21 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// hashSecretToken returns the hex SHA-256 of a high-entropy token. Reset and
+// invite tokens are stored as this hash, never in plaintext, so a database or
+// backup leak cannot be replayed to take over an account. The raw token still
+// travels in the email link; only the stored copy is hashed.
+func hashSecretToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
 
 func (s *PgStore) CountUsers(ctx context.Context) (int, error) {
 	var count int
@@ -63,7 +74,7 @@ func (s *PgStore) GetOnboardingCompleted(ctx context.Context, orgID string) (boo
 func (s *PgStore) SetResetToken(ctx context.Context, email, token string, expires time.Time) (int64, error) {
 	tag, err := s.q.Exec(ctx,
 		`UPDATE users SET reset_token = $1, reset_expires_at = $2 WHERE email = $3 AND status = 'active'`,
-		token, expires, email,
+		hashSecretToken(token), expires, email,
 	)
 	if err != nil {
 		return 0, err
@@ -77,7 +88,7 @@ func (s *PgStore) ResetPassword(ctx context.Context, passwordHash, token string)
 		`UPDATE users SET password_hash = $1, reset_token = NULL, reset_expires_at = NULL
 		 WHERE reset_token = $2 AND reset_expires_at > now()
 		 RETURNING id`,
-		passwordHash, token,
+		passwordHash, hashSecretToken(token),
 	).Scan(&userID)
 	return userID, err
 }
@@ -89,7 +100,7 @@ func (s *PgStore) ClaimInvite(ctx context.Context, passwordHash, name, token str
 		 status = 'active', invite_token = NULL, invite_expires_at = NULL
 		 WHERE invite_token = $3 AND invite_expires_at > now() AND status IN ('placeholder', 'invited')
 		 RETURNING id, org_id, email, role`,
-		passwordHash, name, token,
+		passwordHash, name, hashSecretToken(token),
 	).Scan(&userID, &orgID, &email, &role)
 	return userID, orgID, email, role, err
 }
@@ -122,7 +133,7 @@ func (s *PgStore) ValidateInviteToken(ctx context.Context, token string) (string
 	err := s.q.QueryRow(ctx,
 		`SELECT email, name, status FROM users
 		 WHERE invite_token = $1 AND invite_expires_at > now()`,
-		token,
+		hashSecretToken(token),
 	).Scan(&email, &name, &status)
 	return email, name, status, err
 }

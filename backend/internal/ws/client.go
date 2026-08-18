@@ -46,7 +46,7 @@ func ServeWS(hub *Hub, secret string, appURL string, w http.ResponseWriter, r *h
 	claims := &middleware.Claims{}
 	token, err := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (interface{}, error) {
 		return []byte(secret), nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil || !token.Valid {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
