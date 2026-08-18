@@ -376,6 +376,13 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	blacklist.ClearSessions(ctx, resetUserID)
 
+	// Session revocation lives in Redis, but MCP agent tokens live in the DB
+	// and mint fresh JWTs on every call, so the blacklist never catches them.
+	// Revoke them here so recovery removes stolen agent keys too.
+	if err := h.Store.RevokeAgentTokensForUser(ctx, resetUserID); err != nil {
+		slog.Error("auth: agent token revocation failed during password reset", "user_id", resetUserID, "error", err)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"message": "password reset successfully"})
 }
 

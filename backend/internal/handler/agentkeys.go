@@ -19,6 +19,10 @@ type AgentKeyHandler struct {
 	Pool  *pgxpool.Pool
 }
 
+// exchangedKeyTTL bounds the lifetime of a key minted from an OAuth token, so
+// the exchange cannot turn a 30-day token into a permanent credential.
+const exchangedKeyTTL = 90 * 24 * time.Hour
+
 // List returns the caller's active agent credentials. Raw tokens are never
 // stored, so only metadata comes back.
 func (h *AgentKeyHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +128,12 @@ func (h *AgentKeyHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
+	// Only an OAuth access token from the consent flow can mint a key. This
+	// stops one API key from cloning itself into more keys that outlive it.
+	if id.Kind != "oauth" {
+		writeError(w, http.StatusForbidden, "only an OAuth access token can be exchanged for a key")
+		return
+	}
 
 	var req struct {
 		Name string `json:"name"`
@@ -154,9 +164,9 @@ func (h *AgentKeyHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	}
 	var keyID string
 	if err := h.Store.Q().QueryRow(r.Context(),
-		`INSERT INTO agent_tokens (org_id, user_id, kind, name, token_hash)
-		 VALUES ($1, $2, 'key', $3, $4) RETURNING id`,
-		id.OrgID, id.UserID, req.Name, mcp.HashToken(rawKey),
+		`INSERT INTO agent_tokens (org_id, user_id, kind, name, token_hash, expires_at)
+		 VALUES ($1, $2, 'key', $3, $4, $5) RETURNING id`,
+		id.OrgID, id.UserID, req.Name, mcp.HashToken(rawKey), time.Now().Add(exchangedKeyTTL),
 	).Scan(&keyID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store key")
 		return

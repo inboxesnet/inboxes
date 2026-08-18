@@ -262,6 +262,13 @@ func (s *PgStore) UpdatePassword(ctx context.Context, userID, hash string) error
 	return err
 }
 
+func (s *PgStore) RevokeAgentTokensForUser(ctx context.Context, userID string) error {
+	_, err := s.q.Exec(ctx,
+		`UPDATE agent_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`,
+		userID)
+	return err
+}
+
 func (s *PgStore) GetPreferences(ctx context.Context, userID string) ([]byte, error) {
 	var prefs []byte
 	err := s.q.QueryRow(ctx,

@@ -2,14 +2,26 @@ package mcp
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 
 	"github.com/inboxes/backend/internal/middleware"
 )
+
+// userRateLimitIP maps a user ID to a stable, valid synthetic IPv6 address.
+// The in-process router keys its per-IP rate limits on the client IP, so each
+// user needs a distinct, parseable address. A non-IP string (the old value)
+// is rejected by the router's RealIP step, which made every user share one
+// bucket. A SHA-256 of the user ID gives 16 bytes = one unique IPv6 address.
+func userRateLimitIP(userID string) string {
+	sum := sha256.Sum256([]byte(userID))
+	return net.IP(sum[:16]).String()
+}
 
 // callAPI drives the real API router in-process as the token's user. Every
 // tool call goes through the same middleware and handlers as the web app,
@@ -30,10 +42,10 @@ func (s *Server) callAPI(id *TokenIdentity, method, path string, body interface{
 	req.Header.Set("Content-Type", "application/json")
 	// The auth middleware requires this header on state-changing methods.
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	// Give each user a distinct rate-limit identity; otherwise every
-	// internal call shares httptest's fixed RemoteAddr and all agents
-	// drain one shared IP bucket.
-	req.Header.Set("X-Real-IP", "mcp-"+id.UserID)
+	// Give each user a distinct, valid rate-limit identity; otherwise every
+	// internal call shares httptest's fixed RemoteAddr and all agents drain
+	// one shared IP bucket.
+	req.Header.Set("X-Real-IP", userRateLimitIP(id.UserID))
 
 	// Mint a short-lived session token for this user. The middleware then
 	// applies its full checks: revocation, live status, role re-read.

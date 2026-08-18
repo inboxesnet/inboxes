@@ -120,6 +120,56 @@ func createAgentKey(t *testing.T, h http.Handler, userID, orgID, role string) st
 	return out.Key
 }
 
+// oauthAccessToken runs the full consent flow and returns an OAuth access
+// token (kind='oauth') for the given user, using a loopback redirect.
+func oauthAccessToken(t *testing.T, h http.Handler, userID, orgID, role string) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/oauth/register", jsonBody(map[string]any{
+		"client_name":   "Test CLI",
+		"redirect_uris": []string{"http://127.0.0.1:0/callback"},
+	}))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	var client struct {
+		ClientID string `json:"client_id"`
+	}
+	parseJSON(t, rec, &client)
+
+	verifier := "test-verifier-abc123"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+	rec = webRequest(t, h, userID, orgID, role, http.MethodPost, "/api/oauth/approve", map[string]any{
+		"client_id":             client.ClientID,
+		"redirect_uri":          "http://127.0.0.1:0/callback",
+		"code_challenge":        challenge,
+		"code_challenge_method": "S256",
+	})
+	var approved struct {
+		RedirectTo string `json:"redirect_to"`
+	}
+	parseJSON(t, rec, &approved)
+	redirectURL, _ := url.Parse(approved.RedirectTo)
+	code := redirectURL.Query().Get("code")
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", code)
+	form.Set("code_verifier", verifier)
+	req = httptest.NewRequest(http.MethodPost, "/api/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var tok struct {
+		AccessToken string `json:"access_token"`
+	}
+	parseJSON(t, rec, &tok)
+	if tok.AccessToken == "" {
+		t.Fatalf("no access token: %s", rec.Body.String())
+	}
+	return tok.AccessToken
+}
+
 func TestMCPAuthRequired(t *testing.T) {
 	h, _ := newFullRouter(t)
 
@@ -528,12 +578,11 @@ func TestAgentKeyExchange(t *testing.T) {
 	orgID, adminID := seedOrg(t, fmt.Sprintf("exch-%s", t.Name()), fmt.Sprintf("exch-%s@test.com", t.Name()), "password123")
 	t.Cleanup(func() { cleanupOrg(t, orgID) })
 
-	bearer := createAgentKey(t, h, adminID, orgID, "admin")
-
-	// A valid bearer credential exchanges for a fresh durable key.
+	// An OAuth access token from the consent flow exchanges for a durable key.
+	accessToken := oauthAccessToken(t, h, adminID, orgID, "admin")
 	req := httptest.NewRequest(http.MethodPost, "/api/agent-keys/exchange", jsonBody(map[string]string{"name": "cli-test"}))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+bearer)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -544,7 +593,7 @@ func TestAgentKeyExchange(t *testing.T) {
 		Name string `json:"name"`
 	}
 	parseJSON(t, rec, &out)
-	if !strings.HasPrefix(out.Key, "inbx_k_") || out.Key == bearer {
+	if !strings.HasPrefix(out.Key, "inbx_k_") || out.Key == accessToken {
 		t.Fatalf("bad exchanged key: %q", out.Key)
 	}
 	if out.Name != "cli-test" {
@@ -556,6 +605,18 @@ func TestAgentKeyExchange(t *testing.T) {
 		t.Fatal("exchanged key rejected by /mcp")
 	}
 
+	// A plain API key cannot be exchanged — only OAuth tokens can. This stops
+	// one key from cloning itself into keys that survive its revocation.
+	apiKey := createAgentKey(t, h, adminID, orgID, "admin")
+	req = httptest.NewRequest(http.MethodPost, "/api/agent-keys/exchange", jsonBody(map[string]string{}))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for API-key exchange, got %d %s", rec.Code, rec.Body.String())
+	}
+
 	// Garbage bearers get 401.
 	req = httptest.NewRequest(http.MethodPost, "/api/agent-keys/exchange", jsonBody(map[string]string{}))
 	req.Header.Set("Content-Type", "application/json")
@@ -564,6 +625,34 @@ func TestAgentKeyExchange(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for bad bearer, got %d", rec.Code)
+	}
+}
+
+func TestOAuthRemoteRedirectRejected(t *testing.T) {
+	h, _ := newFullRouter(t)
+
+	// A remote http(s) redirect must be refused at registration.
+	req := httptest.NewRequest(http.MethodPost, "/api/oauth/register", jsonBody(map[string]any{
+		"client_name":   "Evil Client",
+		"redirect_uris": []string{"https://evil.tld/cb"},
+	}))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for remote redirect, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// A loopback redirect must still register.
+	req = httptest.NewRequest(http.MethodPost, "/api/oauth/register", jsonBody(map[string]any{
+		"client_name":   "Good Client",
+		"redirect_uris": []string{"http://127.0.0.1:52001/callback"},
+	}))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for loopback redirect, got %d %s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -322,6 +322,12 @@ func (h *UserHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	revErr := pwBlacklist.RevokeAllForUser(r.Context(), claims.UserID)
 	pwBlacklist.ClearSessions(r.Context(), claims.UserID)
 
+	// MCP agent tokens live in the DB and bypass the Redis session blacklist,
+	// so revoke them here as well when the password changes.
+	if err := h.Store.RevokeAgentTokensForUser(r.Context(), claims.UserID); err != nil {
+		slog.Error("users: agent token revocation failed during password change", "user_id", claims.UserID, "error", err)
+	}
+
 	newToken, newJTI, err := middleware.GenerateToken(h.Secret, claims.UserID, claims.OrgID, claims.Role)
 	if err == nil {
 		middleware.SetTokenCookie(w, newToken, h.AppURL)

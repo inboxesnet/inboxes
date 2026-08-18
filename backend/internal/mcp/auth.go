@@ -18,6 +18,7 @@ type TokenIdentity struct {
 	UserID  string
 	OrgID   string
 	Role    string
+	Kind    string
 }
 
 // HashToken returns the hex SHA-256 of a raw token. Tokens are high-entropy
@@ -48,14 +49,17 @@ func LookupToken(ctx context.Context, pool *pgxpool.Pool, raw string) (*TokenIde
 	var id TokenIdentity
 	var expiresAt, revokedAt *time.Time
 	var status string
+	// u.org_id = t.org_id binds the token's org to the user's current org.
+	// If a user ever moves org, their old tokens stop resolving instead of
+	// reading the old org's mail.
 	err := pool.QueryRow(ctx,
-		`SELECT t.id, t.user_id, t.org_id, t.expires_at, t.revoked_at, u.role, u.status
+		`SELECT t.id, t.user_id, t.org_id, t.kind, t.expires_at, t.revoked_at, u.role, u.status
 		 FROM agent_tokens t
-		 JOIN users u ON u.id = t.user_id
+		 JOIN users u ON u.id = t.user_id AND u.org_id = t.org_id
 		 JOIN orgs o ON o.id = t.org_id AND o.deleted_at IS NULL
 		 WHERE t.token_hash = $1`,
 		hash,
-	).Scan(&id.TokenID, &id.UserID, &id.OrgID, &expiresAt, &revokedAt, &id.Role, &status)
+	).Scan(&id.TokenID, &id.UserID, &id.OrgID, &id.Kind, &expiresAt, &revokedAt, &id.Role, &status)
 	if err != nil {
 		return nil, fmt.Errorf("token not found")
 	}

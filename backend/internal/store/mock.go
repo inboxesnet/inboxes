@@ -76,7 +76,7 @@ type MockStore struct {
 	UpdateThreadStatsFn        func(ctx context.Context, threadID, orgID, snippet, lastSender string) error
 	CreateEmailJobFn           func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
 	SearchEmailsFn             func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error)
-	GetLabelCountsFn            func(ctx context.Context, orgID, domainID, userID, role string, aliasAddrs []string) (map[string]any, error)
+	GetLabelCountsFn           func(ctx context.Context, orgID, domainID, userID, role string, aliasAddrs []string) (map[string]any, error)
 	ListAdminJobsFn            func(ctx context.Context, orgID string) ([]map[string]any, error)
 	CheckSendJobExistsFn       func(ctx context.Context, draftID string) (bool, error)
 
@@ -94,26 +94,27 @@ type MockStore struct {
 	UpdateWebhookConfigFn    func(ctx context.Context, orgID, webhookID string, encSecret, encIV, encTag string) error
 
 	// ---- Users ----
-	ListUsersFn           func(ctx context.Context, orgID string) ([]map[string]any, error)
-	InsertInvitedUserFn   func(ctx context.Context, orgID, email, name, role, token string, expiresAt time.Time) (string, error)
-	GetOrgNameFn          func(ctx context.Context, orgID string) (string, error)
-	GetUserNameFn         func(ctx context.Context, userID string) (string, error)
-	ReinviteUserFn        func(ctx context.Context, userID, orgID, token string, expiresAt time.Time) (string, error)
-	GetUserRoleFn         func(ctx context.Context, userID, orgID string) (string, error)
-	CountActiveAdminsFn   func(ctx context.Context, orgID string) (int, error)
-	DisableUserFn         func(ctx context.Context, userID, orgID string) (int64, error)
-	DeleteAliasUsersFn    func(ctx context.Context, userID string) error
-	ReassignAndDisableFn  func(ctx context.Context, orgID, adminID, sourceID, targetID string) (map[string]any, error)
-	GetMeFn               func(ctx context.Context, userID string) (map[string]any, error)
-	UpdateUserNameFn      func(ctx context.Context, userID, name string) error
-	GetPasswordHashFn     func(ctx context.Context, userID string) (string, error)
-	UpdatePasswordFn      func(ctx context.Context, userID, hash string) error
-	GetPreferencesFn      func(ctx context.Context, userID string) ([]byte, error)
-	UpdatePreferencesFn   func(ctx context.Context, userID string, prefs map[string]any) error
-	ListMyAliasesFn       func(ctx context.Context, userID, orgID string) ([]map[string]any, error)
-	ChangeRoleFn          func(ctx context.Context, userID, orgID, role string) (int64, error)
-	GetUserOwnerAndRoleFn func(ctx context.Context, userID, orgID string) (bool, string, error)
-	EnableUserFn          func(ctx context.Context, userID, orgID string) (int64, error)
+	ListUsersFn                func(ctx context.Context, orgID string) ([]map[string]any, error)
+	InsertInvitedUserFn        func(ctx context.Context, orgID, email, name, role, token string, expiresAt time.Time) (string, error)
+	GetOrgNameFn               func(ctx context.Context, orgID string) (string, error)
+	GetUserNameFn              func(ctx context.Context, userID string) (string, error)
+	ReinviteUserFn             func(ctx context.Context, userID, orgID, token string, expiresAt time.Time) (string, error)
+	GetUserRoleFn              func(ctx context.Context, userID, orgID string) (string, error)
+	CountActiveAdminsFn        func(ctx context.Context, orgID string) (int, error)
+	DisableUserFn              func(ctx context.Context, userID, orgID string) (int64, error)
+	DeleteAliasUsersFn         func(ctx context.Context, userID string) error
+	ReassignAndDisableFn       func(ctx context.Context, orgID, adminID, sourceID, targetID string) (map[string]any, error)
+	GetMeFn                    func(ctx context.Context, userID string) (map[string]any, error)
+	UpdateUserNameFn           func(ctx context.Context, userID, name string) error
+	GetPasswordHashFn          func(ctx context.Context, userID string) (string, error)
+	UpdatePasswordFn           func(ctx context.Context, userID, hash string) error
+	RevokeAgentTokensForUserFn func(ctx context.Context, userID string) error
+	GetPreferencesFn           func(ctx context.Context, userID string) ([]byte, error)
+	UpdatePreferencesFn        func(ctx context.Context, userID string, prefs map[string]any) error
+	ListMyAliasesFn            func(ctx context.Context, userID, orgID string) ([]map[string]any, error)
+	ChangeRoleFn               func(ctx context.Context, userID, orgID, role string) (int64, error)
+	GetUserOwnerAndRoleFn      func(ctx context.Context, userID, orgID string) (bool, string, error)
+	EnableUserFn               func(ctx context.Context, userID, orgID string) (int64, error)
 
 	// ---- Aliases ----
 	ListAliasesFn             func(ctx context.Context, orgID, domainID string) ([]map[string]any, error)
@@ -128,11 +129,11 @@ type MockStore struct {
 	CheckUserOrgFn            func(ctx context.Context, userID, orgID string) (bool, error)
 
 	// ---- Labels ----
-	ListOrgLabelsFn  func(ctx context.Context, orgID string) ([]map[string]any, error)
-	CreateOrgLabelFn func(ctx context.Context, orgID, name string) (string, error)
+	ListOrgLabelsFn    func(ctx context.Context, orgID string) ([]map[string]any, error)
+	CreateOrgLabelFn   func(ctx context.Context, orgID, name string) (string, error)
 	ReorderOrgLabelsFn func(ctx context.Context, orgID string, order []DomainOrder) error
-	RenameOrgLabelFn func(ctx context.Context, labelID, orgID, newName string) (string, error)
-	DeleteOrgLabelFn func(ctx context.Context, labelID, orgID string) (string, error)
+	RenameOrgLabelFn   func(ctx context.Context, labelID, orgID, newName string) (string, error)
+	DeleteOrgLabelFn   func(ctx context.Context, labelID, orgID string) (string, error)
 
 	// ---- Drafts ----
 	ListDraftsFn  func(ctx context.Context, userID, orgID, domainID string) ([]map[string]any, error)
@@ -168,8 +169,8 @@ type MockStore struct {
 	UpdateEmailStatusFn        func(ctx context.Context, orgID, resendEmailID, status string) (int64, error)
 	GetEmailThreadByResendIDFn func(ctx context.Context, orgID, resendEmailID string) (string, string, string, error)
 	InsertBounceFn             func(ctx context.Context, orgID, address, bounceType string) error
-	ListBouncesFn               func(ctx context.Context, orgID string) ([]map[string]any, error)
-	DeleteBounceFn              func(ctx context.Context, orgID, id string) (int64, error)
+	ListBouncesFn              func(ctx context.Context, orgID string) ([]map[string]any, error)
+	DeleteBounceFn             func(ctx context.Context, orgID, id string) (int64, error)
 	ClearBounceFn              func(ctx context.Context, orgID, fromAddress string) error
 
 	// ---- Billing ----
@@ -196,8 +197,10 @@ type MockStore struct {
 	GetFirstDomainIDFn       func(ctx context.Context, orgID string) (string, error)
 
 	// ---- Setup ----
-	SetupCountUsersFn     func(ctx context.Context) (int, error)
-	CreateAdminSetupFn    func(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface{ Encrypt(string) (string, string, string, error) }) (string, string, error)
+	SetupCountUsersFn  func(ctx context.Context) (int, error)
+	CreateAdminSetupFn func(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface {
+		Encrypt(string) (string, string, string, error)
+	}) (string, string, error)
 	UpsertSystemSettingFn func(ctx context.Context, key, value string) error
 	GetUserEmailFn        func(ctx context.Context, userID string) (string, error)
 
@@ -823,6 +826,13 @@ func (m *MockStore) UpdatePassword(ctx context.Context, userID, hash string) err
 	return nil
 }
 
+func (m *MockStore) RevokeAgentTokensForUser(ctx context.Context, userID string) error {
+	if m.RevokeAgentTokensForUserFn != nil {
+		return m.RevokeAgentTokensForUserFn(ctx, userID)
+	}
+	return nil
+}
+
 func (m *MockStore) GetPreferences(ctx context.Context, userID string) ([]byte, error) {
 	if m.GetPreferencesFn != nil {
 		return m.GetPreferencesFn(ctx, userID)
@@ -1342,7 +1352,9 @@ func (m *MockStore) SetupCountUsers(ctx context.Context) (int, error) {
 	return 0, nil
 }
 
-func (m *MockStore) CreateAdminSetup(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface{ Encrypt(string) (string, string, string, error) }) (string, string, error) {
+func (m *MockStore) CreateAdminSetup(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface {
+	Encrypt(string) (string, string, string, error)
+}) (string, string, error) {
 	if m.CreateAdminSetupFn != nil {
 		return m.CreateAdminSetupFn(ctx, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName, encSvc)
 	}

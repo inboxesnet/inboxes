@@ -174,6 +174,10 @@ type UserStore interface {
 	UpdateUserName(ctx context.Context, userID, name string) error
 	GetPasswordHash(ctx context.Context, userID string) (string, error)
 	UpdatePassword(ctx context.Context, userID, hash string) error
+	// RevokeAgentTokensForUser revokes every active MCP agent token for a user.
+	// Password change and reset call it, because these tokens bypass the Redis
+	// session blacklist.
+	RevokeAgentTokensForUser(ctx context.Context, userID string) error
 	GetPreferences(ctx context.Context, userID string) ([]byte, error)
 	UpdatePreferences(ctx context.Context, userID string, prefs map[string]any) error
 	ListMyAliases(ctx context.Context, userID, orgID string) ([]map[string]any, error)

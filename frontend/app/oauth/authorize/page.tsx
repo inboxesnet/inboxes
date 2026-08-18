@@ -69,6 +69,20 @@ function AuthorizeCard() {
   const paramsValid =
     clientId && redirectUri && codeChallenge && codeChallengeMethod === "S256";
 
+  // Parse the redirect target so the user can see where the code will go. A
+  // loopback address is a normal local CLI. A remote host is a red flag.
+  let redirectHost = "";
+  let redirectIsLoopback = false;
+  try {
+    const target = new URL(redirectUri);
+    redirectHost = target.host || target.protocol;
+    const h = target.hostname;
+    redirectIsLoopback =
+      h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+  } catch {
+    redirectHost = redirectUri;
+  }
+
   async function approve() {
     setError("");
     setWorking(true);
@@ -88,14 +102,20 @@ function AuthorizeCard() {
   }
 
   function deny() {
-    try {
-      const u = new URL(redirectUri);
-      u.searchParams.set("error", "access_denied");
-      if (state) u.searchParams.set("state", state);
-      window.location.href = u.toString();
-    } catch {
-      router.push("/d");
+    // Only bounce back to a loopback client. Never redirect the browser to a
+    // remote URL an unknown client supplied — that is an open redirect.
+    if (redirectIsLoopback) {
+      try {
+        const u = new URL(redirectUri);
+        u.searchParams.set("error", "access_denied");
+        if (state) u.searchParams.set("state", state);
+        window.location.href = u.toString();
+        return;
+      } catch {
+        // fall through to the app
+      }
     }
+    router.push("/d");
   }
 
   if (checking || !me) {
@@ -125,6 +145,17 @@ function AuthorizeCard() {
           </div>
         ) : (
           <>
+            <div className="rounded-md border p-3 text-xs">
+              <span className="text-muted-foreground">Sends the connection code to</span>
+              <div className="mt-1 font-mono break-all">{redirectHost}</div>
+            </div>
+            {!redirectIsLoopback && (
+              <div role="alert" className="text-destructive bg-destructive/10 p-3 rounded-md">
+                Warning: this sends your connection code to a remote site, not a
+                program on your computer. A real CLI uses a local address like
+                127.0.0.1. Approve only if you started this connection yourself.
+              </div>
+            )}
             <p className="text-muted-foreground">The agent will be able to:</p>
             <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
               <li>Read the mail your account can see</li>

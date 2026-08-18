@@ -1,6 +1,6 @@
 {
   "name": "inboxes",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Connect coding agents to your Inboxes email server over MCP: npx inboxes setup",
   "bin": {
     "inboxes": "bin.js"
@@ -12,6 +12,7 @@
   "engines": {
     "node": ">=18"
   },
+  "homepage": "https://inboxes.net",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/inboxesnet/inboxes.git",

@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,11 +32,56 @@ const (
 	authCodeTTL     = 10 * time.Minute
 )
 
+// isLoopbackHost reports whether a URL host is a loopback address. It accepts
+// an optional port, e.g. "127.0.0.1:53123" or "[::1]:5000".
+func isLoopbackHost(host string) bool {
+	h := host
+	if hostOnly, _, err := net.SplitHostPort(host); err == nil {
+		h = hostOnly
+	}
+	h = strings.Trim(h, "[]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// validateRedirectURI enforces the redirect policy for public MCP clients.
+// It permits only a loopback http(s) address (RFC 8252 native-app pattern) or
+// a reverse-domain private-use scheme. It rejects any remote http(s) host, so
+// an attacker cannot register a client that sends the authorization code to a
+// server they control.
+func validateRedirectURI(u string) error {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme == "" {
+		return fmt.Errorf("invalid redirect_uri: %s", u)
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "http", "https":
+		if !isLoopbackHost(parsed.Host) {
+			return fmt.Errorf("redirect_uri must be a loopback address (127.0.0.1, ::1, or localhost)")
+		}
+		return nil
+	case "javascript", "data", "vbscript", "file":
+		return fmt.Errorf("invalid redirect_uri scheme")
+	default:
+		// Private-use URI scheme for a native app, e.g. com.example.app:/cb.
+		// RFC 8252 requires a dotted, reverse-domain scheme. Such a scheme
+		// opens a local app, not a remote server.
+		if !strings.Contains(scheme, ".") {
+			return fmt.Errorf("redirect_uri must be a loopback http(s) address or a reverse-domain app scheme")
+		}
+		return nil
+	}
+}
+
 // ProtectedResourceMetadata serves /.well-known/oauth-protected-resource.
 func (h *OAuthHandler) ProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"resource":              h.PublicURL + "/mcp",
-		"authorization_servers": []string{h.PublicURL},
+		"resource":                 h.PublicURL + "/mcp",
+		"authorization_servers":    []string{h.PublicURL},
 		"bearer_methods_supported": []string{"header"},
 	})
 }
@@ -71,14 +118,8 @@ func (h *OAuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, u := range req.RedirectURIs {
-		parsed, err := url.Parse(u)
-		if err != nil || parsed.Scheme == "" {
-			writeError(w, http.StatusBadRequest, "invalid redirect_uri: "+u)
-			return
-		}
-		// javascript: and data: URIs never make sense as redirect targets.
-		if parsed.Scheme == "javascript" || parsed.Scheme == "data" {
-			writeError(w, http.StatusBadRequest, "invalid redirect_uri scheme")
+		if err := validateRedirectURI(u); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
@@ -168,6 +209,12 @@ func (h *OAuthHandler) Approve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !allowed {
 		writeError(w, http.StatusBadRequest, "redirect_uri not registered for this client")
+		return
+	}
+	// Re-check the policy at grant time. This blocks a remote redirect on any
+	// client that a caller registered before the registration rule existed.
+	if err := validateRedirectURI(req.RedirectURI); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -337,9 +384,16 @@ func (h *OAuthHandler) tokenFromRefresh(w http.ResponseWriter, r *http.Request, 
 		h.tokenError(w, "server_error", "failed to create token")
 		return
 	}
+	// Rotate the refresh token too. OAuth 2.1 requires rotation for public
+	// clients, so a leaked refresh token is good only until its next use.
+	newRefresh, err := mcp.NewToken("inbx_rt")
+	if err != nil {
+		h.tokenError(w, "server_error", "failed to create token")
+		return
+	}
 	if _, err := h.Store.Q().Exec(ctx,
-		`UPDATE agent_tokens SET token_hash = $1, expires_at = $2 WHERE id = $3`,
-		mcp.HashToken(access), time.Now().Add(accessTokenTTL), tokenID,
+		`UPDATE agent_tokens SET token_hash = $1, refresh_hash = $2, expires_at = $3 WHERE id = $4`,
+		mcp.HashToken(access), mcp.HashToken(newRefresh), time.Now().Add(accessTokenTTL), tokenID,
 	); err != nil {
 		h.tokenError(w, "server_error", "failed to rotate token")
 		return
@@ -349,7 +403,7 @@ func (h *OAuthHandler) tokenFromRefresh(w http.ResponseWriter, r *http.Request, 
 		"access_token":  access,
 		"token_type":    "bearer",
 		"expires_in":    int(accessTokenTTL.Seconds()),
-		"refresh_token": refresh,
+		"refresh_token": newRefresh,
 		"scope":         "inboxes",
 	})
 }
