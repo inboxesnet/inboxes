@@ -65,7 +65,7 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 	}
 
 	// Determine domain from the From address
-	fromClean := service.ExtractEmail(emailData.From)
+	fromClean := strings.ToLower(service.ExtractEmail(emailData.From))
 	parts := strings.Split(fromClean, "@")
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid from address: %s", emailData.From)
@@ -105,7 +105,7 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 			}
 			// Enrich alias display name if the full From has a better name
 			displayName := extractDisplayName(full.From)
-			fromAddr := service.ExtractEmail(full.From)
+			fromAddr := strings.ToLower(service.ExtractEmail(full.From))
 			if displayName != strings.Split(fromAddr, "@")[0] {
 				w.store.Q().Exec(ctx,
 					`UPDATE aliases SET name = $1 WHERE org_id = $2 AND address = $3

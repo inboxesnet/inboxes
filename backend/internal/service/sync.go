@@ -1002,7 +1002,7 @@ func matchDomain(raw string, domains map[string]string) string {
 	if len(parts) != 2 {
 		return ""
 	}
-	return domains[parts[1]]
+	return domains[strings.ToLower(parts[1])]
 }
 
 func trackAddress(addresses map[string]map[string]int, email, domainID string) {

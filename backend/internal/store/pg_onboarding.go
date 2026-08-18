@@ -113,6 +113,7 @@ func (s *PgStore) GetDiscoveredAddresses(ctx context.Context, orgID string) ([]m
 }
 
 func (s *PgStore) SetupAddress(ctx context.Context, orgID, userID, address, addrType, name string) error {
+	address = strings.ToLower(strings.TrimSpace(address))
 	parts := strings.Split(address, "@")
 	if len(parts) != 2 {
 		return nil

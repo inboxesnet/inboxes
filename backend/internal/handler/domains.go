@@ -53,6 +53,7 @@ func (h *DomainHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "domain is required")
 		return
 	}
+	req.Domain = strings.ToLower(strings.TrimSpace(req.Domain))
 	if err := validateLength(req.Domain, "domain", 253); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

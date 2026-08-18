@@ -422,7 +422,7 @@ func (s *Server) resolveDomain(id *TokenIdentity, nameOrID string) (string, erro
 		domains = wrapped.Domains
 	}
 	for _, d := range domains {
-		if d.Domain == nameOrID || d.ID == nameOrID {
+		if strings.EqualFold(d.Domain, nameOrID) || d.ID == nameOrID {
 			return d.ID, nil
 		}
 	}

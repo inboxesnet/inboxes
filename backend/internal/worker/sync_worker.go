@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/inboxes/backend/internal/event"
@@ -122,7 +123,7 @@ func (w *SyncWorker) processJob(ctx context.Context, jobID string) {
 	for rows.Next() {
 		var id, domain string
 		rows.Scan(&id, &domain)
-		domains[domain] = id
+		domains[strings.ToLower(domain)] = id
 	}
 	rows.Close()
 

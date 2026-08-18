@@ -75,7 +75,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 		if len(parts) != 2 {
 			continue
 		}
-		d := parts[1]
+		d := strings.ToLower(parts[1])
 		if !uniqueDomains[d] {
 			uniqueDomains[d] = true
 			domainNames = append(domainNames, d)
@@ -105,7 +105,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 	for _, addr := range allRecipients {
 		parts := strings.Split(addr, "@")
 		if len(parts) == 2 {
-			if dID, ok := domainMap[parts[1]]; ok {
+			if dID, ok := domainMap[strings.ToLower(parts[1])]; ok {
 				domainID = dID
 				recipientAddress = addr
 				break
@@ -557,6 +557,7 @@ func (w *EmailWorker) processFetch(ctx context.Context, jobID, orgID, userID str
 // 3-phase routing: direct user -> alias -> catch-all admin.
 func (w *EmailWorker) routeEmail(ctx context.Context, orgID, domainID, address string) string {
 	var userID string
+	address = strings.ToLower(strings.TrimSpace(address))
 
 	// Phase 1: Direct user match
 	err := w.store.Q().QueryRow(ctx,

@@ -138,7 +138,7 @@ func (s *PgStore) LookupDomainByName(ctx context.Context, orgID, domainName stri
 	var domainID string
 	err := s.q.QueryRow(ctx,
 		"SELECT id FROM domains WHERE org_id = $1 AND domain = $2",
-		orgID, domainName,
+		orgID, strings.ToLower(strings.TrimSpace(domainName)),
 	).Scan(&domainID)
 	return domainID, err
 }

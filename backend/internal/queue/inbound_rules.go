@@ -231,7 +231,7 @@ func (w *EmailWorker) isOrgDomainAddress(ctx context.Context, orgID, addr string
 	var exists bool
 	if err := w.store.Q().QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM domains WHERE org_id = $1 AND domain = $2 AND status != 'deleted')`,
-		orgID, addr[at+1:],
+		orgID, strings.ToLower(addr[at+1:]),
 	).Scan(&exists); err != nil {
 		return false
 	}
