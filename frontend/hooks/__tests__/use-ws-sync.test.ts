@@ -170,6 +170,50 @@ describe("WSSync event handling", () => {
     expect(listData?.threads[0].id).toBe("t1");
   });
 
+  it("email.received — a reply bumps an existing thread to the top", async () => {
+    const oldThread = makeThread({
+      id: "t1",
+      last_message_at: "2026-01-01T00:00:00Z",
+    });
+    const newerThread = makeThread({
+      id: "t2",
+      last_message_at: "2026-02-01T00:00:00Z",
+    });
+    seedCache(
+      ["threads", "list", "d1", "inbox", 1],
+      {
+        threads: [newerThread, oldThread],
+        page: 1,
+        total: 2,
+      } as ThreadListResponse
+    );
+    seedCache(["domains", "unreadCounts"], { d1: 0 } as UnreadCounts);
+
+    await mountWSSync();
+
+    const bumped = makeThread({
+      id: "t1",
+      message_count: 2,
+      last_message_at: "2026-03-01T00:00:00Z",
+    });
+    fireEvent({
+      event: "email.received",
+      thread_id: "t1",
+      domain_id: "d1",
+      payload: { thread: bumped },
+    });
+
+    const listData = getCacheData<ThreadListResponse>([
+      "threads",
+      "list",
+      "d1",
+      "inbox",
+      1,
+    ]);
+    expect(listData?.threads.map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(listData?.threads[0].message_count).toBe(2);
+  });
+
   it("email.received — no payload invalidates thread lists", async () => {
     await mountWSSync();
 

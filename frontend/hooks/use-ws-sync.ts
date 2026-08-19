@@ -164,12 +164,19 @@ export function WSSync() {
 
                 if (belongs) {
                   if (hadThread) {
-                    // Update existing thread in place
+                    // Update the thread, then re-sort so a new reply
+                    // bumps the thread to the top of the list
                     return {
                       ...old,
-                      threads: old.threads.map((t) =>
-                        t.id === msg.thread_id ? emailThread : t
-                      ),
+                      threads: old.threads
+                        .map((t) =>
+                          t.id === msg.thread_id ? emailThread : t
+                        )
+                        .sort(
+                          (a, b) =>
+                            new Date(b.last_message_at).getTime() -
+                            new Date(a.last_message_at).getTime()
+                        ),
                     };
                   }
                   // Insert new thread sorted by last_message_at
