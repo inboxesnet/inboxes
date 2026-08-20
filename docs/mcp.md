@@ -26,12 +26,29 @@ authenticated user: read mail, search, and prepare drafts for human review.
 npx inboxes setup --url https://YOUR-HOST
 ```
 
-The CLI (in `cli/`) runs the OAuth browser flow, trades the token for a
-durable API key via `POST /api/agent-keys/exchange`, and writes MCP config
-for every harness it finds: Claude Code (`claude mcp add -s user`), Codex
-(`~/.codex/config.toml`, via an `mcp-remote` stdio bridge), and opencode
-(`~/.config/opencode/opencode.json`). `cli/e2e.sh` tests the whole flow
-against a real backend. Publish with `cd cli && npm publish`.
+No pre-made API key is needed — setup creates its own. What the command
+does, in order:
+
+1. It registers itself as an OAuth client. This step creates a public
+   client ID only. A client ID is not a credential and grants no access.
+2. It opens the browser on the server's consent page. The consent page
+   shows only to a signed-in user. A signed-out browser goes to the login
+   page, and nothing is issued.
+3. The user clicks Approve. The server sends a single-use code (10-minute
+   TTL, PKCE-bound) to a loopback address on the user's machine. The
+   Approve click is the only step that grants access.
+4. The CLI trades the code for an OAuth token, then trades that token for
+   one durable API key (`POST /api/agent-keys/exchange`, 90-day expiry).
+   Existing keys are never changed or revoked.
+5. It writes MCP config for every harness it finds: Claude Code
+   (`claude mcp add -s user`), Codex (`~/.codex/config.toml`, via an
+   `mcp-remote` stdio bridge), and opencode
+   (`~/.config/opencode/opencode.json`).
+
+The flow leaves exactly two rows in Settings → Agents: the new API key and
+the OAuth approval it came from. Both are revocable there. `cli/e2e.sh`
+tests the whole flow against a real backend. Publish with
+`cd cli && npm publish`.
 
 Settings → Agents also shows manual copy-paste snippets. Two auth paths:
 

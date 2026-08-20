@@ -169,9 +169,11 @@ export function AgentsTab({ isAdmin }: { isAdmin: boolean }) {
         <CardHeader>
           <CardTitle>API keys</CardTitle>
           <CardDescription>
-            Keys act as you: they see your mail and carry your role. Each key is
-            shown once at creation. OAuth connections agents made through the
-            browser flow also appear here.
+            You do not need to create a key here — the setup command below
+            creates its own. Create one only for manual setup. A key acts as
+            you: it reads your mail and carries your role. Each key is shown
+            one time, at creation. Approvals from the browser flow also appear
+            in this list. Revoke ends access immediately.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -237,15 +239,38 @@ export function AgentsTab({ isAdmin }: { isAdmin: boolean }) {
         <CardHeader>
           <CardTitle>Connect an agent</CardTitle>
           <CardDescription>
-            Point any MCP client at your Inboxes server. The OAuth browser flow
-            works with clients that support it; an API key works everywhere.
+            One command connects Claude Code, Codex, and opencode. You do not
+            need to create an API key first.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <CopyBlock
-            label="One command — signs in via browser, configures Claude Code, Codex, and opencode"
+            label="Run this on the machine where your coding agent runs"
             text={`npx inboxes setup --url ${base}`}
           />
+          <div className="text-sm text-muted-foreground space-y-1">
+            <p>What the command does, in order:</p>
+            <ol className="list-decimal pl-5 space-y-1">
+              <li>It opens your browser on this server.</li>
+              <li>
+                You sign in, if needed, and click Approve. If you do not
+                approve, nothing is created.
+              </li>
+              <li>
+                It creates one new API key for that machine. Your other keys do
+                not change. The key appears in the list above.
+              </li>
+              <li>It writes the MCP config for each coding agent it finds.</li>
+            </ol>
+            <p>
+              The agent can then read mail and create drafts. Send stays off
+              until an admin turns it on above.
+            </p>
+          </div>
+          <p className="text-sm text-muted-foreground pt-2">
+            Manual setup — only if you configure a client yourself, with a key
+            from the list above:
+          </p>
           <CopyBlock label="MCP server URL" text={mcpUrl} />
           <CopyBlock
             label="Claude Code (OAuth — approves in your browser)"

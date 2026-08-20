@@ -7,10 +7,19 @@ Connect coding agents (Claude Code, Codex, opencode) to your
 npx inboxes setup
 ```
 
-The command opens your browser, you sign in and approve, and it writes the
-MCP configuration for every harness it finds on your machine. Agents can then
-read your mail and prepare drafts for you to review. Sending stays off until
-an org admin enables it in Settings → Agents.
+You do not need to create an API key first — setup creates its own. What
+the command does, in order:
+
+1. It opens your browser on your Inboxes server.
+2. You sign in, if needed, and click Approve. If you do not approve,
+   nothing is created.
+3. It creates one new API key for this machine, named `cli-<hostname>`.
+   Your existing keys do not change.
+4. It writes the MCP configuration for every harness it finds on your
+   machine.
+
+Agents can then read your mail and prepare drafts for you to review.
+Sending stays off until an org admin enables it in Settings → Agents.
 
 Options:
 

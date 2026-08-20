@@ -167,7 +167,12 @@ function AuthorizeCard() {
               </li>
             </ul>
             <p className="text-muted-foreground">
-              You can revoke this connection anytime in Settings → Agents.
+              Approve creates one new credential. It appears in Settings →
+              Agents, and you can revoke it there anytime. Your other keys do
+              not change.
+            </p>
+            <p className="text-muted-foreground">
+              If you did not start this connection yourself, click Deny.
             </p>
           </>
         )}
