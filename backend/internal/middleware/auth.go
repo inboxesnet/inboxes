@@ -15,6 +15,7 @@ import (
 	"github.com/inboxes/backend/internal/service"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/net/publicsuffix"
 )
 
 type contextKey string
@@ -167,14 +168,17 @@ func GenerateToken(secret, userID, orgID, role string) (tokenStr string, jti str
 }
 
 // cookieDomain derives a cross-subdomain cookie domain from appURL.
-// For "https://app.inboxes.net" it returns ".inboxes.net".
-// For localhost, IPs, or single-label hosts it returns "" (browser default).
+// For "https://app.inboxes.net" it returns "inboxes.net".
+// For "https://app.tail1234.ts.net" it returns "tail1234.ts.net", because
+// browsers reject a cookie whose Domain is a public suffix such as "ts.net".
+// For localhost, IPs, single-label hosts, or a bare public suffix it
+// returns "" (browser default: host-only cookie).
 func cookieDomain(appURL string) string {
 	u, err := url.Parse(appURL)
 	if err != nil {
 		return ""
 	}
-	host := u.Hostname()
+	host := strings.ToLower(u.Hostname())
 	if host == "" || host == "localhost" {
 		return ""
 	}
@@ -187,8 +191,13 @@ func cookieDomain(appURL string) string {
 	if len(parts) < 2 {
 		return ""
 	}
-	// Return parent domain (browsers treat Domain=x.com as .x.com per RFC 6265)
-	return strings.Join(parts[len(parts)-2:], ".")
+	// Registrable domain per the Public Suffix List (browsers treat
+	// Domain=x.com as .x.com per RFC 6265)
+	d, err := publicsuffix.EffectiveTLDPlusOne(host)
+	if err != nil {
+		return ""
+	}
+	return d
 }
 
 func SetTokenCookie(w http.ResponseWriter, token, appURL string) {

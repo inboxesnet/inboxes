@@ -320,6 +320,12 @@ func TestCookieDomain(t *testing.T) {
 		{"single-label host", "http://myhost:8080", ""},
 		{"invalid URL", "://bad", ""},
 		{"deep subdomain", "https://a.b.example.com", "example.com"},
+		{"multi-label suffix ts.net", "https://app.tail1234.ts.net", "tail1234.ts.net"},
+		{"multi-label suffix ts.net root", "https://tail1234.ts.net", "tail1234.ts.net"},
+		{"multi-label suffix co.uk", "https://app.example.co.uk", "example.co.uk"},
+		{"deep multi-label suffix", "https://a.b.example.co.uk", "example.co.uk"},
+		{"bare public suffix", "https://co.uk", ""},
+		{"uppercase host", "https://App.Example.CO.UK", "example.co.uk"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
