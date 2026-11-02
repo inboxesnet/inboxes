@@ -17,6 +17,7 @@ A self-hostable email client powered by [Resend](https://resend.com). Connect yo
 - **Keyboard shortcuts** - Gmail-style shortcuts for power users
 - **Dark mode** - system-aware with manual toggle
 - **Self-hosted or commercial** - run for free on your own server, or enable Stripe billing for SaaS mode
+- **Multi-tenant workspaces** - one account can create, join, and switch between isolated organizations
 - **Domain monitoring** - automatic heartbeat checks against Resend, self-healing reconnection
 
 ## Security
@@ -105,6 +106,7 @@ Inboxes runs in self-hosted mode by default. Setting `STRIPE_KEY` enables commer
 ## Documentation
 
 - [API Reference](docs/api.md) - all endpoints, auth, rate limits
+- [Multi-tenant Workspaces](docs/multitenancy.md) - account, membership, onboarding, and workspace switching
 - [Self-Hosted Guide](docs/self-hosted.md) - mode differences, setup wizard
 - [Operations Guide](docs/operations.md) - workers, backup, monitoring
 - [Deployment Guide](docs/deployment.md) - Docker Compose, Coolify, env vars

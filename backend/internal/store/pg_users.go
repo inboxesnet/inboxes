@@ -22,12 +22,18 @@ func (s *PgStore) ListUsers(ctx context.Context, orgID string) ([]map[string]any
 func (s *PgStore) InsertInvitedUser(ctx context.Context, orgID, email, name, role, token string, expiresAt time.Time) (string, error) {
 	var userID string
 	err := s.q.QueryRow(ctx,
-		`INSERT INTO users (org_id, email, name, role, status, invite_token, invite_expires_at)
-		 VALUES ($1, $2, $3, $4, 'invited', $5, $6)
-		 ON CONFLICT (email) DO UPDATE SET
+		`WITH account AS (
+		   INSERT INTO accounts (email, name) VALUES ($2, $3)
+		   ON CONFLICT (lower(email)) DO UPDATE SET updated_at = now()
+	   RETURNING id
+		 )
+		 INSERT INTO users (account_id, org_id, email, name, role, status, invite_token, invite_expires_at)
+		 SELECT account.id, $1, $2, $3, $4, 'invited', $5, $6 FROM account
+		 ON CONFLICT (org_id, (lower(email))) DO UPDATE SET
+		   account_id = EXCLUDED.account_id,
 		   status = CASE WHEN users.status = 'placeholder' THEN 'invited' ELSE users.status END,
-		   invite_token = $5,
-		   invite_expires_at = $6,
+		   invite_token = EXCLUDED.invite_token,
+		   invite_expires_at = EXCLUDED.invite_expires_at,
 		   updated_at = now()
 		 RETURNING id`,
 		orgID, email, name, role, hashSecretToken(token), expiresAt,
@@ -243,7 +249,13 @@ func (s *PgStore) UpdateSignature(ctx context.Context, userID, signatureHTML str
 
 func (s *PgStore) UpdateUserName(ctx context.Context, userID, name string) error {
 	_, err := s.q.Exec(ctx,
-		`UPDATE users SET name = $1, updated_at = now() WHERE id = $2`,
+		`WITH changed_account AS (
+		   UPDATE accounts SET name = $1, updated_at = now()
+		   WHERE id = (SELECT account_id FROM users WHERE id = $2)
+	   RETURNING id
+		 )
+		 UPDATE users SET name = $1, updated_at = now()
+		 WHERE account_id IN (SELECT id FROM changed_account)`,
 		name, userID)
 	return err
 }
@@ -251,13 +263,21 @@ func (s *PgStore) UpdateUserName(ctx context.Context, userID, name string) error
 func (s *PgStore) GetPasswordHash(ctx context.Context, userID string) (string, error) {
 	var hash string
 	err := s.q.QueryRow(ctx,
-		`SELECT password_hash FROM users WHERE id = $1`, userID).Scan(&hash)
+		`SELECT account.password_hash FROM users user_record
+		 JOIN accounts account ON account.id = user_record.account_id
+		 WHERE user_record.id = $1`, userID).Scan(&hash)
 	return hash, err
 }
 
 func (s *PgStore) UpdatePassword(ctx context.Context, userID, hash string) error {
 	_, err := s.q.Exec(ctx,
-		`UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2`,
+		`WITH changed_account AS (
+		   UPDATE accounts SET password_hash = $1, updated_at = now()
+		   WHERE id = (SELECT account_id FROM users WHERE id = $2)
+	   RETURNING id
+		 )
+		 UPDATE users SET password_hash = $1, updated_at = now()
+		 WHERE account_id IN (SELECT id FROM changed_account)`,
 		hash, userID)
 	return err
 }

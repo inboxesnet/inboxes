@@ -2,6 +2,7 @@
 
 import { Suspense, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,8 +78,9 @@ function VerifyEmailForm() {
       <CardHeader>
         <CardTitle>Verify your email</CardTitle>
         <CardDescription>
-          We sent a 6-digit code to <strong>{emailParam}</strong>. Enter it
-          below to verify your account.
+          We emailed the next steps to <strong>{emailParam}</strong>. If you&apos;re
+          creating a new account, enter the 6-digit code below. If you already
+          have an account, sign in with its current password to add this workspace.
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
@@ -90,7 +92,7 @@ function VerifyEmailForm() {
           )}
           {resendSuccess && (
             <div className="text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/40 p-3 rounded-md">
-              A new code has been sent to your email.
+              If this email still needs verification, a new code has been sent.
             </div>
           )}
           <div className="space-y-2">
@@ -122,6 +124,9 @@ function VerifyEmailForm() {
           >
             {resending ? "Sending..." : "Didn\u0027t receive a code? Resend"}
           </button>
+          <Link href="/login" className="text-sm text-primary hover:underline">
+            Sign in with an existing account
+          </Link>
         </CardFooter>
       </form>
     </Card>

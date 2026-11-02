@@ -197,7 +197,7 @@ func (h *UserHandler) Disable(w http.ResponseWriter, r *http.Request) {
 			slog.Error("users: session revocation failed on disable", "user_id", userID, "error", err)
 		}
 		blacklist.ClearSessions(ctx, userID)
-		h.clearStatusCache(ctx, userID)
+		h.clearStatusCache(ctx, userID, claims.OrgID)
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
@@ -218,7 +218,7 @@ func (h *UserHandler) Disable(w http.ResponseWriter, r *http.Request) {
 		slog.Error("users: session revocation failed on disable", "user_id", userID, "error", err)
 	}
 	blacklist.ClearSessions(ctx, userID)
-	h.clearStatusCache(ctx, userID)
+	h.clearStatusCache(ctx, userID, claims.OrgID)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":        "disabled",
@@ -317,15 +317,26 @@ func (h *UserHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Revoke all old tokens, then re-issue a fresh one for the current session
+	// Passwords belong to the shared account, so revoke sessions and agent keys
+	// for every organization membership before re-issuing this session.
 	pwBlacklist := service.NewTokenBlacklist(h.RDB)
-	revErr := pwBlacklist.RevokeAllForUser(r.Context(), claims.UserID)
-	pwBlacklist.ClearSessions(r.Context(), claims.UserID)
-
-	// MCP agent tokens live in the DB and bypass the Redis session blacklist,
-	// so revoke them here as well when the password changes.
-	if err := h.Store.RevokeAgentTokensForUser(r.Context(), claims.UserID); err != nil {
-		slog.Error("users: agent token revocation failed during password change", "user_id", claims.UserID, "error", err)
+	accountUserIDs, idsErr := h.Store.ListAccountUserIDs(r.Context(), claims.UserID)
+	if idsErr != nil || len(accountUserIDs) == 0 {
+		if idsErr != nil {
+			slog.Error("users: account membership lookup failed during password change", "user_id", claims.UserID, "error", idsErr)
+		}
+		accountUserIDs = []string{claims.UserID}
+	}
+	var revErr error
+	for _, userID := range accountUserIDs {
+		if err := pwBlacklist.RevokeAllForUser(r.Context(), userID); err != nil {
+			revErr = err
+			slog.Error("users: session revocation failed during password change", "user_id", userID, "error", err)
+		}
+		pwBlacklist.ClearSessions(r.Context(), userID)
+		if err := h.Store.RevokeAgentTokensForUser(r.Context(), userID); err != nil {
+			slog.Error("users: agent token revocation failed during password change", "user_id", userID, "error", err)
+		}
 	}
 
 	newToken, newJTI, err := middleware.GenerateToken(h.Secret, claims.UserID, claims.OrgID, claims.Role)
@@ -468,7 +479,7 @@ func (h *UserHandler) ChangeRole(w http.ResponseWriter, r *http.Request) {
 		slog.Error("users: session revocation failed on role change", "user_id", userID, "error", err)
 	}
 	blacklist.ClearSessions(r.Context(), userID)
-	h.clearStatusCache(r.Context(), userID)
+	h.clearStatusCache(r.Context(), userID, claims.OrgID)
 
 	slog.Info("user: role changed", "user_id", userID, "new_role", req.Role, "by", claims.UserID)
 	writeJSON(w, http.StatusOK, map[string]string{"role": req.Role})
@@ -485,16 +496,16 @@ func (h *UserHandler) Enable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.clearStatusCache(r.Context(), userID)
+	h.clearStatusCache(r.Context(), userID, claims.OrgID)
 	slog.Info("user: re-enabled", "user_id", userID, "by", claims.UserID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "active"})
 }
 
 // clearStatusCache removes the cached user status from Redis so the next
 // auth middleware check re-queries the database.
-func (h *UserHandler) clearStatusCache(ctx context.Context, userID string) {
+func (h *UserHandler) clearStatusCache(ctx context.Context, userID, orgID string) {
 	if h.RDB != nil {
-		h.RDB.Del(ctx, "user:status:"+userID)
+		h.RDB.Del(ctx, "user:status:"+userID+":"+orgID)
 	}
 }
 

@@ -123,6 +123,7 @@ func truncateAll(ctx context.Context) {
 		"user_reassignments",
 		"system_settings",
 		"users",
+		"accounts",
 		"orgs",
 	}
 	for _, t := range tables {

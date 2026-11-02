@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 func (s *PgStore) SetupCountUsers(ctx context.Context) (int, error) {
@@ -12,7 +11,9 @@ func (s *PgStore) SetupCountUsers(ctx context.Context) (int, error) {
 	return count, err
 }
 
-func (s *PgStore) CreateAdminSetup(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface{ Encrypt(string) (string, string, string, error) }) (string, string, error) {
+func (s *PgStore) CreateAdminSetup(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface {
+	Encrypt(string) (string, string, string, error)
+}) (string, string, error) {
 	// Create org
 	var orgID string
 	if err := s.q.QueryRow(ctx,
@@ -21,17 +22,19 @@ func (s *PgStore) CreateAdminSetup(ctx context.Context, orgName, email, name, pa
 		return "", "", fmt.Errorf("create org: %w", err)
 	}
 
-	// Create admin user with is_owner = true
+	accountID, err := s.createAccount(ctx, email, name, passwordHash, true)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Create admin membership with is_owner = true.
 	var userID string
 	if err := s.q.QueryRow(ctx,
-		`INSERT INTO users (org_id, email, name, password_hash, role, status, email_verified, is_owner)
-		 VALUES ($1, $2, $3, $4, 'admin', 'active', true, true)
+		`INSERT INTO users (account_id, org_id, email, name, password_hash, role, status, email_verified, is_owner)
+		 VALUES ($1, $2, $3, $4, $5, 'admin', 'active', true, true)
 		 RETURNING id`,
-		orgID, email, name, passwordHash,
+		accountID, orgID, email, name, passwordHash,
 	).Scan(&userID); err != nil {
-		if strings.Contains(err.Error(), "unique") {
-			return "", "", fmt.Errorf("email already registered")
-		}
 		return "", "", fmt.Errorf("create user: %w", err)
 	}
 

@@ -107,6 +107,120 @@ func TestAuth_SignupAndLogin(t *testing.T) {
 	t.Cleanup(func() { cleanupOrg(t, orgID) })
 }
 
+func TestAuth_AddWorkspaceForExistingAccount(t *testing.T) {
+	truncateAll(context.Background())
+
+	h := newAuthHandler()
+	h.StripeKey = "sk_test_multitenant"
+
+	firstOrgID, _ := seedOrg(t, "Existing Workspace", "shared@example.com", "Password1")
+	t.Cleanup(func() { cleanupOrg(t, firstOrgID) })
+
+	ciphertext, iv, tag, err := testEncSvc.Encrypt("re_test_workspace_private_key")
+	if err != nil {
+		t.Fatalf("encrypt first workspace Resend key: %v", err)
+	}
+	if err := testStore.UpdateOrgAPIKey(context.Background(), firstOrgID, ciphertext, iv, tag); err != nil {
+		t.Fatalf("set first workspace Resend key: %v", err)
+	}
+
+	body := `{"email":"shared@example.com","password":"Password1","org_name":"Second Workspace","name":"Ignored Name"}`
+	req := httptest.NewRequest("POST", "/auth/signup", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.Signup(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("Signup(existing account): got status %d, want %d; body: %s", w.Code, http.StatusCreated, w.Body.String())
+	}
+
+	var signupResp struct {
+		User struct {
+			ID    string `json:"id"`
+			OrgID string `json:"org_id"`
+			Email string `json:"email"`
+			Name  string `json:"name"`
+		} `json:"user"`
+	}
+	parseJSON(t, w, &signupResp)
+	secondOrgID := signupResp.User.OrgID
+	if secondOrgID == "" || secondOrgID == firstOrgID || signupResp.User.Email != "shared@example.com" {
+		t.Fatalf("Signup(existing account) returned unexpected membership: %+v", signupResp.User)
+	}
+	t.Cleanup(func() { cleanupOrg(t, secondOrgID) })
+
+	var membershipCount int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM users WHERE account_id = (SELECT id FROM accounts WHERE lower(email) = lower($1))`,
+		"shared@example.com",
+	).Scan(&membershipCount); err != nil {
+		t.Fatalf("count account memberships: %v", err)
+	}
+	if membershipCount != 2 {
+		t.Fatalf("account has %d workspace memberships, want 2", membershipCount)
+	}
+	workspaces, err := testStore.ListAccountMemberships(context.Background(), signupResp.User.ID)
+	if err != nil {
+		t.Fatalf("list account workspaces: %v", err)
+	}
+	if len(workspaces) != 2 || workspaces[0]["id"] != firstOrgID || workspaces[1]["id"] != secondOrgID {
+		t.Fatalf("workspace selector order = %v, want original workspace %s before new workspace %s", workspaces, firstOrgID, secondOrgID)
+	}
+
+	firstSettings, err := testStore.GetOrgSettings(context.Background(), firstOrgID)
+	if err != nil {
+		t.Fatalf("get first workspace settings: %v", err)
+	}
+	secondSettings, err := testStore.GetOrgSettings(context.Background(), secondOrgID)
+	if err != nil {
+		t.Fatalf("get second workspace settings: %v", err)
+	}
+	if firstSettings["has_api_key"] != true || secondSettings["has_api_key"] != false {
+		t.Fatalf("Resend key was not isolated: first=%v second=%v", firstSettings["has_api_key"], secondSettings["has_api_key"])
+	}
+
+	loginBody := `{"email":"shared@example.com","password":"Password1"}`
+	loginReq := httptest.NewRequest("POST", "/auth/login", strings.NewReader(loginBody))
+	loginW := httptest.NewRecorder()
+	h.Login(loginW, loginReq)
+	if loginW.Code != http.StatusOK {
+		t.Fatalf("Login(multiple workspaces): got status %d, want %d; body: %s", loginW.Code, http.StatusOK, loginW.Body.String())
+	}
+	var selectionResp struct {
+		RequiresSelection bool `json:"requires_organization_selection"`
+		Organizations     []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"organizations"`
+	}
+	parseJSON(t, loginW, &selectionResp)
+	if !selectionResp.RequiresSelection || len(selectionResp.Organizations) != 2 {
+		t.Fatalf("Login did not return both workspaces for selection: %+v", selectionResp)
+	}
+
+	selectedBody, err := json.Marshal(map[string]string{
+		"email":    "shared@example.com",
+		"password": "Password1",
+		"org_id":   secondOrgID,
+	})
+	if err != nil {
+		t.Fatalf("marshal selected workspace login: %v", err)
+	}
+	selectedReq := httptest.NewRequest("POST", "/auth/login", strings.NewReader(string(selectedBody)))
+	selectedW := httptest.NewRecorder()
+	h.Login(selectedW, selectedReq)
+	if selectedW.Code != http.StatusOK {
+		t.Fatalf("Login(selected workspace): got status %d, want %d; body: %s", selectedW.Code, http.StatusOK, selectedW.Body.String())
+	}
+	var selectedResp struct {
+		User struct {
+			OrgID string `json:"org_id"`
+		} `json:"user"`
+	}
+	parseJSON(t, selectedW, &selectedResp)
+	if selectedResp.User.OrgID != secondOrgID {
+		t.Fatalf("selected login org_id = %q, want %q", selectedResp.User.OrgID, secondOrgID)
+	}
+}
+
 func TestAuth_DuplicateSignup(t *testing.T) {
 	truncateAll(context.Background())
 
@@ -313,13 +427,13 @@ func TestAuth_ResetPasswordFlow(t *testing.T) {
 	orgID, _ := seedOrg(t, "Reset Org", "integ-reset@example.com", "OldPassword1")
 	t.Cleanup(func() { cleanupOrg(t, orgID) })
 
-	// Set reset token directly in DB (we can't call ForgotPassword without ResendSvc).
-	// The store hashes reset tokens, so store the SHA-256 hex here and submit the
-	// raw token below, exactly as the real email link does.
+	// Set reset token directly on the account (we can't call ForgotPassword
+	// without ResendSvc). The store hashes reset tokens, so store the SHA-256
+	// hex here and submit the raw token below, exactly as the real email link does.
 	rawResetToken := "test-reset-token-123"
 	resetSum := sha256.Sum256([]byte(rawResetToken))
 	_, err := testPool.Exec(context.Background(),
-		"UPDATE users SET reset_token = $1, reset_expires_at = now() + interval '1 hour' WHERE email = $2",
+		"UPDATE accounts SET reset_token = $1, reset_expires_at = now() + interval '1 hour' WHERE lower(email) = lower($2)",
 		hex.EncodeToString(resetSum[:]), "integ-reset@example.com",
 	)
 	if err != nil {

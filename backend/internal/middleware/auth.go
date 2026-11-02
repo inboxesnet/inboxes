@@ -67,36 +67,42 @@ func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool, appURL s
 
 			// Check user is still active (cached in Redis, 2-min TTL)
 			if db != nil {
-				statusKey := "user:status:" + claims.UserID
+				statusKey := "user:status:" + claims.UserID + ":" + claims.OrgID
 				var status string
+				var role string
 				var cached bool
 				if rdb != nil {
 					val, redisErr := rdb.Get(r.Context(), statusKey).Result()
 					if redisErr == nil {
-						status = val
-						cached = true
+						status, role, cached = strings.Cut(val, "|")
+						cached = cached && status != "" && role != ""
 					}
 				}
 				if !cached {
 					var dbStatus string
+					var dbRole string
 					var orgDeletedAt *time.Time
 					dbErr := db.QueryRow(r.Context(),
-						"SELECT u.status, o.deleted_at FROM users u JOIN orgs o ON o.id = u.org_id WHERE u.id = $1",
-						claims.UserID,
-					).Scan(&dbStatus, &orgDeletedAt)
+						`SELECT u.status, u.role::text, o.deleted_at
+						 FROM users u JOIN orgs o ON o.id = u.org_id
+						 WHERE u.id = $1 AND u.org_id = $2`,
+						claims.UserID, claims.OrgID,
+					).Scan(&dbStatus, &dbRole, &orgDeletedAt)
 					if dbErr != nil || dbStatus != "active" || orgDeletedAt != nil {
 						http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 						return
 					}
 					status = dbStatus
+					role = dbRole
 					if rdb != nil {
-						rdb.Set(r.Context(), statusKey, status, 2*time.Minute)
+						rdb.Set(r.Context(), statusKey, status+"|"+role, 2*time.Minute)
 					}
 				}
 				if status != "active" {
 					http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 					return
 				}
+				claims.Role = role
 			}
 
 			// CSRF defense-in-depth: require X-Requested-With on state-changing methods.

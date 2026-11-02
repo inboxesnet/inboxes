@@ -138,7 +138,7 @@ func (s *PgStore) SetupAddress(ctx context.Context, orgID, userID, address, addr
 		if err := s.q.QueryRow(ctx,
 			`INSERT INTO users (org_id, email, name, status)
 			 VALUES ($1, $2, $3, 'placeholder')
-			 ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+			 ON CONFLICT (org_id, (lower(email))) DO UPDATE SET name = EXCLUDED.name
 			 RETURNING id`,
 			orgID, address, name,
 		).Scan(&placeholderUserID); err != nil {

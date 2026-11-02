@@ -141,13 +141,19 @@ Response:
 ```json
 { "org_name": "My Org", "email": "user@example.com", "name": "User Name", "password": "..." }
 ```
-In commercial mode, returns `{"requires_verification": true, "email": "..."}` (201) and sends a 6-digit verification code. In self-hosted mode (no Stripe), returns a user object and sets a JWT cookie. Blocked when users already exist in self-hosted mode.
+In commercial mode, a new email returns `{"requires_verification": true, "email": "..."}` (201) and sends a 6-digit verification code. If the email already belongs to an account, the current password creates an additional workspace, signs the user into it, and returns a user object. Signup returns the same verification response for an existing email when the password does not match, and emails account-specific next steps to avoid exposing account existence. Self-hosted signup remains limited to the first account.
 
 **POST /api/auth/login** body:
 ```json
 { "email": "user@example.com", "password": "..." }
 ```
-Response (200):
+When the account has multiple active workspaces, the first request returns the available choices after validating the password:
+
+```json
+{ "requires_organization_selection": true, "organizations": [{ "id": "...", "name": "Acme" }] }
+```
+
+Send the selected `org_id` with the same credentials to complete login. A successful single-workspace login returns (200):
 ```json
 { "user": {"id": "...", "org_id": "...", "email": "...", "name": "...", "role": "admin"}, "onboarding_completed": true }
 ```
@@ -243,6 +249,33 @@ Accessible even without an active plan.
 }
 ```
 `auto_poll_enabled` and `auto_poll_interval` are only included in self-hosted mode.
+
+### Workspace Memberships
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/orgs/memberships` | List the current account's active workspaces |
+| `POST` | `/api/orgs` | Create a workspace for the signed-in account (commercial mode) |
+| `POST` | `/api/orgs/switch` | Switch the session to one of those workspaces |
+
+**GET /api/orgs/memberships** response:
+```json
+{ "organizations": [{ "id": "...", "name": "Acme", "role": "admin", "current": true, "onboarding_completed": true }] }
+```
+
+**POST /api/orgs/switch** body:
+```json
+{ "org_id": "..." }
+```
+
+The server verifies that the requested workspace is an active membership of the signed-in account before setting a new JWT cookie.
+
+**POST /api/orgs** body:
+```json
+{ "org_name": "Another workspace" }
+```
+
+Creates a workspace with its own plan and empty Resend integration settings, then sets a session for its admin membership. Limited to 5 creations per signed-in membership per hour.
 
 **PATCH /api/orgs/settings** body (all fields optional):
 ```json

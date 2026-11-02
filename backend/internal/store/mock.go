@@ -23,20 +23,27 @@ type MockStore struct {
 	WithTxOptsFn func(ctx context.Context, opts pgx.TxOptions, fn func(Store) error) error
 
 	// ---- Auth ----
-	CountUsersFn             func(ctx context.Context) (int, error)
-	CreateOrgAndAdminFn      func(ctx context.Context, orgName, email, name, passwordHash string, emailVerified bool, isOwner bool) (string, string, error)
-	SetVerificationCodeFn    func(ctx context.Context, userID, code string, expires time.Time) error
-	GetUserByEmailFn         func(ctx context.Context, email string) (id, orgID, name, role, status, passwordHash string, emailVerified bool, err error)
-	UpdateSignatureFn        func(ctx context.Context, userID, signatureHTML string) error
-	GetUndoSendSecondsFn     func(ctx context.Context, userID string) (int, error)
-	SetUndoSendSecondsFn     func(ctx context.Context, userID string, seconds int) error
-	GetOnboardingCompletedFn func(ctx context.Context, orgID string) (bool, error)
-	SetResetTokenFn          func(ctx context.Context, email, token string, expires time.Time) (int64, error)
-	ResetPasswordFn          func(ctx context.Context, passwordHash, token string) (string, error)
-	ClaimInviteFn            func(ctx context.Context, passwordHash, name, token string) (string, string, string, string, error)
-	VerifyEmailFn            func(ctx context.Context, email, code string) (string, string, string, string, error)
-	ResendVerificationCodeFn func(ctx context.Context, email, code string, expires time.Time) (int64, error)
-	ValidateInviteTokenFn    func(ctx context.Context, token string) (string, string, string, error)
+	CountUsersFn               func(ctx context.Context) (int, error)
+	CreateOrgAndAdminFn        func(ctx context.Context, orgName, email, name, passwordHash string, emailVerified bool, isOwner bool) (string, string, error)
+	CreateOrgForAccountFn      func(ctx context.Context, orgName, email string) (string, string, error)
+	CreateWorkspaceForUserFn   func(ctx context.Context, userID, orgName string) (string, string, error)
+	SetVerificationCodeFn      func(ctx context.Context, userID, code string, expires time.Time) error
+	GetLoginMembershipsFn      func(ctx context.Context, email string) ([]LoginMembership, error)
+	GetUserByEmailFn           func(ctx context.Context, email string) (id, orgID, name, role, status, passwordHash string, emailVerified bool, err error)
+	UpdateSignatureFn          func(ctx context.Context, userID, signatureHTML string) error
+	GetUndoSendSecondsFn       func(ctx context.Context, userID string) (int, error)
+	SetUndoSendSecondsFn       func(ctx context.Context, userID string, seconds int) error
+	GetOnboardingCompletedFn   func(ctx context.Context, orgID string) (bool, error)
+	SetResetTokenFn            func(ctx context.Context, email, token string, expires time.Time) (int64, error)
+	ResetPasswordFn            func(ctx context.Context, passwordHash, token string) (string, error)
+	ResetPasswordMembershipsFn func(ctx context.Context, passwordHash, token string) ([]string, error)
+	ClaimInviteFn              func(ctx context.Context, passwordHash, name, token string) (string, string, string, string, error)
+	VerifyEmailFn              func(ctx context.Context, email, code string) (string, string, string, string, error)
+	ResendVerificationCodeFn   func(ctx context.Context, email, code string, expires time.Time) (int64, error)
+	ValidateInviteTokenFn      func(ctx context.Context, token string) (string, string, string, bool, error)
+	ListAccountUserIDsFn       func(ctx context.Context, userID string) ([]string, error)
+	ListAccountMembershipsFn   func(ctx context.Context, userID string) ([]map[string]any, error)
+	GetAccountMembershipFn     func(ctx context.Context, userID, orgID string) (LoginMembership, error)
 
 	// ---- Threads ----
 	GetUserAliasAddressesFn    func(ctx context.Context, userID string) ([]string, error)
@@ -280,6 +287,20 @@ func (m *MockStore) CreateOrgAndAdmin(ctx context.Context, orgName, email, name,
 	return "", "", nil
 }
 
+func (m *MockStore) CreateOrgForAccount(ctx context.Context, orgName, email string) (string, string, error) {
+	if m.CreateOrgForAccountFn != nil {
+		return m.CreateOrgForAccountFn(ctx, orgName, email)
+	}
+	return "", "", nil
+}
+
+func (m *MockStore) CreateWorkspaceForUser(ctx context.Context, userID, orgName string) (string, string, error) {
+	if m.CreateWorkspaceForUserFn != nil {
+		return m.CreateWorkspaceForUserFn(ctx, userID, orgName)
+	}
+	return "", "", nil
+}
+
 func (m *MockStore) SetVerificationCode(ctx context.Context, userID, code string, expires time.Time) error {
 	if m.SetVerificationCodeFn != nil {
 		return m.SetVerificationCodeFn(ctx, userID, code, expires)
@@ -308,11 +329,26 @@ func (m *MockStore) UpdateSignature(ctx context.Context, userID, signatureHTML s
 	return nil
 }
 
-func (m *MockStore) GetUserByEmail(ctx context.Context, email string) (string, string, string, string, string, string, bool, error) {
-	if m.GetUserByEmailFn != nil {
-		return m.GetUserByEmailFn(ctx, email)
+func (m *MockStore) GetLoginMemberships(ctx context.Context, email string) ([]LoginMembership, error) {
+	if m.GetLoginMembershipsFn != nil {
+		return m.GetLoginMembershipsFn(ctx, email)
 	}
-	return "", "", "", "", "", "", false, nil
+	if m.GetUserByEmailFn != nil {
+		id, orgID, name, role, status, passwordHash, emailVerified, err := m.GetUserByEmailFn(ctx, email)
+		if err != nil {
+			return nil, err
+		}
+		membership := LoginMembership{UserID: id, OrgID: orgID, Name: name, Role: role,
+			Status: status, PasswordHash: passwordHash, EmailVerified: emailVerified}
+		if m.GetOnboardingCompletedFn != nil {
+			membership.OnboardingCompleted, err = m.GetOnboardingCompleted(ctx, orgID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return []LoginMembership{membership}, nil
+	}
+	return nil, nil
 }
 
 func (m *MockStore) GetOnboardingCompleted(ctx context.Context, orgID string) (bool, error) {
@@ -336,6 +372,20 @@ func (m *MockStore) ResetPassword(ctx context.Context, passwordHash, token strin
 	return "", nil
 }
 
+func (m *MockStore) ResetPasswordMemberships(ctx context.Context, passwordHash, token string) ([]string, error) {
+	if m.ResetPasswordMembershipsFn != nil {
+		return m.ResetPasswordMembershipsFn(ctx, passwordHash, token)
+	}
+	if m.ResetPasswordFn != nil {
+		id, err := m.ResetPasswordFn(ctx, passwordHash, token)
+		if err != nil || id == "" {
+			return nil, err
+		}
+		return []string{id}, nil
+	}
+	return nil, nil
+}
+
 func (m *MockStore) ClaimInvite(ctx context.Context, passwordHash, name, token string) (string, string, string, string, error) {
 	if m.ClaimInviteFn != nil {
 		return m.ClaimInviteFn(ctx, passwordHash, name, token)
@@ -357,11 +407,32 @@ func (m *MockStore) ResendVerificationCode(ctx context.Context, email, code stri
 	return 0, nil
 }
 
-func (m *MockStore) ValidateInviteToken(ctx context.Context, token string) (string, string, string, error) {
+func (m *MockStore) ValidateInviteToken(ctx context.Context, token string) (string, string, string, bool, error) {
 	if m.ValidateInviteTokenFn != nil {
 		return m.ValidateInviteTokenFn(ctx, token)
 	}
-	return "", "", "", nil
+	return "", "", "", false, nil
+}
+
+func (m *MockStore) ListAccountUserIDs(ctx context.Context, userID string) ([]string, error) {
+	if m.ListAccountUserIDsFn != nil {
+		return m.ListAccountUserIDsFn(ctx, userID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) ListAccountMemberships(ctx context.Context, userID string) ([]map[string]any, error) {
+	if m.ListAccountMembershipsFn != nil {
+		return m.ListAccountMembershipsFn(ctx, userID)
+	}
+	return nil, nil
+}
+
+func (m *MockStore) GetAccountMembership(ctx context.Context, userID, orgID string) (LoginMembership, error) {
+	if m.GetAccountMembershipFn != nil {
+		return m.GetAccountMembershipFn(ctx, userID, orgID)
+	}
+	return LoginMembership{}, nil
 }
 
 // ===========================================================================

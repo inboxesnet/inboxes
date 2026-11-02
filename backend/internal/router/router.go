@@ -66,7 +66,7 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 	contacts := &handler.ContactHandler{Store: st}
 	attachments := &handler.AttachmentHandler{Store: st}
 	drafts := &handler.DraftHandler{Store: st, ResendSvc: resendSvc, Bus: bus, RDB: rdb}
-	orgs := &handler.OrgHandler{Store: st, RDB: rdb, EncSvc: encSvc, ResendSvc: resendSvc, Bus: bus, StripeKey: stripeKey, LimiterMap: limiterMap}
+	orgs := &handler.OrgHandler{Store: st, RDB: rdb, Secret: secret, EncSvc: encSvc, ResendSvc: resendSvc, Bus: bus, StripeKey: stripeKey, LimiterMap: limiterMap, AppURL: appURL}
 	labels := &handler.LabelHandler{Store: st}
 	syncH := &handler.SyncHandler{Store: st, RDB: rdb}
 	events := &handler.EventHandler{Store: st, CatchupMaxAge: cfg.EventCatchupMaxAge}
@@ -166,6 +166,9 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 		r.Post("/api/auth/logout", auth.Logout)
 
 		// Org settings
+		r.Get("/api/orgs/memberships", orgs.ListMemberships)
+		r.With(middleware.RateLimitByUser(rdb, 5, 60*60)).Post("/api/orgs", orgs.Create)
+		r.Post("/api/orgs/switch", orgs.Switch)
 		r.Get("/api/orgs/settings", orgs.GetSettings)
 		r.With(middleware.RequireAdmin).Patch("/api/orgs/settings", orgs.UpdateSettings)
 

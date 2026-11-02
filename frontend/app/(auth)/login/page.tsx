@@ -16,6 +16,17 @@ import {
 } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 
+interface LoginOrganization {
+  id: string;
+  name: string;
+}
+
+interface LoginResponse {
+  onboarding_completed: boolean;
+  requires_organization_selection?: boolean;
+  organizations?: LoginOrganization[];
+}
+
 export default function LoginPage() {
   return (
     <Suspense>
@@ -32,6 +43,8 @@ function LoginForm() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSignup, setShowSignup] = useState(true);
+  const [organizations, setOrganizations] = useState<LoginOrganization[]>([]);
+  const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
 
   // Only same-origin relative paths are valid post-login destinations. Reject a
   // leading backslash too: browsers read "/\evil.com" as "//evil.com" and would
@@ -73,10 +86,19 @@ function LoginForm() {
     setLoading(true);
 
     try {
-      const res = await api.post<{ onboarding_completed: boolean }>(
+      const res = await api.post<LoginResponse>(
         "/api/auth/login",
-        { email, password }
+        {
+          email,
+          password,
+          ...(selectedOrganizationId ? { org_id: selectedOrganizationId } : {}),
+        }
       );
+      if (res.requires_organization_selection && res.organizations?.length) {
+        setOrganizations(res.organizations);
+        setSelectedOrganizationId("");
+        return;
+      }
       if (next) {
         router.push(next);
       } else if (res.onboarding_completed) {
@@ -146,11 +168,37 @@ function LoginForm() {
               required
             />
           </div>
+          {organizations.length > 0 && (
+            <div className="space-y-2">
+              <label htmlFor="organization" className="text-sm font-medium">
+                Workspace
+              </label>
+              <select
+                id="organization"
+                value={selectedOrganizationId}
+                onChange={(e) => setSelectedOrganizationId(e.target.value)}
+                required
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <option value="" disabled>
+                  Choose a workspace
+                </option>
+                {organizations.map((organization) => (
+                  <option key={organization.id} value={organization.id}>
+                    {organization.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </CardContent>
         <CardFooter className="flex flex-col space-y-4">
-          <Button className="w-full" disabled={loading}>
+          <Button
+            className="w-full"
+            disabled={loading || (organizations.length > 0 && !selectedOrganizationId)}
+          >
             {loading ? <Spinner className="mr-2" /> : null}
-            Sign in
+            {organizations.length > 0 ? "Continue" : "Sign in"}
           </Button>
           {showSignup && (
             <p className="text-sm text-muted-foreground text-center">

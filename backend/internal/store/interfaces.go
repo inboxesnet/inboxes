@@ -59,18 +59,38 @@ type Store interface {
 type AuthStore interface {
 	CountUsers(ctx context.Context) (int, error)
 	CreateOrgAndAdmin(ctx context.Context, orgName, email, name, passwordHash string, emailVerified bool, isOwner bool) (orgID, userID string, err error)
+	CreateOrgForAccount(ctx context.Context, orgName, email string) (orgID, userID string, err error)
+	CreateWorkspaceForUser(ctx context.Context, userID, orgName string) (orgID, newUserID string, err error)
 	SetVerificationCode(ctx context.Context, userID, code string, expires time.Time) error
-	GetUserByEmail(ctx context.Context, email string) (id, orgID, name, role, status, passwordHash string, emailVerified bool, err error)
+	GetLoginMemberships(ctx context.Context, email string) ([]LoginMembership, error)
 	UpdateSignature(ctx context.Context, userID, signatureHTML string) error
 	GetUndoSendSeconds(ctx context.Context, userID string) (int, error)
 	SetUndoSendSeconds(ctx context.Context, userID string, seconds int) error
 	GetOnboardingCompleted(ctx context.Context, orgID string) (bool, error)
 	SetResetToken(ctx context.Context, email, token string, expires time.Time) (rowsAffected int64, err error)
 	ResetPassword(ctx context.Context, passwordHash, token string) (userID string, err error)
+	ResetPasswordMemberships(ctx context.Context, passwordHash, token string) (userIDs []string, err error)
 	ClaimInvite(ctx context.Context, passwordHash, name, token string) (userID, orgID, email, role string, err error)
 	VerifyEmail(ctx context.Context, email, code string) (userID, orgID, name, role string, err error)
 	ResendVerificationCode(ctx context.Context, email, code string, expires time.Time) (int64, error)
-	ValidateInviteToken(ctx context.Context, token string) (email, name, status string, err error)
+	ValidateInviteToken(ctx context.Context, token string) (email, name, status string, hasAccount bool, err error)
+	ListAccountUserIDs(ctx context.Context, userID string) ([]string, error)
+	ListAccountMemberships(ctx context.Context, userID string) ([]map[string]any, error)
+	GetAccountMembership(ctx context.Context, userID, orgID string) (membership LoginMembership, err error)
+}
+
+// LoginMembership is an account's organization-scoped user record plus the
+// organization details needed to select an active workspace after login.
+type LoginMembership struct {
+	UserID              string
+	OrgID               string
+	Name                string
+	Role                string
+	Status              string
+	PasswordHash        string
+	EmailVerified       bool
+	OrgName             string
+	OnboardingCompleted bool
 }
 
 // ---- Threads ----
@@ -294,7 +314,9 @@ type OnboardingStore interface {
 
 type SetupStore interface {
 	SetupCountUsers(ctx context.Context) (int, error)
-	CreateAdminSetup(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface{ Encrypt(string) (string, string, string, error) }) (orgID, userID string, err error)
+	CreateAdminSetup(ctx context.Context, orgName, email, name, passwordHash, systemResendKey, systemFromAddress, systemFromName string, encSvc interface {
+		Encrypt(string) (string, string, string, error)
+	}) (orgID, userID string, err error)
 	UpsertSystemSetting(ctx context.Context, key, value string) error
 	GetUserEmail(ctx context.Context, userID string) (string, error)
 }

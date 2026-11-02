@@ -17,11 +17,98 @@ import (
 type OrgHandler struct {
 	Store      store.Store
 	RDB        *redis.Client
+	Secret     string
+	AppURL     string
 	EncSvc     *service.EncryptionService
 	ResendSvc  *service.ResendService
 	Bus        *event.Bus
 	StripeKey  string
 	LimiterMap *queue.OrgLimiterMap
+}
+
+func (h *OrgHandler) ListMemberships(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	organizations, err := h.Store.ListAccountMemberships(r.Context(), claims.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list organizations")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"organizations": organizations})
+}
+
+func (h *OrgHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if h.StripeKey == "" {
+		writeError(w, http.StatusForbidden, "additional workspaces are only available in commercial mode")
+		return
+	}
+	claims := middleware.GetCurrentUser(r.Context())
+	var req struct {
+		Name string `json:"org_name"`
+	}
+	if err := readJSON(r, &req); err != nil || req.Name == "" {
+		writeError(w, http.StatusBadRequest, "org_name is required")
+		return
+	}
+	if err := validateLength(req.Name, "org_name", 255); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var orgID, userID string
+	if err := h.Store.WithTx(r.Context(), func(tx store.Store) error {
+		var createErr error
+		orgID, userID, createErr = tx.CreateWorkspaceForUser(r.Context(), claims.UserID, req.Name)
+		return createErr
+	}); err != nil {
+		slog.Error("orgs: failed to create workspace", "user_id", claims.UserID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to create workspace")
+		return
+	}
+
+	token, jti, err := middleware.GenerateToken(h.Secret, userID, orgID, "admin")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+	middleware.SetTokenCookie(w, token, h.AppURL)
+	service.NewTokenBlacklist(h.RDB).RegisterSession(r.Context(), userID, jti)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"user": map[string]string{
+			"id": userID, "org_id": orgID, "role": "admin",
+		},
+		"onboarding_completed": false,
+	})
+}
+
+func (h *OrgHandler) Switch(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.GetCurrentUser(r.Context())
+	var req struct {
+		OrgID string `json:"org_id"`
+	}
+	if err := readJSON(r, &req); err != nil || req.OrgID == "" {
+		writeError(w, http.StatusBadRequest, "org_id is required")
+		return
+	}
+
+	membership, err := h.Store.GetAccountMembership(r.Context(), claims.UserID, req.OrgID)
+	if err != nil || membership.Status != "active" {
+		writeError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+	token, jti, err := middleware.GenerateToken(h.Secret, membership.UserID, membership.OrgID, membership.Role)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+	middleware.SetTokenCookie(w, token, h.AppURL)
+	service.NewTokenBlacklist(h.RDB).RegisterSession(r.Context(), membership.UserID, jti)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": map[string]string{
+			"id": membership.UserID, "org_id": membership.OrgID,
+			"name": membership.Name, "role": membership.Role,
+		},
+		"onboarding_completed": membership.OnboardingCompleted,
+	})
 }
 
 func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
@@ -34,20 +121,20 @@ func (h *OrgHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"id":                   claims.OrgID,
-		"name":                 settings["name"],
-		"onboarding_completed": settings["onboarding_completed"],
-		"has_api_key":          settings["has_api_key"],
-		"api_key_status":       settings["api_key_status"],
-		"api_key_checked_at":   settings["api_key_checked_at"],
-		"has_webhook":          settings["has_webhook"],
-		"last_webhook_at":      settings["last_webhook_at"],
-		"billing_enabled":      h.StripeKey != "",
-		"resend_rps":           settings["resend_rps"],
-		"forwarding_enabled":   settings["forwarding_enabled"],
-		"auto_reply_enabled":   settings["auto_reply_enabled"],
+		"id":                          claims.OrgID,
+		"name":                        settings["name"],
+		"onboarding_completed":        settings["onboarding_completed"],
+		"has_api_key":                 settings["has_api_key"],
+		"api_key_status":              settings["api_key_status"],
+		"api_key_checked_at":          settings["api_key_checked_at"],
+		"has_webhook":                 settings["has_webhook"],
+		"last_webhook_at":             settings["last_webhook_at"],
+		"billing_enabled":             h.StripeKey != "",
+		"resend_rps":                  settings["resend_rps"],
+		"forwarding_enabled":          settings["forwarding_enabled"],
+		"auto_reply_enabled":          settings["auto_reply_enabled"],
 		"external_forwarding_allowed": settings["external_forwarding_allowed"],
-		"agent_send_enabled":   settings["agent_send_enabled"],
+		"agent_send_enabled":          settings["agent_send_enabled"],
 	}
 	if h.StripeKey == "" {
 		resp["auto_poll_enabled"] = settings["auto_poll_enabled"]
@@ -60,15 +147,15 @@ func (h *OrgHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	var req struct {
-		Name             string `json:"name"`
-		APIKey           string `json:"api_key"`
-		ResendRPS        *int   `json:"resend_rps"`
-		AutoPollEnabled  *bool  `json:"auto_poll_enabled"`
-		AutoPollInterval *int   `json:"auto_poll_interval"`
-		ForwardingEnabled         *bool `json:"forwarding_enabled"`
-		AutoReplyEnabled          *bool `json:"auto_reply_enabled"`
-		ExternalForwardingAllowed *bool `json:"external_forwarding_allowed"`
-		AgentSendEnabled          *bool `json:"agent_send_enabled"`
+		Name                      string `json:"name"`
+		APIKey                    string `json:"api_key"`
+		ResendRPS                 *int   `json:"resend_rps"`
+		AutoPollEnabled           *bool  `json:"auto_poll_enabled"`
+		AutoPollInterval          *int   `json:"auto_poll_interval"`
+		ForwardingEnabled         *bool  `json:"forwarding_enabled"`
+		AutoReplyEnabled          *bool  `json:"auto_reply_enabled"`
+		ExternalForwardingAllowed *bool  `json:"external_forwarding_allowed"`
+		AgentSendEnabled          *bool  `json:"agent_send_enabled"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -226,7 +313,7 @@ func (h *OrgHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			}
 			orgBlacklist.ClearSessions(ctx, uid)
 			if h.RDB != nil {
-				h.RDB.Del(ctx, "user:status:"+uid)
+				h.RDB.Del(ctx, "user:status:"+uid+":"+claims.OrgID)
 			}
 		}
 	}
@@ -301,7 +388,7 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 			bl.RevokeAllForUser(ctx, uid)
 			bl.ClearSessions(ctx, uid)
 			if h.RDB != nil {
-				h.RDB.Del(ctx, "user:status:"+uid)
+				h.RDB.Del(ctx, "user:status:"+uid+":"+claims.OrgID)
 			}
 		}
 	}
@@ -316,4 +403,3 @@ func (h *OrgHandler) HardDelete(w http.ResponseWriter, r *http.Request) {
 	slog.Info("org: deleted", "org_id", claims.OrgID, "by", claims.UserID)
 	w.WriteHeader(http.StatusNoContent)
 }
-

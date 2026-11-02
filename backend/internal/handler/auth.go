@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -45,6 +46,7 @@ type signupRequest struct {
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	OrgID    string `json:"org_id"`
 }
 
 type forgotPasswordRequest struct {
@@ -101,6 +103,91 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A verified account can register another workspace with its existing
+	// password. This creates a new organization-scoped user record and never
+	// copies organization integrations such as the Resend API key.
+	if h.StripeKey != "" {
+		existing, lookupErr := h.Store.GetLoginMemberships(ctx, req.Email)
+		if lookupErr != nil {
+			slog.Error("auth: account lookup failed during workspace signup", "error", lookupErr)
+			writeError(w, http.StatusInternalServerError, "failed to create workspace")
+			return
+		}
+		if len(existing) > 0 {
+			passwordHash := existing[0].PasswordHash
+			if passwordHash == "" || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)) != nil {
+				h.respondExistingAccountSignup(ctx, w, req.Email)
+				return
+			}
+			if !existing[0].EmailVerified {
+				code := generateVerificationCode()
+				expires := time.Now().Add(15 * time.Minute)
+				updated, err := h.Store.ResendVerificationCode(ctx, req.Email, code, expires)
+				if err != nil {
+					slog.Error("auth: failed to refresh verification code", "email", req.Email, "error", err)
+				}
+				if err != nil || updated == 0 {
+					h.respondExistingAccountSignup(ctx, w, req.Email)
+					return
+				}
+				from := h.ResendSvc.GetSystemFrom(ctx)
+				if from == "" {
+					from = "noreply@inboxes.net"
+				}
+				if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+					"from": from, "to": []string{req.Email}, "subject": "Verify your email",
+					"html": fmt.Sprintf("<p>Your verification code is: <strong>%s</strong></p><p>This code expires in 15 minutes.</p>", code),
+				}); err != nil {
+					slog.Error("auth: failed to send verification email", "email", req.Email, "error", err)
+				}
+				writeJSON(w, http.StatusCreated, map[string]interface{}{
+					"requires_verification": true,
+					"email":                 req.Email,
+				})
+				return
+			}
+			active := false
+			for _, membership := range existing {
+				if membership.Status == "active" {
+					active = true
+					break
+				}
+			}
+			if !active {
+				h.respondExistingAccountSignup(ctx, w, req.Email)
+				return
+			}
+
+			var orgID, userID string
+			if err := h.Store.WithTx(ctx, func(tx store.Store) error {
+				var createErr error
+				orgID, userID, createErr = tx.CreateOrgForAccount(ctx, req.OrgName, req.Email)
+				return createErr
+			}); err != nil {
+				slog.Error("auth: failed to add workspace to account", "email", req.Email, "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to create workspace")
+				return
+			}
+
+			token, jti, err := middleware.GenerateToken(h.Secret, userID, orgID, "admin")
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to create session")
+				return
+			}
+			middleware.SetTokenCookie(w, token, h.AppURL)
+			service.NewTokenBlacklist(h.RDB).RegisterSession(ctx, userID, jti)
+			slog.Info("auth: workspace added to account", "email", req.Email, "org_id", orgID)
+			writeJSON(w, http.StatusCreated, map[string]any{
+				"user": map[string]string{
+					"id": userID, "org_id": orgID, "email": req.Email,
+					"name": existing[0].Name, "role": "admin",
+				},
+				"onboarding_completed": false,
+			})
+			return
+		}
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to hash password")
@@ -141,26 +228,9 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	})
 	if txErr != nil {
 		if strings.Contains(txErr.Error(), "email already registered") {
-			// In hosted mode signup is public, so a distinct 409 lets anyone
-			// enumerate which emails have accounts. Return the same shape a new
-			// signup returns and notify the real owner instead of leaking.
+			// Another signup may have created the account after the lookup above.
 			if h.StripeKey != "" {
-				from := h.ResendSvc.GetSystemFrom(ctx)
-				if from == "" {
-					from = "noreply@inboxes.net"
-				}
-				if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
-					"from":    from,
-					"to":      []string{req.Email},
-					"subject": "You already have an account",
-					"html":    "<p>Someone tried to create an account with this email. You already have one. If this was you, please log in instead.</p>",
-				}); err != nil {
-					slog.Error("auth: failed to send existing-account notice", "error", err)
-				}
-				writeJSON(w, http.StatusCreated, map[string]interface{}{
-					"requires_verification": true,
-					"email":                 req.Email,
-				})
+				h.respondExistingAccountSignup(ctx, w, req.Email)
 				return
 			}
 			writeError(w, http.StatusConflict, "email already registered")
@@ -214,6 +284,27 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// respondExistingAccountSignup keeps public signup responses consistent for
+// unknown emails and existing accounts whose credentials are not valid.
+func (h *AuthHandler) respondExistingAccountSignup(ctx context.Context, w http.ResponseWriter, email string) {
+	if h.ResendSvc != nil {
+		from := h.ResendSvc.GetSystemFrom(ctx)
+		if from == "" {
+			from = "noreply@inboxes.net"
+		}
+		if _, err := h.ResendSvc.SystemFetch(ctx, "POST", "/emails", map[string]interface{}{
+			"from": from, "to": []string{email}, "subject": "Your Inboxes account",
+			"html": "<p>If you already have an Inboxes account, sign in with its existing password to create a workspace. If this wasn't you, you can ignore this message.</p>",
+		}); err != nil {
+			slog.Error("auth: failed to send existing-account notice", "error", err)
+		}
+	}
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"requires_verification": true,
+		"email":                 email,
+	})
+}
+
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
 	if err := readJSON(r, &req); err != nil {
@@ -235,34 +326,68 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	userID, orgID, name, role, status, passwordHash, emailVerified, err := h.Store.GetUserByEmail(ctx, req.Email)
+	memberships, err := h.Store.GetLoginMemberships(ctx, req.Email)
 	if err != nil {
-		// Constant-time comparison to prevent timing attacks revealing email existence
+		// Constant-time comparison to prevent timing attacks revealing email existence.
 		bcrypt.CompareHashAndPassword(dummyHash, []byte(req.Password))
 		slog.Warn("auth: login failed", "email", req.Email, "reason", "user not found")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
-	// Always compare the password first so the response and timing do not reveal
-	// whether an account exists or is inactive (account enumeration defense).
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+	if len(memberships) == 0 || memberships[0].PasswordHash == "" {
+		bcrypt.CompareHashAndPassword(dummyHash, []byte(req.Password))
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	// The account has one shared password hash; compare it once before
+	// returning any organization names or membership details.
+	if err := bcrypt.CompareHashAndPassword([]byte(memberships[0].PasswordHash), []byte(req.Password)); err != nil {
 		slog.Warn("auth: login failed", "email", req.Email, "reason", "bad password")
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
-	if status != "active" {
-		slog.Warn("auth: login failed", "email", req.Email, "reason", "inactive account")
-		writeError(w, http.StatusUnauthorized, "invalid credentials")
-		return
-	}
-
 	// In hosted mode, require email verification
-	if h.StripeKey != "" && !emailVerified {
+	if h.StripeKey != "" && !memberships[0].EmailVerified {
 		slog.Warn("auth: login failed", "email", req.Email, "reason", "email not verified")
 		writeError(w, http.StatusForbidden, "email_not_verified")
 		return
 	}
+
+	active := make([]store.LoginMembership, 0, len(memberships))
+	for _, membership := range memberships {
+		if membership.Status == "active" {
+			active = append(active, membership)
+		}
+	}
+	if req.OrgID != "" {
+		selected := active[:0]
+		for _, membership := range active {
+			if membership.OrgID == req.OrgID {
+				selected = append(selected, membership)
+			}
+		}
+		active = selected
+	}
+	if len(active) == 0 {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	if req.OrgID == "" && len(active) > 1 {
+		organizations := make([]map[string]string, 0, len(active))
+		for _, membership := range active {
+			organizations = append(organizations, map[string]string{
+				"id": membership.OrgID, "name": membership.OrgName,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"requires_organization_selection": true,
+			"organizations":                   organizations,
+		})
+		return
+	}
+	membership := active[0]
+	userID, orgID, name, role := membership.UserID, membership.OrgID, membership.Name, membership.Role
 
 	token, jti, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
 	if err != nil {
@@ -277,9 +402,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("auth: login", "email", req.Email)
 
-	onboardingCompleted, onbErr := h.Store.GetOnboardingCompleted(ctx, orgID)
-	warnIfErr(onbErr, "auth: failed to check onboarding status", "org_id", orgID)
-
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user": map[string]string{
 			"id":     userID,
@@ -288,7 +410,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 			"name":   name,
 			"role":   role,
 		},
-		"onboarding_completed": onboardingCompleted,
+		"onboarding_completed": membership.OnboardingCompleted,
 	})
 }
 
@@ -385,7 +507,7 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	resetUserID, err := h.Store.ResetPassword(ctx, string(hash), req.Token)
+	resetUserIDs, err := h.Store.ResetPasswordMemberships(ctx, string(hash), req.Token)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or expired reset token")
 		return
@@ -393,16 +515,16 @@ func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 
 	// Revoke all existing tokens — password reset implies possible compromise
 	blacklist := service.NewTokenBlacklist(h.RDB)
-	if err := blacklist.RevokeAllForUser(ctx, resetUserID); err != nil {
-		slog.Error("auth: session revocation failed during password reset", "user_id", resetUserID, "error", err)
-	}
-	blacklist.ClearSessions(ctx, resetUserID)
-
-	// Session revocation lives in Redis, but MCP agent tokens live in the DB
-	// and mint fresh JWTs on every call, so the blacklist never catches them.
-	// Revoke them here so recovery removes stolen agent keys too.
-	if err := h.Store.RevokeAgentTokensForUser(ctx, resetUserID); err != nil {
-		slog.Error("auth: agent token revocation failed during password reset", "user_id", resetUserID, "error", err)
+	for _, userID := range resetUserIDs {
+		if err := blacklist.RevokeAllForUser(ctx, userID); err != nil {
+			slog.Error("auth: session revocation failed during password reset", "user_id", userID, "error", err)
+		}
+		blacklist.ClearSessions(ctx, userID)
+		// MCP agent tokens mint fresh JWTs and are not covered by the Redis
+		// session blacklist, so revoke every membership's agent credentials.
+		if err := h.Store.RevokeAgentTokensForUser(ctx, userID); err != nil {
+			slog.Error("auth: agent token revocation failed during password reset", "user_id", userID, "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "password reset successfully"})
@@ -414,19 +536,25 @@ func (h *AuthHandler) Claim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Token == "" || req.Password == "" {
-		writeError(w, http.StatusBadRequest, "token and password are required")
+	if req.Token == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
 		return
 	}
-	if err := validateNewPassword(r.Context(), req.Password); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	if req.Password != "" {
+		if err := validateNewPassword(r.Context(), req.Password); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to hash password")
-		return
+	var hash []byte
+	if req.Password != "" {
+		generatedHash, hashErr := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if hashErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to hash password")
+			return
+		}
+		hash = generatedHash
 	}
 
 	ctx := r.Context()
@@ -555,7 +683,7 @@ func (h *AuthHandler) ValidateClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	email, name, status, err := h.Store.ValidateInviteToken(ctx, token)
+	email, name, status, hasAccount, err := h.Store.ValidateInviteToken(ctx, token)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(w, http.StatusBadRequest, "invalid or expired invite token")
@@ -566,8 +694,9 @@ func (h *AuthHandler) ValidateClaim(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"email":  email,
-		"name":   name,
-		"status": status,
+		"email":       email,
+		"name":        name,
+		"status":      status,
+		"has_account": hasAccount,
 	})
 }

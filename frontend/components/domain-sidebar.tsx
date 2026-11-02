@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
 import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
 import { DndContext, DragOverlay, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from "@dnd-kit/core";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, horizontalListSortingStrategy, useSortable, arrayMove } from "@dnd-kit/sortable";
@@ -11,12 +12,13 @@ import { useDroppable } from "@dnd-kit/core";
 import { useTheme } from "next-themes";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDomains } from "@/contexts/domain-context";
+import { useAppConfig } from "@/contexts/app-config-context";
 import { useNotifications } from "@/contexts/notification-context";
 import { DomainIcon } from "@/components/domain-icon";
 import { nextTheme, themeLabel, ThemeIcon } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 import { queryKeys } from "@/lib/query-keys";
-import type { Domain } from "@/lib/types";
+import type { Domain, Label } from "@/lib/types";
 import {
   Inbox,
   Send,
@@ -45,7 +47,62 @@ interface CustomLabel {
   id: string;
   name: string;
 }
-import type { Label } from "@/lib/types";
+
+interface OrganizationMembership {
+  id: string;
+  name: string;
+  role: string;
+  current: boolean;
+  onboarding_completed: boolean;
+}
+
+function OrganizationSwitcher({
+  organizations,
+  currentOrganizationId,
+  switching,
+  showCreate,
+  onChange,
+}: {
+  organizations: OrganizationMembership[];
+  currentOrganizationId: string;
+  switching: boolean;
+  showCreate: boolean;
+  onChange: (organizationId: string) => void;
+}) {
+  if (organizations.length <= 1 && !showCreate) return null;
+
+  return (
+    <div className="px-4 py-3 border-b space-y-1.5">
+      {organizations.length > 1 && (
+        <label className="block text-xs text-muted-foreground">
+          Workspace
+          <select
+            aria-label="Workspace"
+            value={currentOrganizationId}
+            onChange={(event) => onChange(event.target.value)}
+            disabled={switching}
+            className="mt-1.5 h-9 w-full min-w-0 rounded-md border bg-background px-2.5 text-sm text-foreground disabled:opacity-50"
+          >
+            {organizations.map((organization) => (
+              <option key={organization.id} value={organization.id}>
+                {organization.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {showCreate && (
+        <Link
+          href="/signup"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          Create workspace
+        </Link>
+      )}
+    </div>
+  );
+}
 
 const LABELS: { key: Label; label: string; icon: React.ReactNode }[] = [
   { key: "inbox", label: "Inbox", icon: <Inbox className="h-4 w-4" /> },
@@ -196,7 +253,33 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
   const { domains, activeDomain, setActiveDomainId, unreadCounts } =
     useDomains();
   const { connected } = useNotifications();
+  const { commercial } = useAppConfig();
   const qc = useQueryClient();
+
+  const { data: memberships } = useQuery({
+    queryKey: ["organizations", "memberships"],
+    queryFn: () =>
+      api.get<{ organizations: OrganizationMembership[] }>("/api/orgs/memberships"),
+    staleTime: 60 * 1000,
+  });
+  const organizations = memberships?.organizations ?? [];
+  const currentOrganizationId =
+    organizations.find((organization) => organization.current)?.id ?? "";
+  const [switchingOrganization, setSwitchingOrganization] = useState(false);
+
+  async function handleOrganizationChange(organizationId: string) {
+    if (!organizationId || organizationId === currentOrganizationId) return;
+
+    setSwitchingOrganization(true);
+    try {
+      await api.post("/api/orgs/switch", { org_id: organizationId });
+      // A full navigation resets the organization-scoped query cache and websocket.
+      window.location.href = "/d";
+    } catch {
+      setSwitchingOrganization(false);
+      toast.error("Failed to switch workspace");
+    }
+  }
 
   const { data: labelCounts } = useQuery({
     queryKey: queryKeys.domains.labelCounts(activeDomain?.id ?? ""),
@@ -318,6 +401,14 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
     <>
       {/* ── Mobile layout ── */}
       <div className="flex flex-col h-full w-[85vw] max-w-[320px] bg-background md:hidden">
+        <OrganizationSwitcher
+          organizations={organizations}
+          currentOrganizationId={currentOrganizationId}
+          switching={switchingOrganization}
+          showCreate={commercial}
+          onChange={handleOrganizationChange}
+        />
+
         {/* Header with close */}
         <div className="flex items-center justify-between px-4 h-14 border-b shrink-0">
           <h2 className="font-semibold text-sm truncate">
@@ -471,6 +562,14 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
 
         {/* Right panel: label navigation */}
         <div className="flex flex-col w-[240px] bg-background border-r">
+          <OrganizationSwitcher
+            organizations={organizations}
+            currentOrganizationId={currentOrganizationId}
+            switching={switchingOrganization}
+            showCreate={commercial}
+            onChange={handleOrganizationChange}
+          />
+
           {/* Domain name header */}
           <div className="h-14 flex items-center px-4 border-b">
             <h2 className="font-semibold text-sm truncate">

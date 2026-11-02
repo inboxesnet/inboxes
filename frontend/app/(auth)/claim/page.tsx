@@ -35,14 +35,16 @@ function ClaimForm() {
   const [validating, setValidating] = useState(true);
   const [valid, setValid] = useState(false);
   const [email, setEmail] = useState("");
+  const [hasAccount, setHasAccount] = useState(false);
 
   useEffect(() => {
     async function validate() {
       try {
-        const res = await api.get<{ email: string }>(
+        const res = await api.get<{ email: string; has_account?: boolean }>(
           `/api/auth/claim/validate?token=${token}`
         );
         setEmail(res.email);
+        setHasAccount(res.has_account ?? false);
         setValid(true);
       } catch {
         setValid(false);
@@ -58,16 +60,18 @@ function ClaimForm() {
     e.preventDefault();
     setError("");
 
-    const pwError = validatePassword(password);
-    if (pwError) {
-      setError(pwError);
-      return;
+    if (!hasAccount) {
+      const pwError = validatePassword(password);
+      if (pwError) {
+        setError(pwError);
+        return;
+      }
     }
 
     setLoading(true);
 
     try {
-      await api.post("/api/auth/claim", { token, name, password });
+      await api.post("/api/auth/claim", { token, name, password: hasAccount ? undefined : password });
       router.push("/d");
     } catch (err) {
       if (err instanceof ApiError) {
@@ -136,28 +140,35 @@ function ClaimForm() {
               required
             />
           </div>
-          <div className="space-y-2">
-            <label htmlFor="password" className="text-sm font-medium">
-              Password
-            </label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="At least 8 characters"
-              minLength={8}
-              required
-            />
-            <p className="text-xs text-muted-foreground">
-              Must include uppercase, lowercase, and a number
+          {!hasAccount && (
+            <div className="space-y-2">
+              <label htmlFor="password" className="text-sm font-medium">
+                Password
+              </label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                minLength={8}
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                Must include uppercase, lowercase, and a number
+              </p>
+            </div>
+          )}
+          {hasAccount && (
+            <p className="text-sm text-muted-foreground">
+              This email already has an Inboxes account. Accepting the invitation adds this workspace to that account; your existing password stays the same.
             </p>
-          </div>
+          )}
         </CardContent>
         <CardFooter className="flex-col gap-3">
           <Button className="w-full" disabled={loading}>
             {loading ? <Spinner className="mr-2" /> : null}
-            Set up account
+            {hasAccount ? "Accept invitation" : "Set up account"}
           </Button>
           <a href="/login" className="text-sm text-muted-foreground hover:text-primary">
             Back to sign in
