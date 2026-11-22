@@ -112,7 +112,8 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
 				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
-				AND fe.dismissed_at IS NULL)`
+				AND fe.dismissed_at IS NULL)
+			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 			t.trash_expires_at, t.snoozed_until
@@ -120,7 +121,8 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
 				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
-				AND fe.dismissed_at IS NULL)`
+				AND fe.dismissed_at IS NULL)
+			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		args = append(args, orgID)
 		argIdx = 2
 
@@ -568,7 +570,8 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 			WHERE t.org_id = $1 AND t.deleted_at IS NULL
 			AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
 				AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
-				AND fe.dismissed_at IS NULL)`
+				AND fe.dismissed_at IS NULL)
+			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		args = append(args, orgID)
 		argIdx = 2
 	default:
@@ -814,7 +817,8 @@ func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, r
 		 WHERE t.org_id = $1 AND t.domain_id = $2 AND t.deleted_at IS NULL
 		 AND EXISTS (SELECT 1 FROM emails fe WHERE fe.thread_id = t.id
 			AND fe.direction = 'outbound' AND fe.status IN ('failed', 'bounced')
-			AND fe.dismissed_at IS NULL)`+aliasFilter,
+			AND fe.dismissed_at IS NULL)
+			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`+aliasFilter,
 		baseArgs...,
 	).Scan(&failedCount); err != nil {
 		return nil, err

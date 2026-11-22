@@ -192,6 +192,10 @@ func TestDraftScheduledSendAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDraft failed: %v", err)
 	}
+	// A send needs a body.
+	if _, err := testPool.Exec(ctx, `UPDATE drafts SET body_html = '<p>Hello</p>', body_plain = 'Hello' WHERE id = $1`, draftID); err != nil {
+		t.Fatalf("set draft body: %v", err)
+	}
 
 	h := &handler.DraftHandler{Store: testStore, RDB: testRDB, Bus: testBus()}
 	scheduledAt := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)

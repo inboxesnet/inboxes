@@ -4,8 +4,10 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/inboxes/backend/internal/handler"
@@ -114,5 +116,46 @@ func TestDomainsList_MemberSeesOnlyAssignedDomains(t *testing.T) {
 		if len(got) != 1 || got[0]["id"] != domainA {
 			t.Fatalf("member with alias in domain A (all=%v): expected only domain A, got %v", all, got)
 		}
+	}
+}
+
+// A thread in Trash must not show in the Failed view or in its counter.
+func TestFailedView_ExcludesTrash(t *testing.T) {
+	ctx := context.Background()
+	orgID, adminID := seedOrg(t, "failed-trash-org", "failed-trash@test.io", "Password1")
+	t.Cleanup(func() { cleanupOrg(t, orgID) })
+	domainID := seedDomain(t, orgID, "failed-trash.test")
+	threadID := seedThread(t, orgID, adminID, domainID, "test")
+	emailID := seedEmail(t, orgID, adminID, domainID, threadID, "outbound", "hello@failed-trash.test", "test")
+	if _, err := testPool.Exec(ctx, `UPDATE emails SET status = 'failed' WHERE id = $1`, emailID); err != nil {
+		t.Fatal(err)
+	}
+
+	failed := func() (int, int) {
+		t.Helper()
+		threads, total, err := testStore.ListThreads(ctx, orgID, "failed", domainID, "admin", nil, 1, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts, err := testStore.GetLabelCounts(ctx, orgID, domainID, adminID, "admin", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(threads) != total {
+			t.Fatalf("list has %d rows but total is %d", len(threads), total)
+		}
+		n, err := strconv.Atoi(fmt.Sprint(counts["failed"]))
+		if err != nil {
+			t.Fatalf("failed count is not a number: %v", counts["failed"])
+		}
+		return total, n
+	}
+
+	if total, count := failed(); total != 1 || count != 1 {
+		t.Fatalf("before trash: expected 1 and 1, got %d and %d", total, count)
+	}
+	testStore.AddLabel(ctx, threadID, orgID, "trash")
+	if total, count := failed(); total != 0 || count != 0 {
+		t.Fatalf("after trash: expected 0 and 0, got %d and %d", total, count)
 	}
 }
