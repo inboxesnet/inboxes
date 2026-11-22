@@ -25,6 +25,28 @@ func (s *PgStore) ListDomains(ctx context.Context, orgID string, includeHidden b
 	return scanMaps(rows)
 }
 
+// ListDomainsForMember returns only the domains in which the user has an
+// assigned alias. A member must not see the other domains of the org.
+func (s *PgStore) ListDomainsForMember(ctx context.Context, orgID, userID string, includeHidden bool) ([]map[string]any, error) {
+	cols := `d.id, d.org_id, d.domain, d.resend_domain_id, d.status, d.display_order, d.created_at`
+	hidden := ` AND d.hidden = false`
+	if includeHidden {
+		cols += `, d.hidden`
+		hidden = ``
+	}
+	rows, err := s.q.Query(ctx,
+		`SELECT `+cols+` FROM domains d
+		 WHERE d.org_id = $1`+hidden+`
+		   AND EXISTS (SELECT 1 FROM aliases a
+		               JOIN alias_users au ON au.alias_id = a.id
+		               WHERE a.domain_id = d.id AND a.deleted_at IS NULL AND au.user_id = $2)
+		 ORDER BY d.display_order, d.created_at`, orgID, userID)
+	if err != nil {
+		return nil, err
+	}
+	return scanMaps(rows)
+}
+
 func (s *PgStore) InsertDomain(ctx context.Context, orgID, domain, resendDomainID, status string, dnsRecords json.RawMessage) (string, error) {
 	var id string
 	err := s.q.QueryRow(ctx,
@@ -56,6 +78,7 @@ func (s *PgStore) ReorderDomains(ctx context.Context, orgID string, order []Doma
 			`UPDATE domains SET display_order = $1, updated_at = now() WHERE id = $2 AND org_id = $3`,
 			item.Order, item.ID, orgID); err != nil {
 			slog.Error("domain: reorder update failed", "domain_id", item.ID, "error", err)
+			return fmt.Errorf("reorder domain %s: %w", item.ID, err)
 		}
 	}
 	return nil
@@ -66,7 +89,8 @@ func (s *PgStore) GetUnreadCounts(ctx context.Context, orgID string, role string
 		 FROM threads t
 		 JOIN thread_labels tl ON tl.thread_id = t.id
 		 JOIN domains d ON d.id = t.domain_id
-		 WHERE d.org_id = $1 AND tl.label = 'inbox' AND t.deleted_at IS NULL
+		 WHERE d.org_id = $1 AND t.org_id = $1 AND tl.org_id = $1
+		 AND tl.label = 'inbox' AND t.deleted_at IS NULL AND t.unread_count > 0
 		 AND (t.snoozed_until IS NULL OR t.snoozed_until <= now())
 		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 	args := []interface{}{orgID}
@@ -98,6 +122,9 @@ func (s *PgStore) GetUnreadCounts(ctx context.Context, orgID string, role string
 		if rows.Scan(&domainID, &count) == nil {
 			counts[domainID] = count
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return counts, nil
 }

@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/inboxes/backend/internal/service"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/net/publicsuffix"
@@ -27,12 +29,19 @@ type Claims struct {
 	UserID string `json:"user_id"`
 	OrgID  string `json:"org_id"`
 	Role   string `json:"role"`
+	// Prev is the JTI of the token that this token replaced at renewal.
+	Prev string `json:"prv,omitempty"`
 }
 
 // tokenRenewAge is the token age after which the middleware reissues the
 // cookie. Active users stay logged in; an idle session still expires with
 // the 7-day token lifetime.
 const tokenRenewAge = 24 * time.Hour
+
+// renewConfirmWindow is the token age below which a request with a renewed
+// token retires the token it replaced. The first such request proves that
+// the client holds the new cookie.
+const renewConfirmWindow = 5 * time.Minute
 
 func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool, appURL string) func(http.Handler) http.Handler {
 	blacklist := service.NewTokenBlacklist(rdb)
@@ -55,35 +64,42 @@ func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool, appURL s
 				return
 			}
 
-			// Check token revocation (fail open if Redis is down)
+			// Check token revocation (fail open if Redis is down). The same
+			// Redis round trip reads the cached user status.
 			issuedAt := time.Time{}
 			if claims.IssuedAt != nil {
 				issuedAt = claims.IssuedAt.Time
 			}
-			if blacklist.IsRevoked(r.Context(), claims.ID, claims.UserID, issuedAt) {
+			check := service.TokenCheck{JTI: claims.ID, UserID: claims.UserID, IssuedAt: issuedAt}
+			statusKey := "user:status:" + claims.UserID
+			if db != nil {
+				check.StatusKey = statusKey
+			}
+			if claims.Prev != "" && !issuedAt.IsZero() && time.Since(issuedAt) < renewConfirmWindow {
+				check.RetireJTI = claims.Prev
+			}
+			checked := blacklist.Check(r.Context(), check)
+			if checked.Revoked {
 				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 				return
 			}
 
 			// Check user is still active (cached in Redis, 2-min TTL)
 			if db != nil {
-				statusKey := "user:status:" + claims.UserID
-				var status string
-				var cached bool
-				if rdb != nil {
-					val, redisErr := rdb.Get(r.Context(), statusKey).Result()
-					if redisErr == nil {
-						status = val
-						cached = true
-					}
-				}
-				if !cached {
+				status := checked.Status
+				if !checked.StatusCached {
 					var dbStatus string
 					var orgDeletedAt *time.Time
 					dbErr := db.QueryRow(r.Context(),
 						"SELECT u.status, o.deleted_at FROM users u JOIN orgs o ON o.id = u.org_id WHERE u.id = $1",
 						claims.UserID,
 					).Scan(&dbStatus, &orgDeletedAt)
+					if dbErr != nil && !errors.Is(dbErr, pgx.ErrNoRows) {
+						// A database failure is not proof of a dead session.
+						// A 401 here would log the user out.
+						http.Error(w, `{"error":"service unavailable"}`, http.StatusServiceUnavailable)
+						return
+					}
 					if dbErr != nil || dbStatus != "active" || orgDeletedAt != nil {
 						http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 						return
@@ -111,7 +127,9 @@ func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool, appURL s
 			// Sliding renewal: reissue the cookie once the token is older
 			// than tokenRenewAge. The role comes fresh from the DB so a
 			// role change does not persist in renewed tokens.
-			if !issuedAt.IsZero() && time.Since(issuedAt) > tokenRenewAge {
+			// Only one request per old token renews it. Parallel requests
+			// with the same old token continue with that token.
+			if !issuedAt.IsZero() && time.Since(issuedAt) > tokenRenewAge && blacklist.AcquireRenewal(r.Context(), claims.ID) {
 				role := claims.Role
 				if db != nil {
 					var dbRole string
@@ -121,9 +139,9 @@ func AuthMiddleware(secret string, rdb *redis.Client, db *pgxpool.Pool, appURL s
 						role = dbRole
 					}
 				}
-				if newToken, jti, genErr := GenerateToken(secret, claims.UserID, claims.OrgID, role); genErr == nil {
+				if newToken, jti, genErr := generateToken(secret, claims.UserID, claims.OrgID, role, claims.ID); genErr == nil {
 					SetTokenCookie(w, newToken, appURL)
-					blacklist.RegisterSession(r.Context(), claims.UserID, jti)
+					blacklist.ReplaceSession(r.Context(), claims.UserID, claims.ID, jti)
 				}
 			}
 
@@ -150,6 +168,12 @@ func RequireAdmin(next http.Handler) http.Handler {
 }
 
 func GenerateToken(secret, userID, orgID, role string) (tokenStr string, jti string, err error) {
+	return generateToken(secret, userID, orgID, role, "")
+}
+
+// generateToken mints a token. prevJTI is the JTI of the token it replaces
+// at renewal, or "" for a new session.
+func generateToken(secret, userID, orgID, role, prevJTI string) (tokenStr string, jti string, err error) {
 	now := time.Now()
 	jti = uuid.NewString()
 	claims := &Claims{
@@ -161,6 +185,7 @@ func GenerateToken(secret, userID, orgID, role string) (tokenStr string, jti str
 		UserID: userID,
 		OrgID:  orgID,
 		Role:   role,
+		Prev:   prevJTI,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenStr, err = token.SignedString([]byte(secret))

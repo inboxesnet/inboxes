@@ -15,7 +15,7 @@ import {
   Quote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import DOMPurify from "dompurify";
 import { sanitizeLinkNode } from "@/lib/sanitize-links";
 import {
@@ -131,8 +131,22 @@ export function TipTapEditor({
     if (!editor || content === undefined) return;
     if (editor.isFocused) return;
     if (editor.getHTML() === content) return;
-    editor.commands.setContent(content || "");
+    // No update event: this content came from the parent. An event would
+    // report it back as a user edit and mark an untouched draft as changed.
+    editor.commands.setContent(content || "", { emitUpdate: false });
   }, [content]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sanitize the quoted text one time, not on each key press.
+  const quotedClean = useMemo(() => {
+    if (!quotedHtml) return "";
+    DOMPurify.addHook("afterSanitizeAttributes", (node) => { sanitizeLinkNode(node, stripTracking); });
+    const clean = DOMPurify.sanitize(quotedHtml, {
+      ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
+      ALLOWED_ATTR: ["href", "target", "rel"],
+    });
+    DOMPurify.removeAllHooks();
+    return clean;
+  }, [quotedHtml, stripTracking]);
 
   const insertEmoji = useCallback(
     (emoji: string, from: number, to: number) => {
@@ -221,17 +235,7 @@ export function TipTapEditor({
         {quotedHtml && (
           <div
             className="text-xs text-muted-foreground border-l-2 border-muted pl-3 mx-3 mb-2 max-h-[200px] overflow-y-auto"
-            dangerouslySetInnerHTML={{
-              __html: (() => {
-                DOMPurify.addHook("afterSanitizeAttributes", (node) => { sanitizeLinkNode(node, stripTracking); });
-                const clean = DOMPurify.sanitize(quotedHtml, {
-                  ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
-                  ALLOWED_ATTR: ["href", "target", "rel"],
-                });
-                DOMPurify.removeAllHooks();
-                return clean;
-              })(),
-            }}
+            dangerouslySetInnerHTML={{ __html: quotedClean }}
           />
         )}
       </div>
@@ -268,8 +272,13 @@ export function TipTapEditor({
             if (editor.isActive("link")) {
               editor.chain().focus().unsetLink().run();
             } else {
-              const url = window.prompt("URL:");
-              if (url && /^(https?:\/\/|mailto:)/i.test(url)) {
+              const typed = window.prompt("URL:")?.trim();
+              if (!typed) return;
+              // "example.com" has no scheme: add https. Refuse other schemes.
+              // A colon before a digit is a port ("example.com:8080").
+              const hasScheme = /^[a-z][a-z0-9+.-]*:(?!\d)/i.test(typed);
+              const url = hasScheme ? typed : `https://${typed}`;
+              if (/^(https?:\/\/|mailto:)/i.test(url)) {
                 editor.chain().focus().setLink({ href: url }).run();
               }
             }

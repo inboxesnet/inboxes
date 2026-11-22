@@ -5,7 +5,13 @@ import { useQueryClient, QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNotifications } from "@/contexts/notification-context";
 import { queryKeys } from "@/lib/query-keys";
-import { hasLabel, threadBelongsInView } from "@/lib/types";
+import { patchQueryData, patchQueriesData } from "@/lib/query-patch";
+import {
+  applyBulkLabels,
+  hasLabel,
+  isVirtualView,
+  threadBelongsInView,
+} from "@/lib/types";
 import type { WSMessage, Thread, Email, ThreadListResponse, UnreadCounts } from "@/lib/types";
 
 // --- Helpers for surgical cache updates ---
@@ -50,54 +56,30 @@ function adjustUnreadCount(
   delta: number
 ): void {
   if (!domainId || delta === 0) return;
-  qc.setQueryData<UnreadCounts>(queryKeys.domains.unreadCounts(), (old) => {
+  patchQueryData<UnreadCounts>(qc, queryKeys.domains.unreadCounts(), (old) => {
     if (!old) return old;
     return { ...old, [domainId]: Math.max(0, (old[domainId] || 0) + delta) };
   });
 }
 
-/** Compute new labels after a bulk action */
-function applyBulkLabels(
-  labels: string[],
-  action: string,
-  label: string
-): string[] {
-  switch (action) {
-    case "archive":
-      return labels.filter((l) => l !== "inbox");
-    case "trash":
-      return [...labels.filter((l) => l !== "trash"), "trash"];
-    case "spam":
-      return [...labels.filter((l) => l !== "spam"), "spam"];
-    case "move":
-      switch (label) {
-        case "inbox":
-          return [
-            ...labels.filter(
-              (l) => l !== "inbox" && l !== "trash" && l !== "spam"
-            ),
-            "inbox",
-          ];
-        case "trash":
-          return [...labels.filter((l) => l !== "trash"), "trash"];
-        case "spam":
-          return [...labels.filter((l) => l !== "spam"), "spam"];
-        case "archive":
-          return labels.filter((l) => l !== "inbox");
-        default:
-          return labels.includes(label) ? labels : [...labels, label];
-      }
-    case "mute":
-      return labels.includes("muted") ? labels : [...labels, "muted"];
-    case "unmute":
-      return labels.filter((l) => l !== "muted");
-    case "label":
-      return labels.includes(label) ? labels : [...labels, label];
-    case "unlabel":
-      return labels.filter((l) => l !== label);
-    default:
-      return labels;
-  }
+/** Read the view of a thread list from its query key. */
+function listView(queryKey: readonly unknown[]): {
+  domainId: string | undefined;
+  label: string | undefined;
+  page: number;
+} {
+  return {
+    domainId: queryKey[2] as string | undefined,
+    label: queryKey[3] as string | undefined,
+    page: typeof queryKey[4] === "number" ? queryKey[4] : 1,
+  };
+}
+
+function byNewest(a: Thread, b: Thread): number {
+  return (
+    new Date(b.last_message_at).getTime() -
+    new Date(a.last_message_at).getTime()
+  );
 }
 
 /**
@@ -105,14 +87,34 @@ function applyBulkLabels(
  * Subscribes to all event types and maps them to cache operations.
  * Rendered once in the app layout.
  *
- * Uses setQueryData / setQueriesData for surgical zero-network updates.
- * Only sync.completed and rare fallbacks trigger invalidation.
+ * Uses the patch helpers for surgical zero-network updates. They keep the
+ * age of the cached data, so the staleTime refetch still occurs.
+ * The virtual views (failed, snoozed) and the per-label counts cannot be
+ * patched from a thread summary; a throttled invalidation refreshes them.
  */
 export function WSSync() {
   const { subscribe, setLastEventId } = useNotifications();
   const qc = useQueryClient();
 
   useEffect(() => {
+    // Refresh the data that a thread summary cannot patch: the per-label
+    // counts (drafts, spam, failed, snoozed, custom labels) and the virtual
+    // lists. The throttle keeps an event burst to two refetches a second.
+    let derivedTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshDerived = () => {
+      if (derivedTimer) return;
+      derivedTimer = setTimeout(() => {
+        derivedTimer = null;
+        qc.invalidateQueries({
+          queryKey: [...queryKeys.domains.unreadCounts(), "labels"],
+        });
+        qc.invalidateQueries({
+          queryKey: queryKeys.threads.lists(),
+          predicate: (query) => isVirtualView(query.queryKey[3] as string),
+        });
+      }, 500);
+    };
+
     const unsub = subscribe("*", (msg: WSMessage) => {
       // Track event ID for reconnection catchup
       if (msg.id) {
@@ -129,24 +131,18 @@ export function WSSync() {
             msg.thread_id ? findCachedThread(qc, msg.thread_id) : undefined;
 
           if (emailThread && msg.thread_id) {
-            // Slot the thread into each cached list using setQueriesData (no refetch)
-            qc.setQueriesData<ThreadListResponse>(
+            // Slot the thread into each cached list (no refetch)
+            patchQueriesData<ThreadListResponse>(
+              qc,
               { queryKey: queryKeys.threads.lists() },
-              (old) => {
+              (old, queryKey) => {
                 if (!old) return old;
 
-                const cacheEntry = qc
-                  .getQueryCache()
-                  .findAll({ queryKey: queryKeys.threads.lists() })
-                  .find((q) => q.state.data === old);
-                const queryDomainId = cacheEntry?.queryKey?.[2] as
-                  | string
-                  | undefined;
-                const queryLabel = cacheEntry?.queryKey?.[3] as
-                  | string
-                  | undefined;
+                const view = listView(queryKey);
+                const queryDomainId = view.domainId;
+                const queryLabel = view.label;
 
-                if (!queryLabel) return old;
+                if (!queryLabel || isVirtualView(queryLabel)) return old;
 
                 // Skip lists for other domains
                 if (
@@ -172,22 +168,16 @@ export function WSSync() {
                         .map((t) =>
                           t.id === msg.thread_id ? emailThread : t
                         )
-                        .sort(
-                          (a, b) =>
-                            new Date(b.last_message_at).getTime() -
-                            new Date(a.last_message_at).getTime()
-                        ),
+                        .sort(byNewest),
                     };
                   }
-                  // Insert new thread sorted by last_message_at
+                  // A new thread goes on the first page only. The other
+                  // pages are other windows of the same list.
+                  if (view.page !== 1) return old;
                   return {
                     ...old,
                     total: old.total + 1,
-                    threads: [emailThread, ...old.threads].sort(
-                      (a, b) =>
-                        new Date(b.last_message_at).getTime() -
-                        new Date(a.last_message_at).getTime()
-                    ),
+                    threads: [emailThread, ...old.threads].sort(byNewest),
                   };
                 }
 
@@ -220,6 +210,8 @@ export function WSSync() {
             }
             // email.sent: no unread count change
           } else {
+            // The worker's email.sent has no thread in its payload. A reply
+            // changes the row in each list that holds the thread.
             // Fallback: no thread in payload — use old invalidation approach
             if (msg.event === "email.received" && msg.domain_id) {
               qc.invalidateQueries({
@@ -235,10 +227,7 @@ export function WSSync() {
               });
             }
             if (msg.event === "email.sent") {
-              qc.invalidateQueries({
-                queryKey: queryKeys.threads.lists(),
-                predicate: (query) => query.queryKey[3] === "sent",
-              });
+              qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
             }
             if (msg.thread_id) {
               qc.invalidateQueries({
@@ -246,6 +235,11 @@ export function WSSync() {
               });
             }
           }
+          if (msg.event === "email.sent") {
+            // The worker deletes the draft of a sent email.
+            qc.invalidateQueries({ queryKey: queryKeys.drafts.all });
+          }
+          refreshDerived();
           break;
         }
 
@@ -253,22 +247,23 @@ export function WSSync() {
         case "thread.unstarred": {
           const starThread = (msg.payload?.thread as Thread) || null;
           if (msg.thread_id && starThread) {
-            qc.setQueriesData<ThreadListResponse>(
+            patchQueriesData<ThreadListResponse>(
+              qc,
               { queryKey: queryKeys.threads.lists() },
-              (old) => {
+              (old, queryKey) => {
                 if (!old) return old;
 
-                const queryLabel = qc
-                  .getQueryCache()
-                  .findAll({ queryKey: queryKeys.threads.lists() })
-                  .find((q) => q.state.data === old)?.queryKey?.[3] as
-                  | string
-                  | undefined;
+                const view = listView(queryKey);
+                const queryLabel = view.label;
 
                 const updatedLabels = starThread.labels || [];
                 const hadThread = old.threads.some(
                   (t) => t.id === msg.thread_id
                 );
+                const sameDomain =
+                  !view.domainId ||
+                  !starThread.domain_id ||
+                  view.domainId === starThread.domain_id;
 
                 // If this is the starred view and thread was unstarred, remove it
                 if (
@@ -290,21 +285,19 @@ export function WSSync() {
                   queryLabel === "starred" &&
                   msg.event === "thread.starred" &&
                   !hadThread &&
-                  starThread &&
+                  sameDomain &&
+                  view.page === 1 &&
                   threadBelongsInView(starThread, "starred")
                 ) {
                   return {
                     ...old,
                     total: old.total + 1,
-                    threads: [starThread, ...old.threads].sort(
-                      (a, b) =>
-                        new Date(b.last_message_at).getTime() -
-                        new Date(a.last_message_at).getTime()
-                    ),
+                    threads: [starThread, ...old.threads].sort(byNewest),
                   };
                 }
 
                 // Otherwise just update labels in place
+                if (!hadThread) return old;
                 return {
                   ...old,
                   threads: old.threads.map((t) =>
@@ -323,10 +316,12 @@ export function WSSync() {
         case "thread.unmuted": {
           const muteThread = (msg.payload?.thread as Thread) || null;
           if (msg.thread_id && muteThread) {
-            qc.setQueriesData<ThreadListResponse>(
+            patchQueriesData<ThreadListResponse>(
+              qc,
               { queryKey: queryKeys.threads.lists() },
-              (old) => {
+              (old, queryKey) => {
                 if (!old) return old;
+                if (!old.threads.some((t) => t.id === msg.thread_id)) return old;
                 return {
                   ...old,
                   threads: old.threads.map((t) =>
@@ -337,8 +332,7 @@ export function WSSync() {
                 };
               }
             );
-            qc.setQueryData<Thread>(
-              queryKeys.threads.detail(msg.thread_id!),
+            patchQueryData<Thread>(qc, queryKeys.threads.detail(msg.thread_id!),
               (old) =>
                 old
                   ? { ...old, labels: muteThread.labels || old.labels }
@@ -369,10 +363,12 @@ export function WSSync() {
               );
             }
 
-            qc.setQueriesData<ThreadListResponse>(
+            patchQueriesData<ThreadListResponse>(
+              qc,
               { queryKey: queryKeys.threads.lists() },
-              (old) => {
+              (old, queryKey) => {
                 if (!old) return old;
+                if (!old.threads.some((t) => t.id === msg.thread_id)) return old;
                 return {
                   ...old,
                   threads: old.threads.map((t) =>
@@ -383,6 +379,12 @@ export function WSSync() {
                 };
               }
             );
+            patchQueryData<Thread>(
+              qc,
+              queryKeys.threads.detail(msg.thread_id),
+              (old) => (old ? { ...old, unread_count: unreadCount } : old)
+            );
+            refreshDerived();
           }
           break;
         }
@@ -413,26 +415,21 @@ export function WSSync() {
             );
 
             // For each cached list, check if thread belongs in that view
-            qc.setQueriesData<ThreadListResponse>(
+            patchQueriesData<ThreadListResponse>(
+              qc,
               { queryKey: queryKeys.threads.lists() },
-              (old) => {
+              (old, queryKey) => {
                 if (!old) return old;
-                const queryLabel = qc
-                  .getQueryCache()
-                  .findAll({ queryKey: queryKeys.threads.lists() })
-                  .find((q) => q.state.data === old)?.queryKey?.[3] as
-                  | string
-                  | undefined;
+                const view = listView(queryKey);
+                const queryLabel = view.label;
+
+                if (!queryLabel || isVirtualView(queryLabel)) return old;
 
                 const hadThread = old.threads.some(
                   (t) => t.id === msg.thread_id
                 );
 
-                if (
-                  thread &&
-                  queryLabel &&
-                  threadBelongsInView(thread, queryLabel)
-                ) {
+                if (thread && threadBelongsInView(thread, queryLabel)) {
                   // Thread belongs in this view — add or update it
                   if (hadThread) {
                     return {
@@ -442,14 +439,19 @@ export function WSSync() {
                       ),
                     };
                   }
+                  // Insert on the first page of the same domain only
+                  if (
+                    view.page !== 1 ||
+                    (view.domainId &&
+                      thread.domain_id &&
+                      view.domainId !== thread.domain_id)
+                  ) {
+                    return old;
+                  }
                   return {
                     ...old,
                     total: old.total + 1,
-                    threads: [thread, ...old.threads].sort(
-                      (a, b) =>
-                        new Date(b.last_message_at).getTime() -
-                        new Date(a.last_message_at).getTime()
-                    ),
+                    threads: [thread, ...old.threads].sort(byNewest),
                   };
                 }
 
@@ -466,6 +468,14 @@ export function WSSync() {
                 return old;
               }
             );
+            if (thread) {
+              patchQueryData<Thread>(
+                qc,
+                queryKeys.threads.detail(msg.thread_id),
+                (old) => (old ? { ...old, labels: thread.labels || old.labels } : old)
+              );
+            }
+            refreshDerived();
           }
           break;
         }
@@ -480,9 +490,10 @@ export function WSSync() {
               -unreadContribution(cached)
             );
 
-            qc.setQueriesData<ThreadListResponse>(
+            patchQueriesData<ThreadListResponse>(
+              qc,
               { queryKey: queryKeys.threads.lists() },
-              (old) => {
+              (old, queryKey) => {
                 if (!old) return old;
                 const hadThread = old.threads.some(
                   (t) => t.id === msg.thread_id
@@ -497,6 +508,14 @@ export function WSSync() {
                 };
               }
             );
+            // An open view of the thread must find out that it is gone.
+            qc.invalidateQueries({
+              queryKey: queryKeys.threads.detail(msg.thread_id),
+            });
+            // Undo send and a deleted scheduled draft arrive as this event
+            // too, and they change the drafts list.
+            qc.invalidateQueries({ queryKey: queryKeys.drafts.all });
+            refreshDerived();
           }
           break;
 
@@ -506,6 +525,16 @@ export function WSSync() {
           const label = (msg.payload?.label as string) || "";
 
           if (!action || !threadIds?.length) break;
+
+          // Dismiss changes emails, not thread labels. Only the Failed
+          // view, its badge and the open thread show it.
+          if (action === "dismiss") {
+            for (const id of threadIds) {
+              qc.invalidateQueries({ queryKey: queryKeys.threads.detail(id) });
+            }
+            refreshDerived();
+            break;
+          }
 
           // Collect cached threads for delta calculation
           const cachedThreads = new Map<string, Thread>();
@@ -563,21 +592,15 @@ export function WSSync() {
           }
 
           // Update thread lists
-          qc.setQueriesData<ThreadListResponse>(
+          patchQueriesData<ThreadListResponse>(
+            qc,
             { queryKey: queryKeys.threads.lists() },
-            (old) => {
+            (old, queryKey) => {
               if (!old) return old;
 
-              const cacheEntry = qc
-                .getQueryCache()
-                .findAll({ queryKey: queryKeys.threads.lists() })
-                .find((q) => q.state.data === old);
-              const queryLabel = cacheEntry?.queryKey?.[3] as
-                | string
-                | undefined;
-              const queryDomainId = cacheEntry?.queryKey?.[2] as
-                | string
-                | undefined;
+              const view = listView(queryKey);
+              const queryLabel = view.label;
+              const queryDomainId = view.domainId;
 
               if (!queryLabel) return old;
 
@@ -616,7 +639,9 @@ export function WSSync() {
                 };
               }
 
-              // Label-changing actions: archive, trash, spam, move, mute, unmute, label, unlabel
+              // Label-changing actions: archive, trash, spam, move, mute, unmute, label, unlabel.
+              // A virtual view gets a refetch (refreshDerived below).
+              if (isVirtualView(queryLabel)) return old;
               const result: Thread[] = [];
 
               for (const t of old.threads) {
@@ -633,8 +658,9 @@ export function WSSync() {
                 }
               }
 
-              // Add threads from other cached lists that might now belong in this view
-              for (const id of threadIds) {
+              // Add threads from other cached lists that might now belong in
+              // this view. New rows go on the first page only.
+              for (const id of view.page === 1 ? threadIds : []) {
                 if (old.threads.some((t) => t.id === id)) continue;
                 const cached = cachedThreads.get(id);
                 if (!cached) continue;
@@ -662,16 +688,11 @@ export function WSSync() {
                 ...old,
                 total: Math.max(0, old.total + totalDiff),
                 threads:
-                  totalDiff !== 0
-                    ? result.sort(
-                        (a, b) =>
-                          new Date(b.last_message_at).getTime() -
-                          new Date(a.last_message_at).getTime()
-                      )
-                    : result,
+                  totalDiff !== 0 ? result.sort(byNewest) : result,
               };
             }
           );
+          refreshDerived();
           break;
         }
 
@@ -679,9 +700,30 @@ export function WSSync() {
           const emailId = msg.payload?.email_id as string;
           const status = msg.payload?.status as Email["status"];
 
-          // Surgical update: patch the email status in the cached thread detail
-          if (msg.thread_id && emailId && status) {
-            qc.setQueryData<Thread>(
+          const cancelled = (status as string) === "cancelled";
+
+          if (msg.thread_id && emailId && cancelled) {
+            // Undo send or a cancelled schedule: the server deleted the
+            // email row. Remove it, then read the thread again.
+            patchQueryData<Thread>(
+              qc,
+              queryKeys.threads.detail(msg.thread_id),
+              (old) => {
+                if (!old?.emails) return old;
+                return {
+                  ...old,
+                  emails: old.emails.filter((e) => e.id !== emailId),
+                };
+              }
+            );
+            qc.invalidateQueries({
+              queryKey: queryKeys.threads.detail(msg.thread_id),
+            });
+            qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+          } else if (msg.thread_id && emailId && status) {
+            // Surgical update: patch the email status in the cached thread detail
+            patchQueryData<Thread>(
+              qc,
               queryKeys.threads.detail(msg.thread_id),
               (old) => {
                 if (!old?.emails) return old;
@@ -693,7 +735,20 @@ export function WSSync() {
                 };
               }
             );
+            // A dismiss sets dismissed_at, which the event does not carry.
+            if (msg.payload?.dismissed) {
+              qc.invalidateQueries({
+                queryKey: queryKeys.threads.detail(msg.thread_id),
+              });
+            }
           }
+
+          // A failed send makes a recovery draft; a cancelled send gives
+          // the draft back. The Failed view and its badge change too.
+          if (cancelled || status === "failed") {
+            qc.invalidateQueries({ queryKey: queryKeys.drafts.all });
+          }
+          refreshDerived();
 
           // Show notification on send failure
           if (status === "failed" || status === "bounced" || status === "complained") {
@@ -802,7 +857,10 @@ export function WSSync() {
       }
     });
 
-    return unsub;
+    return () => {
+      if (derivedTimer) clearTimeout(derivedTimer);
+      unsub();
+    };
   }, [subscribe, setLastEventId, qc]);
 
   return null;

@@ -196,12 +196,13 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, _, err := middleware.GenerateToken(h.Secret, userID, orgID, "admin")
+	token, jti, err := middleware.GenerateToken(h.Secret, userID, orgID, "admin")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
 	middleware.SetTokenCookie(w, token, h.AppURL)
+	service.NewTokenBlacklist(h.RDB).RegisterSession(ctx, userID, jti)
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"user": map[string]string{
@@ -300,7 +301,8 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		if err := blacklist.RevokeToken(r.Context(), claims.ID, claims.ExpiresAt.Time); err != nil {
 			slog.Error("auth: failed to revoke token on logout", "error", err)
 		}
-		blacklist.ClearSessions(r.Context(), claims.UserID)
+		// Remove only this session. The other devices stay in the list.
+		blacklist.RemoveSession(r.Context(), claims.UserID, claims.ID)
 	}
 	middleware.ClearTokenCookie(w, h.AppURL)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "logged out"})
@@ -479,12 +481,13 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, _, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
+	token, jti, err := middleware.GenerateToken(h.Secret, userID, orgID, role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
 	middleware.SetTokenCookie(w, token, h.AppURL)
+	service.NewTokenBlacklist(h.RDB).RegisterSession(ctx, userID, jti)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"user": map[string]string{

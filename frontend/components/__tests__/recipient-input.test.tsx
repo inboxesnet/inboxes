@@ -184,4 +184,23 @@ describe("RecipientInput", () => {
     expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("Invalid email"));
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("adds the typed address on blur with no delay", () => {
+    render(<RecipientInput value={[]} onChange={onChange} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "late@test.com" } });
+    fireEvent.blur(input);
+    // A click on Send follows the blur at once, so this must be synchronous.
+    expect(onChange).toHaveBeenCalledWith(["late@test.com"]);
+  });
+
+  it("adds each address of a pasted list and a Name <addr> value", () => {
+    render(<RecipientInput value={[]} onChange={onChange} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, {
+      target: { value: "a@x.com, Maya Chen <maya@y.com>; b@z.com" },
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith(["a@x.com", "maya@y.com", "b@z.com"]);
+  });
 });

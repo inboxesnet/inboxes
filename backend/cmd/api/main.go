@@ -127,6 +127,7 @@ func main() {
 
 	// Status recovery (polls Resend for stale outbound email statuses)
 	statusRecovery := worker.NewStatusRecovery(pool, resendSvc, orgLimiterMap, cfg.StatusRecoveryInterval)
+	statusRecovery.Bus = bus
 	util.SafeGo("status-recovery", func() { statusRecovery.Run(ctx) })
 
 	// Inbox poller (auto-sync for self-hosted / no-webhook environments)

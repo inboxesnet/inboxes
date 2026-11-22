@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import type { Draft } from "@/lib/types";
 
 type WindowState = "open" | "minimized" | "closed";
@@ -35,31 +36,39 @@ interface EmailWindowContextValue {
   closeCompose: () => void;
   /** The compose window registers its save-now function here, so an open
    *  window is saved as a draft before new compose data replaces it. */
-  registerFlush: (flush: (() => Promise<void>) | null) => void;
+  registerFlush: (flush: FlushFn | null) => void;
 }
+
+/** Resolves to false when the save failed. */
+type FlushFn = () => Promise<boolean | void>;
 
 const EmailWindowContext = createContext<EmailWindowContextValue | null>(null);
 
 export function EmailWindowProvider({ children }: { children: React.ReactNode }) {
   const [composeState, setComposeState] = useState<WindowState>("closed");
   const [composeData, setComposeData] = useState<ComposeData | null>(null);
-  const flushRef = useRef<(() => Promise<void>) | null>(null);
+  const flushRef = useRef<FlushFn | null>(null);
 
-  const registerFlush = useCallback((flush: (() => Promise<void>) | null) => {
+  const registerFlush = useCallback((flush: FlushFn | null) => {
     flushRef.current = flush;
   }, []);
 
   // flushCurrent saves the currently open compose window as a draft before
   // its content is replaced. Without this, opening Reply over an unsaved
-  // compose silently discarded the body.
+  // compose silently discarded the body. It resolves to false when the save
+  // failed: the caller then keeps the current window, because a replace
+  // would lose the unsaved text.
   const flushCurrent = useCallback(async (state: WindowState) => {
-    if (state === "closed") return;
+    if (state === "closed") return true;
     try {
-      await flushRef.current?.();
+      const saved = await flushRef.current?.();
+      if (saved !== false) return true;
     } catch {
-      // A failed save must not block opening the new window; the autosave
-      // already retried on its own schedule.
+      // Fall through to the failure path.
     }
+    setComposeState("open");
+    toast.error("The open message could not be saved. Close or send it first.");
+    return false;
   }, []);
 
   const openCompose = useCallback(
@@ -69,7 +78,8 @@ export function EmailWindowProvider({ children }: { children: React.ReactNode })
         setComposeState("open");
         return;
       }
-      void flushCurrent(composeState).then(() => {
+      void flushCurrent(composeState).then((saved) => {
+        if (!saved) return;
         setComposeData(data || {});
         setComposeState("open");
       });
@@ -104,9 +114,17 @@ export function EmailWindowProvider({ children }: { children: React.ReactNode })
         apply();
         return;
       }
-      void flushCurrent(composeState).then(apply);
+      // This draft is in the window already. Its text there is newer than
+      // the list copy, so only show the window again.
+      if (composeData?.draftId === draft.id) {
+        setComposeState("open");
+        return;
+      }
+      void flushCurrent(composeState).then((saved) => {
+        if (saved) apply();
+      });
     },
-    [composeState, flushCurrent]
+    [composeState, composeData, flushCurrent]
   );
 
   const minimizeCompose = useCallback(() => {

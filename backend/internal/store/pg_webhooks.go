@@ -41,13 +41,24 @@ func (s *PgStore) InsertWebhookDedup(ctx context.Context, orgID, resendEmailID, 
 	return nil
 }
 
-// UpdateEmailStatus sets a new status and reports affected rows. The
-// IS DISTINCT FROM guard makes a replayed webhook a no-op: zero rows means
-// "no such email" or "status unchanged" — callers must tell the two apart
+// UpdateEmailStatus sets a new status and reports affected rows. Zero rows
+// means "no such email", "status unchanged" (a replayed webhook), or "the
+// new status is older than the stored one" — callers must tell these apart
 // before they retry or publish an event.
+//
+// Webhooks can arrive late or out of order, so the status only moves forward:
+// "sent" does not replace delivered, bounced or complained, and "delivered"
+// does not replace bounced or complained.
 func (s *PgStore) UpdateEmailStatus(ctx context.Context, orgID, resendEmailID, status string) (int64, error) {
 	tag, err := s.q.Exec(ctx,
-		"UPDATE emails SET status = $1, updated_at = now() WHERE resend_email_id = $2 AND org_id = $3 AND status IS DISTINCT FROM $1",
+		`UPDATE emails SET status = $1::email_status, updated_at = now()
+		 WHERE resend_email_id = $2 AND org_id = $3
+		   AND status IS DISTINCT FROM $1::email_status
+		   AND CASE $1::text
+		         WHEN 'sent' THEN status IN ('queued', 'scheduled', 'received', 'failed')
+		         WHEN 'delivered' THEN status NOT IN ('bounced', 'complained')
+		         ELSE true
+		       END`,
 		status, resendEmailID, orgID,
 	)
 	if err != nil {

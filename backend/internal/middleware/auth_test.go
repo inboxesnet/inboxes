@@ -4,11 +4,17 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+	"github.com/inboxes/backend/internal/service"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 const testSecret = "test-secret-key-for-unit-tests"
@@ -393,6 +399,9 @@ func TestAuthMiddleware_SlidingRenewal(t *testing.T) {
 	if newClaims.ID == "old-jti" {
 		t.Error("renewed token kept the old JTI")
 	}
+	if newClaims.Prev != "old-jti" {
+		t.Errorf("renewed token must name the token it replaced: got prv %q", newClaims.Prev)
+	}
 	if time.Until(newClaims.ExpiresAt.Time) < 6*24*time.Hour {
 		t.Errorf("renewed expiry too short: %v", time.Until(newClaims.ExpiresAt.Time))
 	}
@@ -418,5 +427,153 @@ func TestAuthMiddleware_NoRenewalForFreshToken(t *testing.T) {
 		if c.Name == "token" {
 			t.Error("fresh token must not be renewed")
 		}
+	}
+}
+
+// oldToken signs a token that is past tokenRenewAge.
+func oldToken(t *testing.T, userID, jti string) string {
+	t.Helper()
+	now := time.Now()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, &Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        jti,
+			IssuedAt:  jwt.NewNumericDate(now.Add(-25 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(6 * 24 * time.Hour)),
+		},
+		UserID: userID,
+		OrgID:  "org1",
+		Role:   "member",
+	})
+	s, err := token.SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	return s
+}
+
+func tokenCookie(w *httptest.ResponseRecorder) string {
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "token" {
+			return c.Value
+		}
+	}
+	return ""
+}
+
+func TestAuthMiddleware_DatabaseErrorIs503(t *testing.T) {
+	t.Parallel()
+	// Nothing listens on port 1, so each query fails with a connection error.
+	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/none?sslmode=disable&connect_timeout=2")
+	if err != nil {
+		t.Fatalf("pgxpool.New: %v", err)
+	}
+	defer pool.Close()
+
+	tokenStr, _, err := GenerateToken(testSecret, "user1", "org1", "member")
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	handler := AuthMiddleware(testSecret, nil, pool, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: "token", Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("database error: got status %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+// A burst of parallel requests with one old token must mint one new token,
+// must not reject a request, and must not evict the other sessions.
+func TestAuthMiddleware_RenewalStorm(t *testing.T) {
+	url := os.Getenv("TEST_REDIS_URL")
+	if url == "" {
+		t.Skip("TEST_REDIS_URL not set")
+	}
+	opts, err := redis.ParseURL(url)
+	if err != nil {
+		t.Fatalf("parse TEST_REDIS_URL: %v", err)
+	}
+	rdb := redis.NewClient(opts)
+	defer rdb.Close()
+	ctx := context.Background()
+	bl := service.NewTokenBlacklist(rdb)
+
+	user := "test-user-" + uuid.NewString()
+	oldJTI, otherJTI := uuid.NewString(), uuid.NewString()
+	defer rdb.Del(ctx, "sessions:"+user, "token:renew:"+oldJTI, "token:bl:"+oldJTI)
+	bl.RegisterSession(ctx, user, otherJTI)
+	bl.RegisterSession(ctx, user, oldJTI)
+	tokenStr := oldToken(t, user, oldJTI)
+
+	handler := AuthMiddleware(testSecret, rdb, nil, "http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const n = 12
+	recs := make([]*httptest.ResponseRecorder, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		recs[i] = httptest.NewRecorder()
+		wg.Add(1)
+		go func(w *httptest.ResponseRecorder) {
+			defer wg.Done()
+			req := httptest.NewRequest("GET", "/", nil)
+			req.AddCookie(&http.Cookie{Name: "token", Value: tokenStr})
+			handler.ServeHTTP(w, req)
+		}(recs[i])
+	}
+	wg.Wait()
+
+	var renewed string
+	count := 0
+	for _, w := range recs {
+		if w.Code != http.StatusOK {
+			t.Errorf("request in the burst: got status %d, want 200", w.Code)
+		}
+		if c := tokenCookie(w); c != "" {
+			renewed = c
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("renewed cookies: got %d, want 1", count)
+	}
+	if got := len(bl.ListSessions(ctx, user)); got != 2 {
+		t.Errorf("session count after the burst: got %d, want 2", got)
+	}
+	if bl.IsRevoked(ctx, otherJTI, user, time.Now()) {
+		t.Error("the burst evicted the session of another device")
+	}
+
+	// The first request with the new token retires the old token after a
+	// grace period. Inside the grace period the old token still works.
+	for _, tok := range []string{renewed, tokenStr} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: "token", Value: tok})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("request after renewal: got status %d, want 200", w.Code)
+		}
+	}
+	val, err := rdb.Get(ctx, "token:bl:"+oldJTI).Int64()
+	if err != nil {
+		t.Fatalf("old token has no retire deadline: %v", err)
+	}
+	if val <= time.Now().Unix() {
+		t.Errorf("retire deadline is not in the future: %d", val)
+	}
+
+	// After the deadline the old token is dead.
+	rdb.Set(ctx, "token:bl:"+oldJTI, time.Now().Add(-time.Second).Unix(), time.Minute)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: "token", Value: tokenStr})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("old token after the grace period: got status %d, want 401", w.Code)
 	}
 }

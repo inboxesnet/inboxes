@@ -125,7 +125,12 @@ func (h *EventHandler) Since(w http.ResponseWriter, r *http.Request) {
 
 // warningEventsWhere selects the event types the bell notification center
 // shows. Transient events stay out — toasts cover them.
-const warningEventsWhere = `(
+//
+// The first IN list repeats all event types of the three cases below. It
+// matches the predicate of the partial index idx_events_org_warning, so the
+// planner can read that index in id order and stop at the LIMIT.
+const warningEventsWhere = `event_type IN ('domain.disconnected','domain.not_found','domain.dns_degraded',
+	'domain.reconnected','email.status_updated','plan.changed') AND (
 	event_type IN ('domain.disconnected','domain.not_found','domain.dns_degraded','domain.reconnected')
 	OR (event_type = 'email.status_updated' AND payload->>'status' IN ('failed','bounced','complained')
 	    AND payload->>'dismissed' IS NULL)

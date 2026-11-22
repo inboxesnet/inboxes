@@ -151,13 +151,28 @@ func checkRateLimit(ctx context.Context, rdb *redis.Client, key string, limit, w
 		return checkMemoryRateLimit(key, limit, windowSecs)
 	}
 
+	window := time.Duration(windowSecs) * time.Second
 	if count == 1 {
-		rdb.Expire(ctx, key, time.Duration(windowSecs)*time.Second)
+		// The request context can be cancelled between INCR and EXPIRE
+		// (client disconnect). Use a separate context for the expiry.
+		expCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		rdb.Expire(expCtx, key, window)
+		cancel()
 	}
 
 	if int(count) > limit {
-		ttl, _ := rdb.TTL(ctx, key).Result()
-		return false, int(ttl.Seconds())
+		ttl, err := rdb.TTL(ctx, key).Result()
+		if err == nil && ttl < 0 {
+			// The key has no expiry (an earlier EXPIRE failed). Without
+			// this repair the caller stays blocked forever.
+			rdb.Expire(ctx, key, window)
+			ttl = window
+		}
+		retryAfter := int(ttl.Seconds())
+		if retryAfter < 0 {
+			retryAfter = 0
+		}
+		return false, retryAfter
 	}
 
 	return true, 0

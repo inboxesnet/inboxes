@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNotifications } from "@/contexts/notification-context";
 import { api } from "@/lib/api";
-import type { SyncJob, WSMessage } from "@/lib/types";
+import type { SyncJob } from "@/lib/types";
 
 /** Progress polls at 5s (was 2s). WS delivers completion instantly. */
 const PROGRESS_INTERVAL = 5000;
@@ -21,25 +21,28 @@ export function useSyncJob() {
     activeJobId.current = null;
   }, []);
 
-  // WS: instant completion — no need to wait for next poll cycle
+  // WS: check the job at once, without a wait for the next poll cycle.
+  // The event is org-wide and carries no job id; another sync (for example
+  // the inbox poller) sends it too. The server says if this job is done.
   useEffect(() => {
-    const unsub = subscribe("sync.completed", (msg: WSMessage) => {
-      if (!activeJobId.current) return;
-      stopTracking();
-      setJob((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          status: "completed" as const,
-          phase: "done",
-          sent_count:
-            (msg.payload?.sent_count as number) ?? prev.sent_count,
-          received_count:
-            (msg.payload?.received_count as number) ?? prev.received_count,
-          thread_count:
-            (msg.payload?.thread_count as number) ?? prev.thread_count,
-        };
-      });
+    const unsub = subscribe("sync.completed", () => {
+      const jobId = activeJobId.current;
+      if (!jobId) return;
+      api
+        .get<SyncJob>(`/api/sync/${jobId}`)
+        .then((data) => {
+          if (activeJobId.current !== jobId) return;
+          setJob(data);
+          if (data.status === "completed" || data.status === "failed") {
+            stopTracking();
+            if (data.status === "failed" && data.error_message) {
+              setError(data.error_message);
+            }
+          }
+        })
+        .catch(() => {
+          // The poll loop continues.
+        });
     });
     return unsub;
   }, [subscribe, stopTracking]);

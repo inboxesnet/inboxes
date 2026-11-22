@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import {
   DndContext,
@@ -19,7 +19,6 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import dynamic from "next/dynamic";
 import { DomainSidebar } from "@/components/domain-sidebar";
-import { FloatingComposeWindow } from "@/components/floating-compose-window";
 import type { Tab as SettingsTab } from "@/components/settings-modal";
 import { NotificationListener } from "@/components/notification-listener";
 import { NotificationBell } from "@/components/notification-bell";
@@ -37,6 +36,13 @@ const SettingsModal = dynamic(
   { ssr: false }
 );
 
+// The compose window pulls in the rich-text editor and the emoji data. A
+// separate chunk keeps that code out of the first load of each page.
+const FloatingComposeWindow = dynamic(
+  () => import("@/components/floating-compose-window").then((m) => m.FloatingComposeWindow),
+  { ssr: false }
+);
+
 function DomainLayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -51,6 +57,9 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
   const { openCompose } = useEmailWindow();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab | undefined>(undefined);
+  // Mount the settings modal (a large chunk) only after its first open.
+  const settingsUsedRef = useRef(false);
+  if (settingsOpen) settingsUsedRef.current = true;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [draggedThread, setDraggedThread] = useState<Thread | null>(null);
   const [billingSuccess, setBillingSuccess] = useState(false);
@@ -219,7 +228,9 @@ function DomainLayoutInner({ children }: { children: React.ReactNode }) {
           {children}
         </main>
         <FloatingComposeWindow />
-        <SettingsModal open={settingsOpen} onOpenChange={(v) => { setSettingsOpen(v); if (!v) setSettingsTab(undefined); }} defaultTab={settingsTab} />
+        {settingsUsedRef.current && (
+          <SettingsModal open={settingsOpen} onOpenChange={(v) => { setSettingsOpen(v); if (!v) setSettingsTab(undefined); }} defaultTab={settingsTab} />
+        )}
         <NotificationListener />
         <KeyboardShortcuts onCompose={handleCompose} />
       </div>

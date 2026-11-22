@@ -142,6 +142,7 @@ type resendSentEmail struct {
 	HTML      string   `json:"html"`
 	Text      string   `json:"text"`
 	LastEvent string   `json:"last_event"`
+	MessageID string   `json:"message_id"`
 	CreatedAt string   `json:"created_at"`
 }
 
@@ -179,7 +180,7 @@ func (p *InboxPoller) pollOrg(ctx context.Context, orgID string) {
 	}
 	dRows.Close()
 
-	totalEnqueued := 0
+	var pending []pendingJob
 	cursor := ""
 
 	for page := 0; page < maxPollPages; page++ {
@@ -209,8 +210,19 @@ func (p *InboxPoller) pollOrg(ctx context.Context, orgID string) {
 			break
 		}
 
-		enqueued := 0
 		hitKnown := false
+
+		ids := make([]string, 0, len(resp.Data))
+		for _, email := range resp.Data {
+			if email.ID != "" {
+				ids = append(ids, email.ID)
+			}
+		}
+		stored, queued, err := p.knownEmails(ctx, ids)
+		if err != nil {
+			slog.Error("inbox poller: failed to check known emails", "org_id", orgID, "error", err)
+			return
+		}
 
 		for _, email := range resp.Data {
 			if email.ID == "" {
@@ -222,20 +234,11 @@ func (p *InboxPoller) pollOrg(ctx context.Context, orgID string) {
 				continue
 			}
 
-			// Already in DB?
-			var existingID string
-			if err := p.Store.Q().QueryRow(ctx,
-				"SELECT id FROM emails WHERE resend_email_id = $1", email.ID,
-			).Scan(&existingID); err == nil {
+			if stored[email.ID] {
 				hitKnown = true
 				continue
 			}
-
-			// Already queued?
-			var existingJobID string
-			if err := p.Store.Q().QueryRow(ctx,
-				"SELECT id FROM email_jobs WHERE resend_email_id = $1 AND status IN ('pending', 'running')", email.ID,
-			).Scan(&existingJobID); err == nil {
+			if queued[email.ID] {
 				continue
 			}
 
@@ -258,25 +261,8 @@ func (p *InboxPoller) pollOrg(ctx context.Context, orgID string) {
 				continue
 			}
 
-			var jobID string
-			if err := p.Store.Q().QueryRow(ctx,
-				`INSERT INTO email_jobs (org_id, user_id, job_type, resend_email_id, webhook_data)
-				 VALUES ($1, $2, 'fetch', $3, $4)
-				 ON CONFLICT (resend_email_id) WHERE status IN ('pending', 'running') DO NOTHING
-				 RETURNING id`,
-				orgID, adminUserID, email.ID, webhookDataJSON,
-			).Scan(&jobID); err != nil {
-				continue
-			}
-
-			if err := p.RDB.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
-				slog.Error("inbox poller: redis lpush failed", "job_id", jobID, "error", err)
-				continue
-			}
-			enqueued++
+			pending = append(pending, pendingJob{resendID: email.ID, data: webhookDataJSON})
 		}
-
-		totalEnqueued += enqueued
 
 		// Stop paginating if we hit a known email — we've reached our frontier
 		if hitKnown {
@@ -291,7 +277,7 @@ func (p *InboxPoller) pollOrg(ctx context.Context, orgID string) {
 		cursor = resp.Data[len(resp.Data)-1].ID
 	}
 
-	if totalEnqueued > 0 {
+	if totalEnqueued := p.enqueueOldestFirst(ctx, orgID, adminUserID, "fetch", pending); totalEnqueued > 0 {
 		slog.Info("inbox poller: enqueued fetch jobs", "org_id", orgID, "count", totalEnqueued)
 	}
 }
@@ -325,7 +311,7 @@ func (p *InboxPoller) pollOrgSent(ctx context.Context, orgID string) {
 	}
 	dRows.Close()
 
-	totalEnqueued := 0
+	var pending []pendingJob
 	cursor := ""
 
 	for page := 0; page < maxPollPages; page++ {
@@ -355,8 +341,19 @@ func (p *InboxPoller) pollOrgSent(ctx context.Context, orgID string) {
 			break
 		}
 
-		enqueued := 0
 		hitKnown := false
+
+		ids := make([]string, 0, len(resp.Data))
+		for _, email := range resp.Data {
+			if email.ID != "" {
+				ids = append(ids, email.ID)
+			}
+		}
+		stored, queued, err := p.knownEmails(ctx, ids)
+		if err != nil {
+			slog.Error("inbox poller: failed to check known emails (sent)", "org_id", orgID, "error", err)
+			return
+		}
 
 		for _, email := range resp.Data {
 			if email.ID == "" {
@@ -365,24 +362,15 @@ func (p *InboxPoller) pollOrgSent(ctx context.Context, orgID string) {
 
 			// Skip emails from hidden/unselected domains (sent emails: check From address)
 			fromParts := strings.Split(service.ExtractEmail(email.From), "@")
-			if len(fromParts) == 2 && !visibleDomains[fromParts[1]] {
+			if len(fromParts) == 2 && !visibleDomains[strings.ToLower(fromParts[1])] {
 				continue
 			}
 
-			// Already in DB?
-			var existingID string
-			if err := p.Store.Q().QueryRow(ctx,
-				"SELECT id FROM emails WHERE resend_email_id = $1", email.ID,
-			).Scan(&existingID); err == nil {
+			if stored[email.ID] {
 				hitKnown = true
 				continue
 			}
-
-			// Already queued?
-			var existingJobID string
-			if err := p.Store.Q().QueryRow(ctx,
-				"SELECT id FROM email_jobs WHERE resend_email_id = $1 AND status IN ('pending', 'running')", email.ID,
-			).Scan(&existingJobID); err == nil {
+			if queued[email.ID] {
 				continue
 			}
 
@@ -395,6 +383,7 @@ func (p *InboxPoller) pollOrgSent(ctx context.Context, orgID string) {
 				"reply_to":   email.ReplyTo,
 				"subject":    email.Subject,
 				"last_event": email.LastEvent,
+				"message_id": email.MessageID,
 				"created_at": email.CreatedAt,
 			}
 			sentDataJSON, err := json.Marshal(sentData)
@@ -403,25 +392,8 @@ func (p *InboxPoller) pollOrgSent(ctx context.Context, orgID string) {
 				continue
 			}
 
-			var jobID string
-			if err := p.Store.Q().QueryRow(ctx,
-				`INSERT INTO email_jobs (org_id, user_id, job_type, resend_email_id, webhook_data)
-				 VALUES ($1, $2, 'fetch_sent', $3, $4)
-				 ON CONFLICT (resend_email_id) WHERE status IN ('pending', 'running') DO NOTHING
-				 RETURNING id`,
-				orgID, adminUserID, email.ID, sentDataJSON,
-			).Scan(&jobID); err != nil {
-				continue
-			}
-
-			if err := p.RDB.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
-				slog.Error("inbox poller: redis lpush failed (sent)", "job_id", jobID, "error", err)
-				continue
-			}
-			enqueued++
+			pending = append(pending, pendingJob{resendID: email.ID, data: sentDataJSON})
 		}
-
-		totalEnqueued += enqueued
 
 		// Stop paginating if we hit a known email — we've reached our frontier
 		if hitKnown {
@@ -436,16 +408,81 @@ func (p *InboxPoller) pollOrgSent(ctx context.Context, orgID string) {
 		cursor = resp.Data[len(resp.Data)-1].ID
 	}
 
-	if totalEnqueued > 0 {
+	if totalEnqueued := p.enqueueOldestFirst(ctx, orgID, adminUserID, "fetch_sent", pending); totalEnqueued > 0 {
 		slog.Info("inbox poller: enqueued fetch_sent jobs", "org_id", orgID, "count", totalEnqueued)
 	}
+}
+
+// pendingJob is one listed email that has no row and no open job.
+type pendingJob struct {
+	resendID string
+	data     []byte
+}
+
+// knownEmails returns the listed ids that already have an email row
+// (stored) and the ids that have an open job (queued). It uses two queries
+// for one page.
+func (p *InboxPoller) knownEmails(ctx context.Context, ids []string) (stored, queued map[string]bool, err error) {
+	stored = make(map[string]bool)
+	queued = make(map[string]bool)
+	if len(ids) == 0 {
+		return stored, queued, nil
+	}
+	collect := func(dst map[string]bool, query string) error {
+		rows, err := p.Store.Q().Query(ctx, query, ids)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			dst[id] = true
+		}
+		return rows.Err()
+	}
+	if err := collect(stored, "SELECT resend_email_id FROM emails WHERE resend_email_id = ANY($1)"); err != nil {
+		return nil, nil, err
+	}
+	if err := collect(queued, "SELECT resend_email_id FROM email_jobs WHERE resend_email_id = ANY($1) AND status IN ('pending', 'running')"); err != nil {
+		return nil, nil, err
+	}
+	return stored, queued, nil
+}
+
+// enqueueOldestFirst creates the jobs in reverse list order. Resend lists
+// the newest email first; the worker takes jobs in push order. A reply must
+// not be processed before its parent.
+func (p *InboxPoller) enqueueOldestFirst(ctx context.Context, orgID, adminUserID, jobType string, pending []pendingJob) int {
+	enqueued := 0
+	for i := len(pending) - 1; i >= 0; i-- {
+		job := pending[i]
+		var jobID string
+		if err := p.Store.Q().QueryRow(ctx,
+			`INSERT INTO email_jobs (org_id, user_id, job_type, resend_email_id, webhook_data)
+			 VALUES ($1, $2, $3, $4, $5)
+			 ON CONFLICT (resend_email_id) WHERE status IN ('pending', 'running') DO NOTHING
+			 RETURNING id`,
+			orgID, adminUserID, jobType, job.resendID, job.data,
+		).Scan(&jobID); err != nil {
+			continue
+		}
+		if err := p.RDB.LPush(ctx, "email:jobs", jobID).Err(); err != nil {
+			slog.Error("inbox poller: redis lpush failed", "job_id", jobID, "type", jobType, "error", err)
+			continue
+		}
+		enqueued++
+	}
+	return enqueued
 }
 
 // emailMatchesVisibleDomain checks if any recipient address belongs to a visible domain.
 func emailMatchesVisibleDomain(recipients []string, visibleDomains map[string]bool) bool {
 	for _, addr := range recipients {
 		parts := strings.Split(addr, "@")
-		if len(parts) == 2 && visibleDomains[parts[1]] {
+		if len(parts) == 2 && visibleDomains[strings.ToLower(parts[1])] {
 			return true
 		}
 	}

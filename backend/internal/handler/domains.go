@@ -22,9 +22,7 @@ type DomainHandler struct {
 }
 
 func (h *DomainHandler) List(w http.ResponseWriter, r *http.Request) {
-	claims := middleware.GetCurrentUser(r.Context())
-
-	domains, err := h.Store.ListDomains(r.Context(), claims.OrgID, false)
+	domains, err := h.listForCaller(r, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list domains")
 		return
@@ -32,10 +30,18 @@ func (h *DomainHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, domains)
 }
 
-func (h *DomainHandler) ListAll(w http.ResponseWriter, r *http.Request) {
+// listForCaller gives an admin all domains of the org. It gives a member only
+// the domains in which the member has an assigned alias.
+func (h *DomainHandler) listForCaller(r *http.Request, includeHidden bool) ([]map[string]any, error) {
 	claims := middleware.GetCurrentUser(r.Context())
+	if claims.Role == "admin" {
+		return h.Store.ListDomains(r.Context(), claims.OrgID, includeHidden)
+	}
+	return h.Store.ListDomainsForMember(r.Context(), claims.OrgID, claims.UserID, includeHidden)
+}
 
-	domains, err := h.Store.ListDomains(r.Context(), claims.OrgID, true)
+func (h *DomainHandler) ListAll(w http.ResponseWriter, r *http.Request) {
+	domains, err := h.listForCaller(r, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list domains")
 		return

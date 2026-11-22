@@ -1,12 +1,27 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useId } from "react";
 import { toast } from "sonner";
 import { X } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// parseAddresses splits typed or pasted text into bare addresses. It accepts
+// "a@x.com, b@y.com", "a@x.com b@y.com" and "Name <a@x.com>".
+export function parseAddresses(raw: string): string[] {
+  const out: string[] = [];
+  for (const part of raw.split(/[,;\n]+/)) {
+    const angle = part.match(/<([^<>]+)>/);
+    const pieces = angle ? [angle[1]] : part.split(/\s+/);
+    for (const piece of pieces) {
+      const cleaned = piece.trim().toLowerCase();
+      if (cleaned) out.push(cleaned);
+    }
+  }
+  return out;
+}
 
 interface RecipientInputProps {
   value: string[];
@@ -34,8 +49,13 @@ export function RecipientInput({
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const fetchTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Counts suggestion requests. A slow, old response must not replace a
+  // newer one or open the list again after an add.
+  const fetchSeqRef = useRef(0);
+  const listId = useId();
 
   const fetchSuggestions = useCallback(async (query: string) => {
+    const seq = ++fetchSeqRef.current;
     if (query.length < 2) {
       setSuggestions([]);
       return;
@@ -44,6 +64,7 @@ export function RecipientInput({
       const data = await api.get<Suggestion[]>(
         `/api/contacts/suggest?q=${encodeURIComponent(query)}`
       );
+      if (seq !== fetchSeqRef.current) return;
       // Filter out already-added recipients
       const filtered = (data || []).filter(
         (s) => !value.includes(s.email)
@@ -52,25 +73,34 @@ export function RecipientInput({
       setShowSuggestions(filtered.length > 0);
       setSelectedIndex(-1);
     } catch {
-      setSuggestions([]);
+      if (seq === fetchSeqRef.current) setSuggestions([]);
     }
   }, [value]);
 
+  // addRecipient adds each valid address in the text. Invalid text stays in
+  // the input so the user can correct it. `refocus` is false on blur: the
+  // focus must stay where the user moved it.
   const addRecipient = useCallback(
-    (email: string) => {
-      const trimmed = email.trim().toLowerCase();
-      if (!trimmed) return;
-      if (!EMAIL_REGEX.test(trimmed)) {
-        toast.error(`Invalid email: ${trimmed}`);
-        return;
+    (text: string, refocus = true) => {
+      const parsed = parseAddresses(text);
+      if (parsed.length === 0) return;
+      const valid = parsed.filter((a) => EMAIL_REGEX.test(a));
+      const invalid = parsed.filter((a) => !EMAIL_REGEX.test(a));
+      if (invalid.length > 0) {
+        toast.error(`Invalid email: ${invalid.join(", ")}`);
       }
-      if (!value.includes(trimmed)) {
-        onChange([...value, trimmed]);
+      const next = [...value];
+      for (const address of valid) {
+        if (!next.includes(address)) next.push(address);
       }
-      setInputValue("");
+      if (next.length !== value.length) onChange(next);
+      // Cancel a pending suggestion fetch for the text that is now gone.
+      if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
+      fetchSeqRef.current++;
+      setInputValue(invalid.join(", "));
       setSuggestions([]);
       setShowSuggestions(false);
-      inputRef.current?.focus();
+      if (refocus) inputRef.current?.focus();
     },
     [value, onChange]
   );
@@ -112,6 +142,10 @@ export function RecipientInput({
       } else if (e.key === "Tab") {
         // Allow natural tab behavior
         return;
+      } else if (!e.metaKey && !e.ctrlKey) {
+        // A plain Enter in this field must not submit the form and send
+        // the email. Cmd/Ctrl+Enter still reaches the form.
+        e.preventDefault();
       }
     } else if (e.key === "Backspace" && !inputValue && value.length > 0) {
       removeRecipient(value[value.length - 1]);
@@ -130,13 +164,13 @@ export function RecipientInput({
   }
 
   function handleBlur() {
-    // Delay to allow click on suggestion
-    setTimeout(() => {
-      if (inputValue.trim() && inputValue.includes("@")) {
-        addRecipient(inputValue);
-      }
-      setShowSuggestions(false);
-    }, 150);
+    // Commit at once. With a delay, a click on Send ran before the typed
+    // address was added. Suggestions use onMouseDown with preventDefault,
+    // so a click on one does not blur the input.
+    if (inputValue.trim() && inputValue.includes("@")) {
+      addRecipient(inputValue, false);
+    }
+    setShowSuggestions(false);
   }
 
   // Clean up timers on unmount
@@ -200,18 +234,18 @@ export function RecipientInput({
           role="combobox"
           aria-autocomplete="list"
           aria-expanded={showSuggestions && suggestions.length > 0}
-          aria-controls="recipient-suggestions"
-          aria-activedescendant={selectedIndex >= 0 ? `suggestion-${selectedIndex}` : undefined}
+          aria-controls={listId}
+          aria-activedescendant={selectedIndex >= 0 ? `${listId}-option-${selectedIndex}` : undefined}
         />
       </div>
 
       {/* Suggestions dropdown */}
       {showSuggestions && suggestions.length > 0 && (
-        <div id="recipient-suggestions" role="listbox" className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border bg-popover shadow-md max-h-[200px] overflow-y-auto">
+        <div id={listId} role="listbox" className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border bg-popover shadow-md max-h-[200px] overflow-y-auto">
           {suggestions.map((s, i) => (
             <button
               key={s.email}
-              id={`suggestion-${i}`}
+              id={`${listId}-option-${i}`}
               type="button"
               role="option"
               aria-selected={i === selectedIndex}

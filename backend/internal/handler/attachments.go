@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -17,10 +18,32 @@ type AttachmentHandler struct {
 	Store store.Store
 }
 
+// maxAttachmentSize matches the size CHECK on the attachments table.
+const maxAttachmentSize = 10 << 20
+
+const attachmentTransferTimeout = 5 * time.Minute
+
+// extendDeadlines moves the connection read and write deadlines of one
+// request. A writer that does not support deadlines (a test recorder, the
+// in-process MCP call) is left unchanged.
+func extendDeadlines(w http.ResponseWriter, d time.Duration) {
+	rc := http.NewResponseController(w)
+	deadline := time.Now().Add(d)
+	_ = rc.SetReadDeadline(deadline)
+	_ = rc.SetWriteDeadline(deadline)
+}
+
 // Upload handles multipart file upload and stores file content in the database.
 func (h *AttachmentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
+	// The server read and write timeouts (15 s) are too short for a large
+	// file on a slow link. Give this request more time.
+	extendDeadlines(w, attachmentTransferTimeout)
+
+	// ParseMultipartForm limits memory, not the body size. Limit the body
+	// here: 10 MB for the file plus room for the multipart framing.
+	r.Body = http.MaxBytesReader(w, r.Body, maxAttachmentSize+(1<<20))
 	if err := r.ParseMultipartForm(10 << 20); err != nil { // 10MB max
 		writeError(w, http.StatusBadRequest, "file too large")
 		return
@@ -32,6 +55,13 @@ func (h *AttachmentHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+
+	// The attachments table rejects rows over 10 MB. Answer with a clear
+	// client error, not a 500 from the database.
+	if header.Size > maxAttachmentSize {
+		writeError(w, http.StatusBadRequest, "file too large")
+		return
+	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
@@ -197,6 +227,8 @@ func (h *AttachmentHandler) Download(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return
 	}
+
+	extendDeadlines(w, attachmentTransferTimeout)
 
 	// Force safe content type for downloads
 	if !safeDownloadTypes[contentType] {

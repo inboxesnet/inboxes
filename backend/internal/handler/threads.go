@@ -172,12 +172,11 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 		for i, addr := range aliasAddrs {
 			aliasLabels[i] = "alias:" + addr
 		}
-		var allowed []string
-		for _, tid := range req.ThreadIDs {
-			visible, _ := h.Store.CheckThreadVisibility(ctx, tid, aliasLabels)
-			if visible {
-				allowed = append(allowed, tid)
-			}
+		allowed, err := h.Store.FilterVisibleThreadIDs(ctx, req.ThreadIDs, claims.OrgID, aliasLabels)
+		if err != nil {
+			slog.Error("threads: bulk visibility check failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to resolve threads")
+			return
 		}
 		req.ThreadIDs = allowed
 		if len(req.ThreadIDs) == 0 {
@@ -317,6 +316,8 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.Store.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, req.Label); err != nil {
 			slog.Error("threads: bulk add label failed", "label", req.Label, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to label threads")
+			return
 		}
 		affected = int64(len(req.ThreadIDs))
 
@@ -331,18 +332,24 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, req.Label); err != nil {
 			slog.Error("threads: bulk remove label failed", "label", req.Label, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to remove label from threads")
+			return
 		}
 		affected = int64(len(req.ThreadIDs))
 
 	case "mute":
 		if err := h.Store.BulkAddLabel(ctx, req.ThreadIDs, claims.OrgID, "muted"); err != nil {
 			slog.Error("threads: bulk mute failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to mute threads")
+			return
 		}
 		affected = int64(len(req.ThreadIDs))
 
 	case "unmute":
 		if err := h.Store.BulkRemoveLabel(ctx, req.ThreadIDs, claims.OrgID, "muted"); err != nil {
 			slog.Error("threads: bulk unmute failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to unmute threads")
+			return
 		}
 		affected = int64(len(req.ThreadIDs))
 
@@ -376,10 +383,8 @@ func (h *ThreadHandler) BulkAction(w http.ResponseWriter, r *http.Request) {
 
 		if len(trashIDs) > 0 {
 			if err := h.Store.WithTx(ctx, func(tx store.Store) error {
-				for _, tid := range trashIDs {
-					if err := tx.RemoveAllLabels(ctx, tid, claims.OrgID); err != nil {
-						return err
-					}
+				if err := tx.BulkRemoveAllLabels(ctx, trashIDs, claims.OrgID); err != nil {
+					return err
 				}
 				n, err := tx.BulkSoftDelete(ctx, trashIDs, claims.OrgID)
 				if err != nil {
@@ -622,10 +627,16 @@ func (h *ThreadHandler) Star(w http.ResponseWriter, r *http.Request) {
 		wantStarred = !h.Store.HasLabel(ctx, threadID, claims.OrgID, "starred")
 	}
 
+	var starErr error
 	if wantStarred {
-		h.Store.AddLabel(ctx, threadID, claims.OrgID, "starred")
+		starErr = h.Store.AddLabel(ctx, threadID, claims.OrgID, "starred")
 	} else {
-		h.Store.RemoveLabel(ctx, threadID, claims.OrgID, "starred")
+		starErr = h.Store.RemoveLabel(ctx, threadID, claims.OrgID, "starred")
+	}
+	if starErr != nil {
+		slog.Error("threads: star update failed", "thread_id", threadID, "error", starErr)
+		writeError(w, http.StatusInternalServerError, "failed to update star")
+		return
 	}
 
 	evtType := event.ThreadStarred
@@ -658,10 +669,16 @@ func (h *ThreadHandler) Mute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	muted := h.Store.HasLabel(ctx, threadID, claims.OrgID, "muted")
+	var muteErr error
 	if muted {
-		h.Store.RemoveLabel(ctx, threadID, claims.OrgID, "muted")
+		muteErr = h.Store.RemoveLabel(ctx, threadID, claims.OrgID, "muted")
 	} else {
-		h.Store.AddLabel(ctx, threadID, claims.OrgID, "muted")
+		muteErr = h.Store.AddLabel(ctx, threadID, claims.OrgID, "muted")
+	}
+	if muteErr != nil {
+		slog.Error("threads: mute update failed", "thread_id", threadID, "error", muteErr)
+		writeError(w, http.StatusInternalServerError, "failed to update mute")
+		return
 	}
 
 	evtType := event.ThreadMuted

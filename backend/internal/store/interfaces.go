@@ -102,6 +102,8 @@ type ThreadStore interface {
 	AddLabel(ctx context.Context, threadID, orgID, label string) error
 	RemoveLabel(ctx context.Context, threadID, orgID, label string) error
 	RemoveAllLabels(ctx context.Context, threadID, orgID string) error
+	BulkRemoveAllLabels(ctx context.Context, threadIDs []string, orgID string) error
+	FilterVisibleThreadIDs(ctx context.Context, threadIDs []string, orgID string, aliasLabels []string) ([]string, error)
 	HasLabel(ctx context.Context, threadID, orgID, label string) bool
 	GetLabels(ctx context.Context, threadID string) []string
 	BulkAddLabel(ctx context.Context, threadIDs []string, orgID, label string) error
@@ -118,17 +120,22 @@ type EmailStore interface {
 	ResolveFromDisplay(ctx context.Context, orgID, address string) (string, error)
 	LookupDomainByName(ctx context.Context, orgID, domainName string) (string, error)
 	InsertEmail(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status string, inReplyTo string, refsJSON []byte) (string, error)
+	SetEmailAttachmentIDs(ctx context.Context, emailID, orgID string, attachmentIDs []string) error
 	UpdateThreadStats(ctx context.Context, threadID, orgID, snippet, lastSender string) error
 	CreateEmailJob(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
 	SearchEmails(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error)
 	ListAdminJobs(ctx context.Context, orgID string) ([]map[string]any, error)
 	CheckSendJobExists(ctx context.Context, draftID string) (bool, error)
+	LatestThreadMessageRef(ctx context.Context, threadID, orgID string) (messageID string, references []string, err error)
+	RecomputeThreadStats(ctx context.Context, threadID, orgID string) (int, error)
+	CancelScheduledSendJob(ctx context.Context, draftID, reason string) (emailID *string, found bool, err error)
 }
 
 // ---- Domains ----
 
 type DomainStore interface {
 	ListDomains(ctx context.Context, orgID string, includeHidden bool) ([]map[string]any, error)
+	ListDomainsForMember(ctx context.Context, orgID, userID string, includeHidden bool) ([]map[string]any, error)
 	InsertDomain(ctx context.Context, orgID, domain, resendDomainID, status string, dnsRecords json.RawMessage) (string, error)
 	GetResendDomainID(ctx context.Context, domainID, orgID string) (string, error)
 	UpdateDomainStatus(ctx context.Context, domainID, status string, dnsRecords json.RawMessage) error

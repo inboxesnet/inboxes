@@ -31,12 +31,20 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
       if (
         target.tagName === "INPUT" ||
         target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
         target.isContentEditable
       ) {
         return;
       }
 
       const isMeta = e.metaKey || e.ctrlKey;
+
+      // An open dialog owns the keyboard. Plain keys must not act on the
+      // list behind it.
+      const inDialog =
+        !!target.closest?.('[role="dialog"], [role="alertdialog"]') ||
+        !!document.querySelector('[aria-modal="true"], [role="alertdialog"]');
+      if (inDialog && !isMeta) return;
 
       // Cmd+K or / — focus inline search
       if ((isMeta && e.key === "k") || (e.key === "/" && !isMeta)) {
@@ -70,7 +78,15 @@ export function KeyboardShortcuts({ onCompose }: KeyboardShortcutsProps) {
       }
 
       // Thread-list shortcuts (no modifier, only when context is available)
-      if (!isMeta && threadList && activeDomain) {
+      if (!isMeta && !e.altKey && threadList && activeDomain) {
+        // Enter on a button, a link or a thread row belongs to that control.
+        if (
+          e.key === "Enter" &&
+          target.closest?.('button, a[href], [role="button"], [role="listitem"], [role="option"]')
+        ) {
+          return;
+        }
+
         const {
           threads,
           selectedIds,

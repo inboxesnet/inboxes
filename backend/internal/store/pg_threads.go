@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // labelsSubquery is a SQL fragment that aggregates labels for a thread.
@@ -76,13 +78,13 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 	case "trash", "spam":
 		countQuery = `SELECT COUNT(*) FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
-			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
+			WHERE tl.org_id = $1 AND t.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 			t.trash_expires_at, t.snoozed_until
 			FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
-			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
+			WHERE tl.org_id = $1 AND t.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
 		args = append(args, orgID, label)
 		argIdx = 3
 
@@ -125,14 +127,14 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 	default:
 		countQuery = `SELECT COUNT(*) FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
-			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
+			WHERE tl.org_id = $1 AND t.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		query = `SELECT t.id, t.org_id, t.user_id, t.domain_id, t.subject, t.participant_emails,
 			t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
 			t.trash_expires_at, t.snoozed_until
 			FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
-			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
+			WHERE tl.org_id = $1 AND t.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		args = append(args, orgID, label)
 		argIdx = 3
@@ -171,10 +173,13 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 
 	// Count total
 	var total int
-	warnIfErr(s.q.QueryRow(ctx, countQuery, args...).Scan(&total), "threads: count query failed")
+	if err := s.q.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("threads: count query failed: %w", err)
+	}
 
-	// Add ORDER BY + pagination
-	query += " ORDER BY t.last_message_at DESC LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
+	// Add ORDER BY + pagination. The id is the tiebreaker: without it, threads
+	// with the same timestamp can repeat or go missing between pages.
+	query += " ORDER BY t.last_message_at DESC, t.id DESC LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
 	args = append(args, limit, offset)
 
 	rows, err := s.q.Query(ctx, query, args...)
@@ -196,7 +201,7 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 		err := rows.Scan(&id, &oID, &userID, &dID, &subject, &participants,
 			&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &trashExpiresAt, &snoozedUntil)
 		if err != nil {
-			continue
+			return nil, 0, fmt.Errorf("threads: scan failed: %w", err)
 		}
 		t := map[string]any{
 			"id":                 id,
@@ -222,13 +227,20 @@ func (s *PgStore) ListThreads(ctx context.Context, orgID, label, domainID string
 		threads = append(threads, t)
 		threadIDs = append(threadIDs, id)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("threads: read failed: %w", err)
+	}
+	rows.Close()
 	if threads == nil {
 		threads = []map[string]any{}
 	}
 
 	// Batch-fetch labels for all threads in one query
 	if len(threadIDs) > 0 {
-		labelMap, _ := s.BatchFetchLabels(ctx, threadIDs)
+		labelMap, err := s.BatchFetchLabels(ctx, threadIDs)
+		if err != nil {
+			return nil, 0, fmt.Errorf("threads: label fetch failed: %w", err)
+		}
 		for _, t := range threads {
 			tid := t["id"].(string)
 			if lbls, ok := labelMap[tid]; ok {
@@ -290,7 +302,7 @@ func (s *PgStore) GetThreadEmails(ctx context.Context, threadID, orgID string) (
 		`SELECT id, direction, from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses, subject,
 		 body_html, body_plain, status, attachments, message_id, in_reply_to, references_header,
 		 delivered_via_alias, sent_as_alias, is_read, dismissed_at, attachment_ids, created_at
-		 FROM emails WHERE thread_id = $1 AND org_id = $2 ORDER BY created_at ASC`, threadID, orgID,
+		 FROM emails WHERE thread_id = $1 AND org_id = $2 ORDER BY created_at ASC, id ASC`, threadID, orgID,
 	)
 	if err != nil {
 		return nil, err
@@ -309,9 +321,11 @@ func (s *PgStore) GetThreadEmails(ctx context.Context, threadID, orgID string) (
 		var attachmentIDs json.RawMessage
 		var eCreatedAt time.Time
 
-		emailRows.Scan(&eID, &dir, &from, &eTo, &eCC, &eBCC, &eReplyTo, &eSubject,
+		if err := emailRows.Scan(&eID, &dir, &from, &eTo, &eCC, &eBCC, &eReplyTo, &eSubject,
 			&bodyHTML, &bodyPlain, &eStatus, &attachments, &messageID, &inReplyTo, &refsHeader,
-			&deliveredViaAlias, &sentAsAlias, &isRead, &dismissedAt, &attachmentIDs, &eCreatedAt)
+			&deliveredViaAlias, &sentAsAlias, &isRead, &dismissedAt, &attachmentIDs, &eCreatedAt); err != nil {
+			return nil, err
+		}
 
 		email := map[string]any{
 			"id":                 eID,
@@ -356,6 +370,9 @@ func (s *PgStore) GetThreadEmails(ctx context.Context, threadID, orgID string) (
 		}
 		emails = append(emails, email)
 	}
+	if err := emailRows.Err(); err != nil {
+		return nil, err
+	}
 	if emails == nil {
 		emails = []map[string]any{}
 	}
@@ -383,6 +400,7 @@ func (s *PgStore) GetThreadDomainID(ctx context.Context, threadID, orgID string)
 func (s *PgStore) FetchThreadSummary(ctx context.Context, threadID, orgID string) (map[string]any, error) {
 	var id, dID, subject, snippet, lastSender string
 	var originalTo *string
+	var trashExpiresAt, snoozedUntil *time.Time
 	var participants json.RawMessage
 	var lastMessageAt, createdAt time.Time
 	var messageCount, unreadCount int
@@ -391,11 +409,13 @@ func (s *PgStore) FetchThreadSummary(ctx context.Context, threadID, orgID string
 	err := s.q.QueryRow(ctx,
 		`SELECT t.id, t.domain_id, t.subject, t.participant_emails,
 		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
+		 t.trash_expires_at, t.snoozed_until,
 		 `+labelsSubquery+` as labels
 		 FROM threads t WHERE t.id = $1 AND t.org_id = $2`,
 		threadID, orgID,
 	).Scan(&id, &dID, &subject, &participants,
-		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &labels)
+		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt,
+		&trashExpiresAt, &snoozedUntil, &labels)
 	if err != nil {
 		return nil, err
 	}
@@ -418,6 +438,14 @@ func (s *PgStore) FetchThreadSummary(ctx context.Context, threadID, orgID string
 	if originalTo != nil {
 		t["original_to"] = *originalTo
 	}
+	// The frontend replaces its list row with this summary, so it must carry
+	// the same optional fields as ListThreads.
+	if trashExpiresAt != nil {
+		t["trash_expires_at"] = *trashExpiresAt
+	}
+	if snoozedUntil != nil {
+		t["snoozed_until"] = *snoozedUntil
+	}
 	return t, nil
 }
 
@@ -433,8 +461,9 @@ func (s *PgStore) UpdateThreadUnread(ctx context.Context, threadID, orgID string
 }
 
 func (s *PgStore) MarkAllEmailsRead(ctx context.Context, threadID, orgID string) error {
+	// Touch only the unread rows. The frontend calls this on every thread open.
 	_, err := s.q.Exec(ctx,
-		"UPDATE emails SET is_read = true WHERE thread_id = $1 AND org_id = $2",
+		"UPDATE emails SET is_read = true WHERE thread_id = $1 AND org_id = $2 AND is_read IS NOT TRUE",
 		threadID, orgID,
 	)
 	return err
@@ -524,7 +553,7 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 	case "trash", "spam":
 		query = `SELECT t.id FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
-			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
+			WHERE tl.org_id = $1 AND t.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL`
 		args = append(args, orgID, label)
 		argIdx = 3
 	case "snoozed":
@@ -545,7 +574,7 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 	default:
 		query = `SELECT t.id FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id
-			WHERE tl.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
+			WHERE tl.org_id = $1 AND t.org_id = $1 AND tl.label = $2 AND t.deleted_at IS NULL
 			AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash','spam'))`
 		args = append(args, orgID, label)
 		argIdx = 3
@@ -589,6 +618,9 @@ func (s *PgStore) ResolveFilteredThreadIDs(ctx context.Context, orgID, label, do
 		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	if len(ids) > 10000 {
 		return nil, fmt.Errorf("too many threads selected; please narrow your filter")
 	}
@@ -630,6 +662,46 @@ func (s *PgStore) RemoveAllLabels(ctx context.Context, threadID, orgID string) e
 		`DELETE FROM thread_labels WHERE thread_id = $1 AND org_id = $2`,
 		threadID, orgID)
 	return err
+}
+
+// BulkRemoveAllLabels removes every label of the given threads in one statement.
+func (s *PgStore) BulkRemoveAllLabels(ctx context.Context, threadIDs []string, orgID string) error {
+	_, err := s.q.Exec(ctx,
+		`DELETE FROM thread_labels WHERE thread_id = ANY($1::uuid[]) AND org_id = $2`,
+		threadIDs, orgID)
+	return err
+}
+
+// FilterVisibleThreadIDs returns the given thread ids that carry at least one
+// of the alias labels. It replaces one visibility query per thread. An id
+// that is not a UUID is not visible.
+func (s *PgStore) FilterVisibleThreadIDs(ctx context.Context, threadIDs []string, orgID string, aliasLabels []string) ([]string, error) {
+	valid := make([]string, 0, len(threadIDs))
+	for _, id := range threadIDs {
+		if _, err := uuid.Parse(id); err == nil {
+			valid = append(valid, id)
+		}
+	}
+	if len(valid) == 0 || len(aliasLabels) == 0 {
+		return nil, nil
+	}
+	rows, err := s.q.Query(ctx,
+		`SELECT DISTINCT thread_id FROM thread_labels
+		 WHERE thread_id = ANY($1::uuid[]) AND org_id = $2 AND label = ANY($3::text[])`,
+		valid, orgID, aliasLabels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var visible []string
+	for rows.Next() {
+		var tid string
+		if err := rows.Scan(&tid); err != nil {
+			return nil, err
+		}
+		visible = append(visible, tid)
+	}
+	return visible, rows.Err()
 }
 
 func (s *PgStore) HasLabel(ctx context.Context, threadID, orgID, label string) bool {
@@ -687,7 +759,11 @@ func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, r
 
 	var draftCount int
 	if err := s.q.QueryRow(ctx,
-		`SELECT COUNT(*) FROM drafts WHERE org_id = $1 AND domain_id = $2 AND user_id = $3`,
+		// A draft with a live send job that is not scheduled is on its way
+		// out (undo window or queue). It does not count as a draft.
+		`SELECT COUNT(*) FROM drafts d WHERE d.org_id = $1 AND d.domain_id = $2 AND d.user_id = $3
+		 AND NOT EXISTS (SELECT 1 FROM email_jobs j WHERE j.draft_id = d.id AND j.job_type = 'send'
+		                 AND j.status IN ('pending', 'running') AND j.run_after IS NULL)`,
 		orgID, domainID, userID,
 	).Scan(&draftCount); err != nil {
 		return nil, err
@@ -712,7 +788,8 @@ func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, r
 	if err := s.q.QueryRow(ctx,
 		`SELECT COALESCE(SUM(t.unread_count), 0) FROM threads t
 		 JOIN thread_labels tl ON tl.thread_id = t.id
-		 WHERE t.org_id = $1 AND t.domain_id = $2 AND tl.label = 'spam' AND t.deleted_at IS NULL`+aliasFilter,
+		 WHERE t.org_id = $1 AND tl.org_id = $1 AND t.domain_id = $2 AND tl.label = 'spam'
+		 AND t.deleted_at IS NULL AND t.unread_count > 0`+aliasFilter,
 		baseArgs...,
 	).Scan(&spamUnread); err != nil {
 		return nil, err
@@ -748,7 +825,8 @@ func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, r
 	rows, err := s.q.Query(ctx,
 		`SELECT tl.label, COALESCE(SUM(t.unread_count), 0) FROM threads t
 		 JOIN thread_labels tl ON tl.thread_id = t.id
-		 WHERE t.org_id = $1 AND t.domain_id = $2 AND t.deleted_at IS NULL
+		 WHERE t.org_id = $1 AND tl.org_id = $1 AND t.domain_id = $2 AND t.deleted_at IS NULL
+		 AND t.unread_count > 0
 		 AND tl.label NOT IN ('inbox', 'sent', 'archive', 'starred', 'trash', 'spam', 'muted')
 		 AND tl.label NOT LIKE 'alias:%'
 		 AND NOT EXISTS (SELECT 1 FROM thread_labels tex WHERE tex.thread_id = t.id AND tex.label IN ('trash', 'spam'))`+aliasFilter+`
@@ -765,6 +843,9 @@ func (s *PgStore) GetLabelCounts(ctx context.Context, orgID, domainID, userID, r
 		if rows.Scan(&label, &count) == nil {
 			customCounts[label] = count
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	result["labels"] = customCounts
 	return result, nil

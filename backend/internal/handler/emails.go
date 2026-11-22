@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -148,6 +150,16 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 	// Resolve display name for From field
 	fromDisplay, _ := h.Store.ResolveFromDisplay(ctx, claims.OrgID, req.From)
 
+	// A reply without threading headers still must thread at the recipient.
+	// Take the headers from the newest email in the thread that has a
+	// Message-ID.
+	if req.ReplyTo != "" && req.InReplyTo == "" {
+		if msgID, refs, err := h.Store.LatestThreadMessageRef(ctx, req.ReplyTo, claims.OrgID); err == nil && msgID != "" {
+			req.InReplyTo = util.NormalizeMsgID(msgID)
+			req.References = util.ParseMsgIDs(strings.Join(append(refs, msgID), " "))
+		}
+	}
+
 	// Build Resend payload (serialized to JSON for job storage)
 	resendPayload := map[string]interface{}{
 		"from":    fromDisplay,
@@ -232,12 +244,18 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		if req.ReplyTo != "" {
 			threadID = req.ReplyTo
 		} else {
-			participants, ok := marshalOrFail(w, append([]string{req.From}, req.To...), "failed to create email")
+			participants, ok := marshalOrFail(w, util.NormalizeAddresses([]string{req.From}, req.To, req.CC), "failed to create email")
 			if !ok {
 				return fmt.Errorf("failed to marshal participants")
 			}
 			var err error
-			threadID, err = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, req.Subject, participants, snippet, req.From)
+			// Threads store the subject without Re:/Fwd: prefixes, the same
+			// as threads that inbound mail creates.
+			threadSubject := util.CleanSubjectLine(req.Subject)
+			if threadSubject == "" {
+				threadSubject = req.Subject
+			}
+			threadID, err = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, threadSubject, participants, snippet, req.From)
 			if err != nil {
 				slog.Error("email: create thread failed", "error", err)
 				return fmt.Errorf("failed to create thread")
@@ -254,6 +272,10 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 			req.InReplyTo, refsJSON)
 		if err != nil {
 			slog.Error("email: insert email failed", "error", err)
+			return fmt.Errorf("failed to create email")
+		}
+		if err := tx.SetEmailAttachmentIDs(ctx, emailID, claims.OrgID, req.AttachmentIDs); err != nil {
+			slog.Error("email: set attachment ids failed", "email_id", emailID, "error", err)
 			return fmt.Errorf("failed to create email")
 		}
 
@@ -388,12 +410,27 @@ func (h *EmailHandler) Retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.Store.Q().Exec(ctx,
+	// The conditional update refuses a live job. A reset of a pending or
+	// running job can send the email twice or skip its undo window.
+	resetTag, err := h.Store.Q().Exec(ctx,
 		`UPDATE email_jobs SET status = 'pending', retry_count = 0, error_message = '',
-		        heartbeat_at = now(), updated_at = now() WHERE id = $1`,
+		        heartbeat_at = now(), updated_at = now()
+		 WHERE id = $1 AND status NOT IN ('pending', 'running')`,
 		jobID,
-	); err != nil {
+	)
+	if err != nil {
+		// The unique index on live send jobs per draft refuses the reset
+		// when the draft has a newer live job.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeError(w, http.StatusConflict, "this draft is already being sent")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to reset send job")
+		return
+	}
+	if resetTag.RowsAffected() == 0 {
+		writeError(w, http.StatusConflict, "this email is already in the send queue")
 		return
 	}
 	// A retry un-dismisses the email: the user acts on it again.
@@ -562,33 +599,56 @@ func (h *EmailHandler) CancelSend(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.Store.Q().Exec(ctx, `DELETE FROM emails WHERE id = $1 AND org_id = $2`, emailID, claims.OrgID); err != nil {
 		slog.Error("email undo: delete email failed", "email_id", emailID, "error", err)
 	}
-	var remaining int
-	if err := h.Store.Q().QueryRow(ctx, `SELECT count(*) FROM emails WHERE thread_id = $1`, threadID).Scan(&remaining); err == nil && remaining == 0 {
+	// The send handler changed the thread stats; set them back from the
+	// emails that remain.
+	threadRemoved := false
+	remaining, err := h.Store.RecomputeThreadStats(ctx, threadID, claims.OrgID)
+	if err != nil {
+		slog.Error("email undo: recompute thread stats failed", "thread_id", threadID, "error", err)
+	} else if remaining == 0 {
 		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM thread_labels WHERE thread_id = $1`, threadID); err != nil {
 			slog.Error("email undo: delete thread labels failed", "thread_id", threadID, "error", err)
 		}
 		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM threads WHERE id = $1 AND org_id = $2`, threadID, claims.OrgID); err != nil {
 			slog.Error("email undo: delete empty thread failed", "thread_id", threadID, "error", err)
+		} else {
+			threadRemoved = true
 		}
 	}
 
-	if h.Bus != nil {
-		h.Bus.Publish(ctx, event.Event{
-			EventType: event.EmailStatusUpdated,
-			OrgID:     claims.OrgID,
-			DomainID:  domainID,
-			ThreadID:  threadID,
-			Payload: map[string]interface{}{
-				"email_id": emailID,
-				"status":   "cancelled",
-			},
-		})
-	}
+	publishSendCancelled(ctx, h.Bus, claims.OrgID, domainID, threadID, emailID, threadRemoved)
 
 	slog.Info("email undo: send cancelled", "email_id", emailID, "job_id", jobID, "draft_id", restoredDraftID)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "cancelled",
 		"draft_id": restoredDraftID,
+	})
+}
+
+// publishSendCancelled tells clients that a queued or scheduled email is
+// gone. When its thread is gone too, clients must remove the thread row.
+func publishSendCancelled(ctx context.Context, bus *event.Bus, orgID, domainID, threadID, emailID string, threadRemoved bool) {
+	if bus == nil {
+		return
+	}
+	if threadRemoved {
+		bus.Publish(ctx, event.Event{
+			EventType: event.ThreadDeleted,
+			OrgID:     orgID,
+			DomainID:  domainID,
+			ThreadID:  threadID,
+		})
+		return
+	}
+	bus.Publish(ctx, event.Event{
+		EventType: event.EmailStatusUpdated,
+		OrgID:     orgID,
+		DomainID:  domainID,
+		ThreadID:  threadID,
+		Payload: map[string]interface{}{
+			"email_id": emailID,
+			"status":   "cancelled",
+		},
 	})
 }
 

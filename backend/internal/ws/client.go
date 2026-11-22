@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -22,6 +23,8 @@ const (
 	maxMsgSize = 512
 )
 
+var heartbeatMessage = []byte(`{"event":"ping"}`)
+
 type Client struct {
 	hub             *Hub
 	conn            *websocket.Conn
@@ -33,6 +36,18 @@ type Client struct {
 	IssuedAt        time.Time
 	TokenExp        time.Time
 	AliasAddresses  []string
+	// aliasMu guards AliasAddresses: the write pump refreshes the list
+	// while the hub reads it.
+	aliasMu sync.RWMutex
+	// The hub sets the close code before it closes send.
+	closeCode   int
+	closeReason string
+}
+
+func (c *Client) aliasAddresses() []string {
+	c.aliasMu.RLock()
+	defer c.aliasMu.RUnlock()
+	return c.AliasAddresses
 }
 
 func ServeWS(hub *Hub, secret string, appURL string, w http.ResponseWriter, r *http.Request) {
@@ -50,6 +65,33 @@ func ServeWS(hub *Hub, secret string, appURL string, w http.ResponseWriter, r *h
 	if err != nil || !token.Valid {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
+	}
+
+	issuedAt := time.Time{}
+	if claims.IssuedAt != nil {
+		issuedAt = claims.IssuedAt.Time
+	}
+
+	// Refuse a revoked token or an inactive user before the upgrade.
+	// Without this check a revoked session reconnects in a loop until the
+	// periodic check in the write pump closes it again.
+	checkCtx, checkCancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer checkCancel()
+	if service.NewTokenBlacklist(hub.rdb).IsRevoked(checkCtx, claims.ID, claims.UserID, issuedAt) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if hub.store != nil {
+		var status string
+		var orgDeletedAt *time.Time
+		err := hub.store.Q().QueryRow(checkCtx,
+			"SELECT u.status, o.deleted_at FROM users u JOIN orgs o ON o.id = u.org_id WHERE u.id = $1",
+			claims.UserID,
+		).Scan(&status, &orgDeletedAt)
+		if err != nil || status != "active" || orgDeletedAt != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// Per-call upgrader that validates WebSocket origin against configured app URL
@@ -79,10 +121,6 @@ func ServeWS(hub *Hub, secret string, appURL string, w http.ResponseWriter, r *h
 		return
 	}
 
-	issuedAt := time.Time{}
-	if claims.IssuedAt != nil {
-		issuedAt = claims.IssuedAt.Time
-	}
 	tokenExp := time.Time{}
 	if claims.ExpiresAt != nil {
 		tokenExp = claims.ExpiresAt.Time
@@ -170,7 +208,11 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				closeMsg := []byte{}
+				if c.closeCode != 0 {
+					closeMsg = websocket.FormatCloseMessage(c.closeCode, c.closeReason)
+				}
+				c.conn.WriteMessage(websocket.CloseMessage, closeMsg)
 				return
 			}
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
@@ -180,6 +222,13 @@ func (c *Client) writePump() {
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+			// Browser code cannot see ping frames. This message lets the
+			// client find a dead socket: it reconnects when the heartbeat
+			// stops.
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.TextMessage, heartbeatMessage); err != nil {
 				return
 			}
 
@@ -201,7 +250,10 @@ func (c *Client) writePump() {
 			}
 			// Refresh alias addresses for event filtering
 			if c.hub.store != nil {
-				c.AliasAddresses = loadUserAliases(c.hub.ctx, c.hub.store, c.UserID)
+				addrs := loadUserAliases(c.hub.ctx, c.hub.store, c.UserID)
+				c.aliasMu.Lock()
+				c.AliasAddresses = addrs
+				c.aliasMu.Unlock()
 			}
 		}
 	}

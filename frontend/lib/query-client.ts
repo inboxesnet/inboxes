@@ -25,6 +25,9 @@ if (typeof window !== "undefined") {
     const raw = localStorage.getItem(CACHE_KEY);
     if (raw) {
       hydrate(queryClient, JSON.parse(raw));
+      // The restored data shows at once, but it can be old. Mark it stale
+      // so each query fetches again when a component uses it.
+      queryClient.invalidateQueries();
     }
   } catch {
     localStorage.removeItem(CACHE_KEY);
@@ -40,7 +43,10 @@ if (typeof window !== "undefined") {
           shouldDehydrateQuery: (q) =>
             q.state.status === "success" &&
             PERSIST_PREFIXES.includes(q.queryKey[0] as string) &&
-            q.queryKey[1] !== "unreadCounts",
+            q.queryKey[1] !== "unreadCounts" &&
+            // Thread details hold full email bodies. They are too large
+            // to serialize after each cache change.
+            !(q.queryKey[0] === "threads" && q.queryKey[1] === "detail"),
         });
         localStorage.setItem(CACHE_KEY, JSON.stringify(state));
       } catch {

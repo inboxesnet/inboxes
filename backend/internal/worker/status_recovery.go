@@ -3,12 +3,15 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
+	"github.com/inboxes/backend/internal/event"
 	"github.com/inboxes/backend/internal/queue"
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/util"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,6 +22,9 @@ type StatusRecovery struct {
 	ResendSvc *service.ResendService
 	Limiter   *queue.OrgLimiterMap
 	Interval  time.Duration
+	// Bus is optional. When set, each status change goes to clients as an
+	// email.status_updated event.
+	Bus *event.Bus
 }
 
 func NewStatusRecovery(db *pgxpool.Pool, resendSvc *service.ResendService, limiter *queue.OrgLimiterMap, interval time.Duration) *StatusRecovery {
@@ -62,6 +68,7 @@ type staleEmail struct {
 	ID            string
 	ResendEmailID string
 	OrgID         string
+	Status        string
 }
 
 func (sr *StatusRecovery) recover(ctx context.Context) {
@@ -69,7 +76,7 @@ func (sr *StatusRecovery) recover(ctx context.Context) {
 	// 'sent' catches emails whose delivery webhook never arrived — common
 	// for self-hosters without a reachable webhook URL.
 	rows, err := sr.DB.Query(ctx,
-		`SELECT id, resend_email_id, org_id FROM emails
+		`SELECT id, resend_email_id, org_id, status FROM emails
 		 WHERE resend_email_id IS NOT NULL
 		   AND status IN ('received', 'sent')
 		   AND direction = 'outbound'
@@ -87,7 +94,7 @@ func (sr *StatusRecovery) recover(ctx context.Context) {
 	var emails []staleEmail
 	for rows.Next() {
 		var e staleEmail
-		if err := rows.Scan(&e.ID, &e.ResendEmailID, &e.OrgID); err != nil {
+		if err := rows.Scan(&e.ID, &e.ResendEmailID, &e.OrgID, &e.Status); err != nil {
 			slog.Error("status recovery: scan failed", "error", err)
 			continue
 		}
@@ -127,7 +134,7 @@ func (sr *StatusRecovery) recover(ctx context.Context) {
 		}
 
 		newStatus := mapResendEvent(resendEmail.LastEvent)
-		if newStatus == "" || newStatus == "received" {
+		if newStatus == "" || newStatus == "received" || newStatus == e.Status {
 			// No new information. Bump updated_at so the 30-minute throttle
 			// in the query above delays the next poll of this email.
 			if _, err := sr.DB.Exec(ctx,
@@ -138,13 +145,36 @@ func (sr *StatusRecovery) recover(ctx context.Context) {
 			continue
 		}
 
-		_, err = sr.DB.Exec(ctx,
-			"UPDATE emails SET status = $1, updated_at = now() WHERE id = $2",
+		// Status-order guard: change only a row that is still 'received'
+		// or 'sent'. A webhook can set a final status (delivered, bounced,
+		// complained) while this poll runs; the poll must not move it back.
+		var threadID, domainID, subject string
+		err = sr.DB.QueryRow(ctx,
+			`UPDATE emails SET status = $1, updated_at = now()
+			 WHERE id = $2 AND status IN ('received', 'sent')
+			 RETURNING thread_id, domain_id, subject`,
 			newStatus, e.ID,
-		)
+		).Scan(&threadID, &domainID, &subject)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
 		if err != nil {
 			slog.Error("status recovery: update failed", "email_id", e.ID, "error", err)
 			continue
+		}
+
+		if sr.Bus != nil {
+			sr.Bus.Publish(ctx, event.Event{
+				EventType: event.EmailStatusUpdated,
+				OrgID:     e.OrgID,
+				DomainID:  domainID,
+				ThreadID:  threadID,
+				Payload: map[string]interface{}{
+					"email_id": e.ID,
+					"status":   newStatus,
+					"subject":  subject,
+				},
+			})
 		}
 
 		slog.Info("status recovery: updated email status",

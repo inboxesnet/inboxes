@@ -12,8 +12,8 @@ func (s *PgStore) PurgeExpiredTrash(ctx context.Context, orgID string) (int64, e
 		`WITH expired AS (
 			SELECT t.id FROM threads t
 			JOIN thread_labels tl ON tl.thread_id = t.id AND tl.label = 'trash'
-			WHERE t.trash_expires_at < now() AND t.deleted_at IS NULL
-			AND ($1 = '' OR t.org_id::text = $1)
+			WHERE t.trash_expires_at IS NOT NULL AND t.trash_expires_at < now() AND t.deleted_at IS NULL
+			AND ($1 = '' OR t.org_id = NULLIF($1, '')::uuid)
 		)
 		UPDATE threads SET deleted_at = now(), updated_at = now() WHERE id IN (SELECT id FROM expired)`,
 		orgID)
@@ -24,7 +24,7 @@ func (s *PgStore) PurgeExpiredTrash(ctx context.Context, orgID string) (int64, e
 	// Clean up orphaned labels
 	if _, err := s.q.Exec(ctx,
 		`DELETE FROM thread_labels WHERE thread_id IN (SELECT id FROM threads WHERE deleted_at IS NOT NULL
-		 AND ($1 = '' OR org_id::text = $1))`,
+		 AND ($1 = '' OR org_id = NULLIF($1, '')::uuid))`,
 		orgID); err != nil {
 		slog.Error("cron: label cleanup failed", "error", err)
 	}

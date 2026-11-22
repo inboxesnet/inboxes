@@ -23,6 +23,7 @@ type sentEmailData struct {
 	ReplyTo   []string `json:"reply_to"`
 	Subject   string   `json:"subject"`
 	LastEvent string   `json:"last_event"`
+	MessageID string   `json:"message_id"`
 	CreatedAt string   `json:"created_at"`
 }
 
@@ -92,12 +93,16 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 	fullData, fullErr := w.resendSvc.Fetch(ctx, orgID, "GET", "/emails/"+resendEmailID, nil)
 	if fullErr == nil {
 		var full struct {
-			From    string   `json:"from"`
-			HTML    string   `json:"html"`
-			Text    string   `json:"text"`
-			ReplyTo []string `json:"reply_to"`
+			From      string   `json:"from"`
+			HTML      string   `json:"html"`
+			Text      string   `json:"text"`
+			ReplyTo   []string `json:"reply_to"`
+			MessageID string   `json:"message_id"`
 		}
 		if json.Unmarshal(fullData, &full) == nil {
+			if emailData.MessageID == "" {
+				emailData.MessageID = full.MessageID
+			}
 			bodyHTML = full.HTML
 			bodyPlain = full.Text
 			if len(full.ReplyTo) > 0 {
@@ -167,33 +172,31 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 	}
 	defer tx.Rollback(dbCtx)
 
-	// Find or create thread (same 3-step matching as inbound)
-	var threadID string
-	found := false
-	cleanSubject := util.CleanSubjectLine(emailData.Subject)
-
-	// Step 1: Match by subject + counterparty (outbound: counterparty is first recipient)
-	if cleanSubject != "" && len(emailData.To) > 0 {
-		matchAddr := service.ExtractEmail(emailData.To[0])
-		counterpartyJSON, marshalErr := json.Marshal([]string{matchAddr})
-		if marshalErr != nil {
-			return fmt.Errorf("marshal counterparty: %w", marshalErr)
-		}
-		err := tx.QueryRow(dbCtx,
-			`SELECT id FROM threads WHERE org_id = $1 AND domain_id = $2 AND subject = $3
-			 AND participant_emails @> $4::jsonb AND deleted_at IS NULL
-			 AND last_message_at > now() - interval '90 days'
-			 ORDER BY last_message_at DESC LIMIT 1`,
-			orgID, domainID, cleanSubject, counterpartyJSON,
-		).Scan(&threadID)
-		if err == nil {
-			found = true
-		}
+	if err := service.LockThreading(dbCtx, tx, orgID); err != nil {
+		return fmt.Errorf("threading lock: %w", err)
 	}
+
+	// Find or create thread. Resend gives no headers for sent mail, so the
+	// match uses the Message-ID (a stored reply to this email) and, for a
+	// subject with a reply prefix, the subject and the first recipient.
+	cleanSubject := util.CleanSubjectLine(emailData.Subject)
+	messageID := util.NormalizeMsgID(emailData.MessageID)
+	counterparty := ""
+	if len(emailData.To) > 0 {
+		counterparty = emailData.To[0]
+	}
+	participants := util.NormalizeAddresses([]string{emailData.From}, emailData.To, emailData.CC)
+	threadID, found := service.FindThread(dbCtx, tx, service.ThreadLookup{
+		OrgID:        orgID,
+		DomainID:     domainID,
+		MessageID:    messageID,
+		Subject:      emailData.Subject,
+		Counterparty: counterparty,
+	})
 
 	// Step 2: Create new thread
 	if !found {
-		participants, marshalErr := json.Marshal(append([]string{emailData.From}, emailData.To...))
+		participantsJSON, marshalErr := json.Marshal(participants)
 		if marshalErr != nil {
 			return fmt.Errorf("marshal participants: %w", marshalErr)
 		}
@@ -205,7 +208,7 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 		if err := tx.QueryRow(dbCtx,
 			`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet, last_sender, last_message_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '1970-01-01T00:00:00Z') RETURNING id`,
-			orgID, userID, domainID, cleanSubject, participants, originalTo, snippet, emailData.From,
+			orgID, userID, domainID, cleanSubject, participantsJSON, originalTo, snippet, emailData.From,
 		).Scan(&threadID); err != nil {
 			return fmt.Errorf("create thread: %w", err)
 		}
@@ -215,14 +218,15 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 	// Insert email
 	var emailID string
 	if err := tx.QueryRow(dbCtx,
-		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, direction,
+		`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, message_id, direction,
 		 from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses,
 		 subject, body_html, body_plain, status, last_event, attachments, created_at)
-		 VALUES ($1, $2, $3, $4, $5, 'outbound', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		 VALUES ($1, $2, $3, $4, $5, $18, 'outbound', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		 RETURNING id`,
 		threadID, userID, orgID, domainID, resendEmailID,
 		fromClean, toJSON, ccJSON, bccJSON, replyToJSON,
 		emailData.Subject, bodyHTML, bodyPlain, status, emailData.LastEvent, attachmentsJSON, createdAt,
+		nullIfEmpty(messageID),
 	).Scan(&emailID); err != nil {
 		return fmt.Errorf("insert email: %w", err)
 	}
@@ -238,6 +242,11 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 		createdAt, threadID, snippet, emailData.From,
 	); err != nil {
 		slog.Error("email worker: failed to update thread stats (sent)", "error", err)
+	}
+
+	// Merge the bare lowercase addresses into the thread participants.
+	if err := service.MergeParticipants(dbCtx, tx, threadID, participants); err != nil {
+		slog.Error("email worker: failed to merge participants (sent)", "thread_id", threadID, "error", err)
 	}
 
 	// Ensure sent label
@@ -266,9 +275,6 @@ func (w *EmailWorker) processFetchSent(ctx context.Context, jobID, orgID, userID
 
 	// Populate sent_as_alias
 	w.populateSentAsAlias(ctx, emailID, orgID)
-
-	// Merge outbound recipients into thread participant_emails
-	w.mergeParticipantEmails(ctx, emailID, threadID)
 
 	slog.Info("email worker: sent email imported", "email_id", emailID, "resend_email_id", resendEmailID, "thread_id", threadID)
 

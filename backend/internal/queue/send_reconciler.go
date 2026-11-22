@@ -24,16 +24,57 @@ func (w *EmailWorker) RunReconciler(ctx context.Context, interval time.Duration)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	lastPrune := time.Time{}
 	for {
 		select {
 		case <-ticker.C:
 			func() {
 				defer util.RecoverWorker("send-reconciler")
 				w.reconcileStuckEmails(ctx)
+				if time.Since(lastPrune) >= jobPruneInterval {
+					lastPrune = time.Now()
+					w.pruneOldJobs(ctx)
+				}
 			}()
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// jobRetention is how long a completed or cancelled job row stays. The row
+// holds the full send payload (attachments included), so the table grows
+// without a limit if nothing removes old rows. Failed jobs stay: a retry
+// needs their payload.
+const jobRetention = 30 * 24 * time.Hour
+
+const jobPruneInterval = time.Hour
+
+// pruneOldJobs deletes completed and cancelled jobs older than jobRetention,
+// in batches so one statement never holds many row locks.
+func (w *EmailWorker) pruneOldJobs(ctx context.Context) {
+	const batchSize = 1000
+	var total int64
+	for i := 0; i < 20; i++ {
+		tag, err := w.store.Q().Exec(ctx,
+			`DELETE FROM email_jobs WHERE id IN (
+			   SELECT id FROM email_jobs
+			   WHERE status IN ('completed', 'cancelled')
+			     AND updated_at < now() - make_interval(hours => $1)
+			   LIMIT $2)`,
+			int(jobRetention.Hours()), batchSize,
+		)
+		if err != nil {
+			slog.Error("send reconciler: job prune failed", "error", err)
+			return
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < batchSize {
+			break
+		}
+	}
+	if total > 0 {
+		slog.Info("send reconciler: pruned old jobs", "deleted", total)
 	}
 }
 

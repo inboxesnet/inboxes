@@ -577,6 +577,11 @@ func TestOAuthFullFlow(t *testing.T) {
 
 	// 7. Reuse detection: replaying the old (rotated-away) refresh token is a
 	// replay. The server must reject it and revoke the whole chain.
+	// Move the rotation out of the 60-second grace window first.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE agent_tokens SET refresh_rotated_at = now() - interval '5 minutes' WHERE refresh_rotated_at IS NOT NULL`); err != nil {
+		t.Fatalf("backdate rotation: %v", err)
+	}
 	form = url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", tok.RefreshToken)

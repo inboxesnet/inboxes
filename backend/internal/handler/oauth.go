@@ -30,6 +30,10 @@ const (
 	accessTokenTTL  = 30 * 24 * time.Hour
 	refreshTokenTTL = 90 * 24 * time.Hour
 	authCodeTTL     = 10 * time.Minute
+	// refreshReuseGraceSecs is the time after a rotation in which a second
+	// use of the old refresh token is not a replay. Two client processes
+	// that share one token, or a retry after a lost response, cause it.
+	refreshReuseGraceSecs = 60
 )
 
 // isLoopbackHost reports whether a URL host is a loopback address. It accepts
@@ -367,11 +371,19 @@ func (h *OAuthHandler) tokenFromRefresh(w http.ResponseWriter, r *http.Request, 
 	// Reuse detection: a token that matches a superseded (rotated-away) hash is a
 	// replay. It means the token leaked. Revoke that token so neither the thief
 	// nor the victim can use the chain again, per OAuth 2.1 §4.14.2.
+	// Inside the grace window the server rejects the request but does not
+	// revoke: the current refresh token stays valid.
 	var reuseID string
+	var inGrace bool
 	if err := h.Store.Q().QueryRow(ctx,
-		`SELECT id FROM agent_tokens WHERE prev_refresh_hash = $1 AND revoked_at IS NULL`,
-		refreshHash,
-	).Scan(&reuseID); err == nil && reuseID != "" {
+		`SELECT id, COALESCE(refresh_rotated_at > now() - make_interval(secs => $2), false)
+		 FROM agent_tokens WHERE prev_refresh_hash = $1 AND revoked_at IS NULL`,
+		refreshHash, float64(refreshReuseGraceSecs),
+	).Scan(&reuseID, &inGrace); err == nil && reuseID != "" {
+		if inGrace {
+			h.tokenError(w, "invalid_grant", "refresh token already rotated")
+			return
+		}
 		h.Store.Q().Exec(ctx, `UPDATE agent_tokens SET revoked_at = now() WHERE id = $1`, reuseID)
 		h.tokenError(w, "invalid_grant", "refresh token reuse detected")
 		return
@@ -409,11 +421,19 @@ func (h *OAuthHandler) tokenFromRefresh(w http.ResponseWriter, r *http.Request, 
 		h.tokenError(w, "server_error", "failed to create token")
 		return
 	}
-	if _, err := h.Store.Q().Exec(ctx,
-		`UPDATE agent_tokens SET token_hash = $1, refresh_hash = $2, prev_refresh_hash = $3, expires_at = $4 WHERE id = $5`,
+	// The refresh_hash condition makes the rotation atomic. Of two parallel
+	// requests with the same refresh token, only one rotates.
+	tag, err := h.Store.Q().Exec(ctx,
+		`UPDATE agent_tokens SET token_hash = $1, refresh_hash = $2, prev_refresh_hash = $3, expires_at = $4, refresh_rotated_at = now()
+		 WHERE id = $5 AND refresh_hash = $3 AND revoked_at IS NULL`,
 		mcp.HashToken(access), mcp.HashToken(newRefresh), refreshHash, time.Now().Add(accessTokenTTL), tokenID,
-	); err != nil {
+	)
+	if err != nil {
 		h.tokenError(w, "server_error", "failed to rotate token")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		h.tokenError(w, "invalid_grant", "refresh token already rotated")
 		return
 	}
 

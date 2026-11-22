@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -219,7 +222,21 @@ func (h *DraftHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.GetCurrentUser(r.Context())
 
 	id := chi.URLParam(r, "id")
-	n, err := h.Store.DeleteDraft(r.Context(), id, claims.UserID)
+	ctx := r.Context()
+
+	// A scheduled send job holds its own copy of the email. Cancel the job
+	// together with the draft, or the email still goes out later.
+	var n int64
+	var parkedEmailID *string
+	err := h.Store.WithTx(ctx, func(tx store.Store) error {
+		var err error
+		n, err = tx.DeleteDraft(ctx, id, claims.UserID)
+		if err != nil || n == 0 {
+			return err
+		}
+		parkedEmailID, _, err = tx.CancelScheduledSendJob(ctx, id, "draft deleted")
+		return err
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete draft")
 		return
@@ -228,8 +245,50 @@ func (h *DraftHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "draft not found")
 		return
 	}
+	if parkedEmailID != nil {
+		h.removeParkedEmail(ctx, claims.OrgID, *parkedEmailID)
+	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// removeParkedEmail deletes the email row of a cancelled scheduled send,
+// repairs the stats of its thread, and tells clients. It deletes the thread
+// when no email remains in it.
+func (h *DraftHandler) removeParkedEmail(ctx context.Context, orgID, emailID string) {
+	var threadID, domainID string
+	if err := h.Store.Q().QueryRow(ctx,
+		`SELECT thread_id, domain_id FROM emails WHERE id = $1 AND org_id = $2`, emailID, orgID,
+	).Scan(&threadID, &domainID); err != nil {
+		slog.Error("draft: parked email lookup failed", "email_id", emailID, "error", err)
+		return
+	}
+	// Clear the job references first so the deletes pass the foreign keys.
+	if _, err := h.Store.Q().Exec(ctx,
+		`UPDATE email_jobs SET email_id = NULL, thread_id = NULL WHERE email_id = $1`, emailID); err != nil {
+		slog.Error("draft: clear job refs failed", "email_id", emailID, "error", err)
+	}
+	if _, err := h.Store.Q().Exec(ctx, `DELETE FROM emails WHERE id = $1 AND org_id = $2`, emailID, orgID); err != nil {
+		slog.Error("draft: parked email delete failed", "email_id", emailID, "error", err)
+		return
+	}
+
+	threadRemoved := false
+	remaining, err := h.Store.RecomputeThreadStats(ctx, threadID, orgID)
+	if err != nil {
+		slog.Error("draft: recompute thread stats failed", "thread_id", threadID, "error", err)
+	} else if remaining == 0 {
+		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM thread_labels WHERE thread_id = $1`, threadID); err != nil {
+			slog.Error("draft: delete thread labels failed", "thread_id", threadID, "error", err)
+		}
+		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM threads WHERE id = $1 AND org_id = $2`, threadID, orgID); err != nil {
+			slog.Error("draft: delete empty thread failed", "thread_id", threadID, "error", err)
+		} else {
+			threadRemoved = true
+		}
+	}
+
+	publishSendCancelled(ctx, h.Bus, orgID, domainID, threadID, emailID, threadRemoved)
 }
 
 func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
@@ -367,6 +426,16 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 	if len(bcc) > 0 {
 		resendPayload["bcc"] = bcc
 	}
+	// A reply draft without threading headers (for example one that an
+	// agent made) takes them from the newest email in the thread that has
+	// a Message-ID.
+	if threadID != nil && *threadID != "" && inReplyTo == "" {
+		if msgID, refs, refErr := h.Store.LatestThreadMessageRef(ctx, *threadID, claims.OrgID); refErr == nil && msgID != "" {
+			inReplyTo = util.NormalizeMsgID(msgID)
+			referencesHeader = strings.Join(util.ParseMsgIDs(strings.Join(append(refs, msgID), " ")), " ")
+		}
+	}
+
 	// Threading headers, like the direct send path. Without them a reply
 	// sent from a draft starts a new conversation at the recipient.
 	if inReplyTo != "" {
@@ -411,17 +480,24 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 
 	// Wrap thread find/create + email INSERT + thread stats + job INSERT in a transaction
 	var finalThreadID, emailID, jobID string
+	duplicateJob := false
 	txErr := h.Store.WithTx(ctx, func(tx store.Store) error {
 		// Find or create thread
 		if threadID != nil && *threadID != "" {
 			finalThreadID = *threadID
 		} else {
-			participants, err := json.Marshal(append([]string{fromAddr}, to...))
+			participants, err := json.Marshal(util.NormalizeAddresses([]string{fromAddr}, to, cc))
 			if err != nil {
 				return fmt.Errorf("failed to marshal participants: %w", err)
 			}
 			var err2 error
-			finalThreadID, err2 = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, subject, participants, snippet, fromAddr)
+			// Threads store the subject without Re:/Fwd: prefixes, the same
+			// as threads that inbound mail creates.
+			threadSubject := util.CleanSubjectLine(subject)
+			if threadSubject == "" {
+				threadSubject = subject
+			}
+			finalThreadID, err2 = tx.CreateThread(ctx, claims.OrgID, claims.UserID, domainID, threadSubject, participants, snippet, fromAddr)
 			if err2 != nil {
 				slog.Error("draft: create thread failed", "error", err2)
 				return err2
@@ -448,6 +524,10 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 			slog.Error("draft: insert email failed", "error", err)
 			return err
 		}
+		if err := tx.SetEmailAttachmentIDs(ctx, emailID, claims.OrgID, attachmentIDs); err != nil {
+			slog.Error("draft: set attachment ids failed", "email_id", emailID, "error", err)
+			return err
+		}
 
 		// Update thread stats
 		if err := tx.UpdateThreadStats(ctx, finalThreadID, claims.OrgID, snippet, fromAddr); err != nil {
@@ -458,6 +538,13 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		draftID := id
 		jobID, err = tx.CreateEmailJob(ctx, claims.OrgID, claims.UserID, domainID, "send", emailID, finalThreadID, resendPayloadJSON, &draftID)
 		if err != nil {
+			// The unique index on live send jobs per draft refuses a second
+			// job. This occurs when two send requests race.
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				duplicateJob = true
+				return err
+			}
 			slog.Error("draft: create send job failed", "error", err)
 			return err
 		}
@@ -476,6 +563,10 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if txErr != nil {
+		if duplicateJob {
+			writeError(w, http.StatusConflict, "this draft is already being sent")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to send email")
 		return
 	}
@@ -524,42 +615,21 @@ func (h *DraftHandler) CancelSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var jobID string
-	var emailID *string
-	err := h.Store.Q().QueryRow(ctx,
-		`SELECT id, email_id FROM email_jobs
-		 WHERE draft_id = $1 AND job_type = 'send' AND status = 'pending' AND run_after IS NOT NULL
-		 ORDER BY created_at DESC LIMIT 1`,
-		draftID,
-	).Scan(&jobID, &emailID)
+	// The conditional update inside is the gate: it wins only while the
+	// job is still pending and parked.
+	emailID, found, err := h.Store.CancelScheduledSendJob(ctx, draftID, "schedule cancelled")
 	if err != nil {
-		writeError(w, http.StatusConflict, "no scheduled send found for this draft")
+		writeError(w, http.StatusInternalServerError, "failed to cancel the scheduled send")
 		return
 	}
-
-	res, err := h.Store.Q().Exec(ctx,
-		`UPDATE email_jobs SET status = 'cancelled', error_message = 'schedule cancelled', updated_at = now()
-		 WHERE id = $1 AND status = 'pending'`, jobID)
-	if err != nil || res.RowsAffected() == 0 {
-		writeError(w, http.StatusConflict, "too late to cancel — the email already left")
+	if !found {
+		writeError(w, http.StatusConflict, "no scheduled send found for this draft — the email may have left already")
 		return
 	}
 
 	// Remove the parked email row; the draft keeps the content.
 	if emailID != nil {
-		var threadID string
-		h.Store.Q().QueryRow(ctx, `SELECT thread_id FROM emails WHERE id = $1`, *emailID).Scan(&threadID)
-		h.Store.Q().Exec(ctx, `UPDATE email_jobs SET email_id = NULL, thread_id = NULL WHERE email_id = $1`, *emailID)
-		if _, err := h.Store.Q().Exec(ctx, `DELETE FROM emails WHERE id = $1 AND org_id = $2`, *emailID, claims.OrgID); err != nil {
-			slog.Error("draft: cancel-schedule email delete failed", "email_id", *emailID, "error", err)
-		}
-		if threadID != "" {
-			var remaining int
-			if err := h.Store.Q().QueryRow(ctx, `SELECT count(*) FROM emails WHERE thread_id = $1`, threadID).Scan(&remaining); err == nil && remaining == 0 {
-				h.Store.Q().Exec(ctx, `DELETE FROM thread_labels WHERE thread_id = $1`, threadID)
-				h.Store.Q().Exec(ctx, `DELETE FROM threads WHERE id = $1 AND org_id = $2`, threadID, claims.OrgID)
-			}
-		}
+		h.removeParkedEmail(ctx, claims.OrgID, *emailID)
 	}
 
 	if _, err := h.Store.Q().Exec(ctx,
@@ -567,7 +637,7 @@ func (h *DraftHandler) CancelSchedule(w http.ResponseWriter, r *http.Request) {
 		slog.Error("draft: clear scheduled_send_at failed", "draft_id", draftID, "error", err)
 	}
 
-	slog.Info("draft: schedule cancelled", "draft_id", draftID, "job_id", jobID)
+	slog.Info("draft: schedule cancelled", "draft_id", draftID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 

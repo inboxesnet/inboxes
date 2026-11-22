@@ -6,6 +6,62 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 // Module-level flag to suppress cascading 401 API calls once session expires
 let sessionExpired = false;
 
+// Key of the persisted query cache. Keep it equal to CACHE_KEY in
+// lib/query-client.ts.
+const QUERY_CACHE_KEY = "inboxes-qc";
+
+// The persisted query cache holds mail data. Remove it when the session
+// ends, so that the next user of this browser cannot read it.
+function clearPersistedCache() {
+  try {
+    localStorage.removeItem(QUERY_CACHE_KEY);
+  } catch {
+    // Storage is not available. There is nothing to remove.
+  }
+}
+
+let sessionProbe: Promise<boolean> | null = null;
+
+// One 401 is not proof of a dead session. A request that was in flight
+// during a token renewal can get a 401 while the cookie is already new.
+// This probe asks the server. All parallel callers share one probe.
+// It resolves to true only when the server answers 401.
+function sessionIsDead(): Promise<boolean> {
+  if (!sessionProbe) {
+    sessionProbe = fetch(`${API_URL}/api/users/me`, {
+      credentials: "include",
+      cache: "no-store",
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    })
+      .then(
+        (res) => res.status === 401,
+        () => false
+      )
+      .finally(() => {
+        sessionProbe = null;
+      });
+  }
+  return sessionProbe;
+}
+
+function latchSessionExpired() {
+  if (!sessionExpired) {
+    sessionExpired = true;
+    clearPersistedCache();
+    window.dispatchEvent(new CustomEvent("session-expired"));
+  }
+}
+
+// Handles a 401 from a session-protected call. It returns true when the
+// session is alive and the caller can send the request again.
+async function canRetryAfter401(alreadyRetried: boolean): Promise<boolean> {
+  if (await sessionIsDead()) {
+    latchSessionExpired();
+    return false;
+  }
+  return !alreadyRetried;
+}
+
 interface FetchOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   signal?: AbortSignal;
@@ -17,7 +73,8 @@ interface FetchOptions extends Omit<RequestInit, "body"> {
 
 async function request<T = unknown>(
   path: string,
-  opts?: FetchOptions
+  opts?: FetchOptions,
+  retried = false
 ): Promise<T> {
   const { body, headers, noLatch, ...rest } = opts || {};
   // Auth endpoints are exempt from the latch in both directions: a failed
@@ -27,6 +84,9 @@ async function request<T = unknown>(
 
   if (sessionExpired && !latchExempt) {
     throw new ApiError(401, "Session expired");
+  }
+  if (path === "/api/auth/logout") {
+    clearPersistedCache();
   }
   const res = await fetch(`${API_URL}${path}`, {
     credentials: "include",
@@ -47,11 +107,10 @@ async function request<T = unknown>(
       if (latchExempt) {
         throw new ApiError(401, err.error || "unauthorized", err.code);
       }
-      if (!sessionExpired) {
-        sessionExpired = true;
-        window.dispatchEvent(new CustomEvent("session-expired"));
+      if (await canRetryAfter401(retried)) {
+        return request<T>(path, opts, true);
       }
-      throw new ApiError(401, "Session expired");
+      throw new ApiError(401, sessionExpired ? "Session expired" : "unauthorized");
     }
 
     // Global 402 interceptor — dispatch event for payment wall
@@ -65,6 +124,7 @@ async function request<T = unknown>(
   // A successful auth call (login, verify, claim) starts a fresh session.
   if (path.startsWith("/api/auth/")) {
     sessionExpired = false;
+    clearPersistedCache();
   }
 
   if (res.status === 204) return undefined as T;
@@ -93,7 +153,12 @@ export const api = {
     request<T>(path, { method: "DELETE", ...opts }),
 };
 
-export function uploadFile(path: string, formData: FormData) {
+export function uploadFile(
+  path: string,
+  formData: FormData,
+  retried = false
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
   if (sessionExpired) {
     return Promise.reject(new ApiError(401, "Session expired"));
   }
@@ -108,11 +173,10 @@ export function uploadFile(path: string, formData: FormData) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
 
       if (res.status === 401) {
-        if (!sessionExpired) {
-          sessionExpired = true;
-          window.dispatchEvent(new CustomEvent("session-expired"));
+        if (await canRetryAfter401(retried)) {
+          return uploadFile(path, formData, true);
         }
-        throw new ApiError(401, "Session expired");
+        throw new ApiError(401, sessionExpired ? "Session expired" : "unauthorized");
       }
       if (res.status === 402) {
         window.dispatchEvent(new CustomEvent("payment-required"));
@@ -129,7 +193,8 @@ export function uploadFile(path: string, formData: FormData) {
 export function uploadFileWithProgress(
   path: string,
   formData: FormData,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  retried = false
 ): Promise<{ id: string; filename: string; content_type: string; size: number }> {
   if (sessionExpired) {
     return Promise.reject(new ApiError(401, "Session expired"));
@@ -164,11 +229,13 @@ export function uploadFileWithProgress(
         // keep statusText
       }
       if (xhr.status === 401) {
-        if (!sessionExpired) {
-          sessionExpired = true;
-          window.dispatchEvent(new CustomEvent("session-expired"));
-        }
-        reject(new ApiError(401, "Session expired"));
+        canRetryAfter401(retried).then((retry) => {
+          if (retry) {
+            uploadFileWithProgress(path, formData, onProgress, true).then(resolve, reject);
+          } else {
+            reject(new ApiError(401, sessionExpired ? "Session expired" : "unauthorized"));
+          }
+        });
         return;
       }
       if (xhr.status === 402) {

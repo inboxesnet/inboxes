@@ -2,7 +2,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { queryKeys } from "@/lib/query-keys";
-import { hasLabel } from "@/lib/types";
+import { patchQueryData, patchQueriesData } from "@/lib/query-patch";
+import { applyBulkLabels, hasLabel, isVirtualView, threadBelongsInView } from "@/lib/types";
 import type { Thread, ThreadListResponse, Label, UnreadCounts } from "@/lib/types";
 
 const LIMIT = 100;
@@ -33,7 +34,7 @@ export function useThreadList(domainId: string, label: Label, page: number) {
     queryKey: queryKeys.threads.list(domainId, label, page),
     queryFn: () =>
       api.get<ThreadListResponse>(
-        `/api/threads?domain_id=${domainId}&label=${label}&page=${page}&limit=${LIMIT}`
+        `/api/threads?domain_id=${domainId}&label=${encodeURIComponent(label)}&page=${page}&limit=${LIMIT}`
       ),
   });
 }
@@ -77,17 +78,13 @@ export function useStarThread() {
           : labels.filter((l) => l !== "starred");
 
       // Optimistic: update all thread lists
-      qc.setQueriesData<ThreadListResponse>(
+      patchQueriesData<ThreadListResponse>(
+        qc,
         { queryKey: queryKeys.threads.lists() },
-        (old) => {
+        (old, queryKey) => {
           if (!old) return old;
 
-          const queryLabel = qc
-            .getQueryCache()
-            .findAll({ queryKey: queryKeys.threads.lists() })
-            .find((q) => q.state.data === old)?.queryKey?.[3] as
-            | string
-            | undefined;
+          const queryLabel = queryKey[3] as string | undefined;
 
           return {
             ...old,
@@ -113,7 +110,8 @@ export function useStarThread() {
       );
 
       // Optimistic: update search caches
-      qc.setQueriesData<{ threads: Thread[] }>(
+      patchQueriesData<{ threads: Thread[] }>(
+        qc,
         { queryKey: queryKeys.search.all },
         (old) => {
           if (!old) return old;
@@ -129,8 +127,7 @@ export function useStarThread() {
       );
 
       // Optimistic: update thread detail
-      qc.setQueryData<Thread>(
-        queryKeys.threads.detail(threadId),
+      patchQueryData<Thread>(qc, queryKeys.threads.detail(threadId),
         (old) => (old ? { ...old, labels: setLabels(old.labels || []) } : old)
       );
     },
@@ -151,7 +148,8 @@ export function useMuteThread() {
     onMutate: async (threadId) => {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
-      qc.setQueriesData<ThreadListResponse>(
+      patchQueriesData<ThreadListResponse>(
+        qc,
         { queryKey: queryKeys.threads.lists() },
         (old) => {
           if (!old) return old;
@@ -165,7 +163,8 @@ export function useMuteThread() {
       );
 
       // Optimistic: update search caches
-      qc.setQueriesData<{ threads: Thread[] }>(
+      patchQueriesData<{ threads: Thread[] }>(
+        qc,
         { queryKey: queryKeys.search.all },
         (old) => {
           if (!old) return old;
@@ -180,8 +179,7 @@ export function useMuteThread() {
         }
       );
 
-      qc.setQueryData<Thread>(
-        queryKeys.threads.detail(threadId),
+      patchQueryData<Thread>(qc, queryKeys.threads.detail(threadId),
         (old) => (old ? { ...old, labels: toggleMutedLabel(old.labels || []) } : old)
       );
     },
@@ -221,8 +219,22 @@ export function useThreadAction() {
     onMutate: async ({ threadId, action }) => {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
+      // A move to a custom label only adds the label on the server. The
+      // thread stays in its lists.
+      const moveTarget = action.startsWith("move:") ? action.split(":")[1] : null;
+      const isCustomMove =
+        moveTarget !== null &&
+        !SYSTEM_MOVE_TARGETS.includes(moveTarget) &&
+        moveTarget !== "deleted_forever";
       const movingActions = ["archive", "trash", "spam", "delete", "move:deleted_forever"];
-      const isMoving = movingActions.includes(action) || action.startsWith("move:");
+      const isMoving =
+        movingActions.includes(action) || (moveTarget !== null && !isCustomMove);
+      const removesEverywhere = action === "delete" || moveTarget === "deleted_forever";
+      // The labels of the thread after the action, by the server rules.
+      const nextLabels = (labels: string[]) =>
+        moveTarget !== null
+          ? applyBulkLabels(labels, "move", moveTarget)
+          : applyBulkLabels(labels, action, "");
 
       // Capture where an undo should restore the thread, before caches change.
       const undoTarget = undoOrigin(findCachedThread(qc, threadId));
@@ -240,9 +252,16 @@ export function useThreadAction() {
           let delta = 0;
           if (action === "read") delta = -thread.unread_count;
           else if (action === "unread") delta = 1 - thread.unread_count;
-          else if (isMoving) delta = -thread.unread_count;
+          else if (isMoving && !removesEverywhere) {
+            // The thread can stay in the inbox (for example a move to the
+            // inbox itself). Then the count does not change.
+            const after = { labels: nextLabels(thread.labels || []) };
+            const staysInInbox =
+              hasLabel(after, "inbox") && !hasLabel(after, "trash") && !hasLabel(after, "spam");
+            delta = staysInInbox ? 0 : -thread.unread_count;
+          } else if (isMoving) delta = -thread.unread_count;
           if (delta !== 0) {
-            qc.setQueryData<UnreadCounts>(queryKeys.domains.unreadCounts(), (old) => {
+            patchQueryData<UnreadCounts>(qc, queryKeys.domains.unreadCounts(), (old) => {
               if (!old) return old;
               return { ...old, [thread!.domain_id]: Math.max(0, (old[thread!.domain_id] || 0) + delta) };
             });
@@ -255,7 +274,7 @@ export function useThreadAction() {
       if (action === "dismiss") {
         for (const query of qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() })) {
           if (query.queryKey[3] !== "failed") continue;
-          qc.setQueryData<ThreadListResponse>(query.queryKey, (old) =>
+          patchQueryData<ThreadListResponse>(qc, query.queryKey, (old) =>
             old
               ? {
                   ...old,
@@ -268,15 +287,33 @@ export function useThreadAction() {
       }
 
       // Optimistic: update all thread lists
-      qc.setQueriesData<ThreadListResponse>(
+      patchQueriesData<ThreadListResponse>(
+        qc,
         { queryKey: queryKeys.threads.lists() },
-        (old) => {
+        (old, queryKey) => {
           if (!old) return old;
-          if (isMoving) {
+          const current = old.threads.find((t) => t.id === threadId);
+          // Only a list that holds the thread changes. A list without it
+          // keeps its rows and its total.
+          if (!current) return old;
+          if (isMoving || isCustomMove) {
+            const queryLabel = (queryKey[3] as string | undefined) ?? "";
+            const updated = { ...current, labels: nextLabels(current.labels || []) };
+            // A virtual view cannot be decided from labels; onSuccess
+            // fetches it again.
+            const stays =
+              !removesEverywhere &&
+              (isVirtualView(queryLabel) || threadBelongsInView(updated, queryLabel));
+            if (stays) {
+              return {
+                ...old,
+                threads: old.threads.map((t) => (t.id === threadId ? updated : t)),
+              };
+            }
             return {
               ...old,
               threads: old.threads.filter((t) => t.id !== threadId),
-              total: old.total - 1,
+              total: Math.max(0, old.total - 1),
             };
           }
           if (action === "read") {
@@ -308,7 +345,8 @@ export function useThreadAction() {
       );
 
       // Optimistic: update search caches
-      qc.setQueriesData<{ threads: Thread[] }>(
+      patchQueriesData<{ threads: Thread[] }>(
+        qc,
         { queryKey: queryKeys.search.all },
         (old) => {
           if (!old) return old;
@@ -347,19 +385,16 @@ export function useThreadAction() {
 
       // Optimistic: update thread detail cache
       if (action === "mute") {
-        qc.setQueryData<Thread>(
-          queryKeys.threads.detail(threadId),
+        patchQueryData<Thread>(qc, queryKeys.threads.detail(threadId),
           (old) => (old ? { ...old, labels: toggleMutedLabel(old.labels || []) } : old)
         );
       }
       if (action === "read") {
-        qc.setQueryData<Thread>(
-          queryKeys.threads.detail(threadId),
+        patchQueryData<Thread>(qc, queryKeys.threads.detail(threadId),
           (old) => (old ? { ...old, unread_count: 0 } : old)
         );
       } else if (action === "unread") {
-        qc.setQueryData<Thread>(
-          queryKeys.threads.detail(threadId),
+        patchQueryData<Thread>(qc, queryKeys.threads.detail(threadId),
           (old) => (old ? { ...old, unread_count: 1 } : old)
         );
       } else if (isMoving) {
@@ -384,7 +419,10 @@ export function useThreadAction() {
         qc.invalidateQueries({ queryKey: queryKeys.search.all });
       };
 
-      // Reconcile the sidebar badges with the server after every action.
+      // Reconcile the lists and the sidebar badges with the server after
+      // every action. The optimistic update only covers cached rows, and a
+      // destination list gets its new row from this fetch.
+      qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
       qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
 
       let label: string | null = null;
@@ -452,16 +490,25 @@ export function useBulkAction() {
         filter_label: filterLabel,
         filter_domain_id: filterDomainId,
       }),
-    onMutate: async ({ threadIds, action }) => {
+    onMutate: async ({ threadIds, action, label }) => {
       await qc.cancelQueries({ queryKey: queryKeys.threads.all });
 
-      const movingActions = ["archive", "trash", "spam", "move", "delete"];
+      // A move to a custom label only adds the label on the server. The
+      // threads stay in their lists; onSuccess fetches the new labels.
+      const isCustomMove =
+        action === "move" &&
+        !!label &&
+        !SYSTEM_MOVE_TARGETS.includes(label) &&
+        label !== "deleted_forever";
+      const movingActions = isCustomMove
+        ? ["archive", "trash", "spam", "delete"]
+        : ["archive", "trash", "spam", "move", "delete"];
 
       // Dismiss removes the selected threads from the Failed view only.
       if (action === "dismiss") {
         for (const query of qc.getQueryCache().findAll({ queryKey: queryKeys.threads.lists() })) {
           if (query.queryKey[3] !== "failed") continue;
-          qc.setQueryData<ThreadListResponse>(query.queryKey, (old) => {
+          patchQueryData<ThreadListResponse>(qc, query.queryKey, (old) => {
             if (!old) return old;
             const remaining = old.threads.filter((t) => !threadIds.includes(t.id));
             return {
@@ -503,7 +550,7 @@ export function useBulkAction() {
           }
         }
         if (Object.keys(deltaByDomain).length > 0) {
-          qc.setQueryData<UnreadCounts>(queryKeys.domains.unreadCounts(), (old) => {
+          patchQueryData<UnreadCounts>(qc, queryKeys.domains.unreadCounts(), (old) => {
             if (!old) return old;
             const updated = { ...old };
             for (const [domainId, delta] of Object.entries(deltaByDomain)) {
@@ -515,7 +562,8 @@ export function useBulkAction() {
       }
 
       // Optimistic: update all thread lists
-      qc.setQueriesData<ThreadListResponse>(
+      patchQueriesData<ThreadListResponse>(
+        qc,
         { queryKey: queryKeys.threads.lists() },
         (old) => {
           if (!old) return old;
@@ -570,7 +618,8 @@ export function useBulkAction() {
       );
 
       // Optimistic: update search caches
-      qc.setQueriesData<{ threads: Thread[] }>(
+      patchQueriesData<{ threads: Thread[] }>(
+        qc,
         { queryKey: queryKeys.search.all },
         (old) => {
           if (!old) return old;
@@ -623,13 +672,11 @@ export function useBulkAction() {
       // Optimistic: update each thread's detail cache
       for (const id of threadIds) {
         if (action === "read") {
-          qc.setQueryData<Thread>(
-            queryKeys.threads.detail(id),
+          patchQueryData<Thread>(qc, queryKeys.threads.detail(id),
             (old) => (old ? { ...old, unread_count: 0 } : old)
           );
         } else if (action === "unread") {
-          qc.setQueryData<Thread>(
-            queryKeys.threads.detail(id),
+          patchQueryData<Thread>(qc, queryKeys.threads.detail(id),
             (old) => (old ? { ...old, unread_count: 1 } : old)
           );
         } else if (movingActions.includes(action)) {

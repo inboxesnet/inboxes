@@ -7,11 +7,18 @@ import (
 	"time"
 )
 
+// ListDrafts leaves out a draft whose send is queued or in progress. The
+// worker deletes that draft after the send. A scheduled draft stays in the
+// list until the scheduler releases its job.
 func (s *PgStore) ListDrafts(ctx context.Context, userID, orgID, domainID string) ([]map[string]any, error) {
 	query := `SELECT id, domain_id, thread_id, kind, subject, from_address,
 		to_addresses, cc_addresses, bcc_addresses, body_html, body_plain,
 		created_at, updated_at, COALESCE(attachment_ids, '[]'), in_reply_to, references_header, scheduled_send_at
-		FROM drafts WHERE user_id = $1 AND org_id = $2`
+		FROM drafts WHERE user_id = $1 AND org_id = $2
+		AND NOT EXISTS (
+		  SELECT 1 FROM email_jobs j
+		  WHERE j.draft_id = drafts.id AND j.job_type = 'send'
+		    AND j.status IN ('pending', 'running') AND j.run_after IS NULL)`
 	args := []any{userID, orgID}
 
 	if domainID != "" {

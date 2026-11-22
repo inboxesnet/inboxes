@@ -60,6 +60,8 @@ type MockStore struct {
 	AddLabelFn                 func(ctx context.Context, threadID, orgID, label string) error
 	RemoveLabelFn              func(ctx context.Context, threadID, orgID, label string) error
 	RemoveAllLabelsFn          func(ctx context.Context, threadID, orgID string) error
+	BulkRemoveAllLabelsFn      func(ctx context.Context, threadIDs []string, orgID string) error
+	FilterVisibleThreadIDsFn   func(ctx context.Context, threadIDs []string, orgID string, aliasLabels []string) ([]string, error)
 	HasLabelFn                 func(ctx context.Context, threadID, orgID, label string) bool
 	GetLabelsFn                func(ctx context.Context, threadID string) []string
 	BulkAddLabelFn             func(ctx context.Context, threadIDs []string, orgID, label string) error
@@ -73,12 +75,16 @@ type MockStore struct {
 	ResolveFromDisplayFn       func(ctx context.Context, orgID, address string) (string, error)
 	LookupDomainByNameFn       func(ctx context.Context, orgID, domainName string) (string, error)
 	InsertEmailFn              func(ctx context.Context, threadID, userID, orgID, domainID, direction, from string, toJSON, ccJSON, bccJSON []byte, subject, bodyHTML, bodyPlain, status string, inReplyTo string, refsJSON []byte) (string, error)
+	SetEmailAttachmentIDsFn    func(ctx context.Context, emailID, orgID string, attachmentIDs []string) error
 	UpdateThreadStatsFn        func(ctx context.Context, threadID, orgID, snippet, lastSender string) error
 	CreateEmailJobFn           func(ctx context.Context, orgID, userID, domainID, jobType, emailID, threadID string, resendPayload []byte, draftID *string) (string, error)
 	SearchEmailsFn             func(ctx context.Context, orgID, query, domainID, label, role string, aliasAddrs []string, page, limit int) ([]map[string]any, int, error)
 	GetLabelCountsFn           func(ctx context.Context, orgID, domainID, userID, role string, aliasAddrs []string) (map[string]any, error)
 	ListAdminJobsFn            func(ctx context.Context, orgID string) ([]map[string]any, error)
 	CheckSendJobExistsFn       func(ctx context.Context, draftID string) (bool, error)
+	LatestThreadMessageRefFn   func(ctx context.Context, threadID, orgID string) (string, []string, error)
+	RecomputeThreadStatsFn     func(ctx context.Context, threadID, orgID string) (int, error)
+	CancelScheduledSendJobFn   func(ctx context.Context, draftID, reason string) (*string, bool, error)
 
 	// ---- Domains ----
 	ListDomainsFn            func(ctx context.Context, orgID string, includeHidden bool) ([]map[string]any, error)
@@ -508,6 +514,33 @@ func (m *MockStore) RemoveLabel(ctx context.Context, threadID, orgID, label stri
 	return nil
 }
 
+// BulkRemoveAllLabels falls back to RemoveAllLabels for each thread.
+func (m *MockStore) BulkRemoveAllLabels(ctx context.Context, threadIDs []string, orgID string) error {
+	if m.BulkRemoveAllLabelsFn != nil {
+		return m.BulkRemoveAllLabelsFn(ctx, threadIDs, orgID)
+	}
+	for _, tid := range threadIDs {
+		if err := m.RemoveAllLabels(ctx, tid, orgID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// FilterVisibleThreadIDs falls back to CheckThreadVisibility for each thread.
+func (m *MockStore) FilterVisibleThreadIDs(ctx context.Context, threadIDs []string, orgID string, aliasLabels []string) ([]string, error) {
+	if m.FilterVisibleThreadIDsFn != nil {
+		return m.FilterVisibleThreadIDsFn(ctx, threadIDs, orgID, aliasLabels)
+	}
+	var visible []string
+	for _, tid := range threadIDs {
+		if ok, _ := m.CheckThreadVisibility(ctx, tid, aliasLabels); ok {
+			visible = append(visible, tid)
+		}
+	}
+	return visible, nil
+}
+
 func (m *MockStore) RemoveAllLabels(ctx context.Context, threadID, orgID string) error {
 	if m.RemoveAllLabelsFn != nil {
 		return m.RemoveAllLabelsFn(ctx, threadID, orgID)
@@ -596,6 +629,34 @@ func (m *MockStore) InsertEmail(ctx context.Context, threadID, userID, orgID, do
 	return "", nil
 }
 
+func (m *MockStore) LatestThreadMessageRef(ctx context.Context, threadID, orgID string) (string, []string, error) {
+	if m.LatestThreadMessageRefFn != nil {
+		return m.LatestThreadMessageRefFn(ctx, threadID, orgID)
+	}
+	return "", nil, nil
+}
+
+func (m *MockStore) RecomputeThreadStats(ctx context.Context, threadID, orgID string) (int, error) {
+	if m.RecomputeThreadStatsFn != nil {
+		return m.RecomputeThreadStatsFn(ctx, threadID, orgID)
+	}
+	return 0, nil
+}
+
+func (m *MockStore) CancelScheduledSendJob(ctx context.Context, draftID, reason string) (*string, bool, error) {
+	if m.CancelScheduledSendJobFn != nil {
+		return m.CancelScheduledSendJobFn(ctx, draftID, reason)
+	}
+	return nil, false, nil
+}
+
+func (m *MockStore) SetEmailAttachmentIDs(ctx context.Context, emailID, orgID string, attachmentIDs []string) error {
+	if m.SetEmailAttachmentIDsFn != nil {
+		return m.SetEmailAttachmentIDsFn(ctx, emailID, orgID, attachmentIDs)
+	}
+	return nil
+}
+
 func (m *MockStore) UpdateThreadStats(ctx context.Context, threadID, orgID, snippet, lastSender string) error {
 	if m.UpdateThreadStatsFn != nil {
 		return m.UpdateThreadStatsFn(ctx, threadID, orgID, snippet, lastSender)
@@ -639,6 +700,10 @@ func (m *MockStore) ListDomains(ctx context.Context, orgID string, includeHidden
 	if m.ListDomainsFn != nil {
 		return m.ListDomainsFn(ctx, orgID, includeHidden)
 	}
+	return []map[string]any{}, nil
+}
+
+func (m *MockStore) ListDomainsForMember(ctx context.Context, orgID, userID string, includeHidden bool) ([]map[string]any, error) {
 	return []map[string]any{}, nil
 }
 

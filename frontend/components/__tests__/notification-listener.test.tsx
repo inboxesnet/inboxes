@@ -27,6 +27,10 @@ vi.mock("@/contexts/notification-context", () => ({
   }),
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 // Mock lucide-react
 vi.mock("lucide-react", () => ({
   Bell: () => <span data-testid="bell-icon">Bell</span>,

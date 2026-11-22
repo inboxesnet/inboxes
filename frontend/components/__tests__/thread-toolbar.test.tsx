@@ -38,6 +38,11 @@ vi.mock("@/lib/api", () => ({
   api: { get: vi.fn().mockResolvedValue([]) },
 }));
 
+// Mock the shared labels query
+vi.mock("@/hooks/use-labels", () => ({
+  useLabels: () => ({ data: [], isError: false }),
+}));
+
 // Mock domain context
 vi.mock("@/contexts/domain-context", () => ({
   useDomains: () => ({

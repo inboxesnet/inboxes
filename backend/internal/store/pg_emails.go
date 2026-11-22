@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // BounceExpiryDays is how long a bounce block stays active. After this many
@@ -158,6 +160,28 @@ func (s *PgStore) InsertEmail(ctx context.Context, threadID, userID, orgID, doma
 	return emailID, err
 }
 
+// SetEmailAttachmentIDs stores the attachment id list on an email. It keeps
+// only ids that are valid and belong to the org. Call it in the same
+// transaction as InsertEmail.
+func (s *PgStore) SetEmailAttachmentIDs(ctx context.Context, emailID, orgID string, attachmentIDs []string) error {
+	valid := make([]string, 0, len(attachmentIDs))
+	for _, id := range attachmentIDs {
+		if _, err := uuid.Parse(id); err == nil {
+			valid = append(valid, id)
+		}
+	}
+	if len(valid) == 0 {
+		return nil
+	}
+	_, err := s.q.Exec(ctx,
+		`UPDATE emails SET attachment_ids = COALESCE(
+		   (SELECT jsonb_agg(a.id::text) FROM attachments a
+		    WHERE a.id = ANY($3::uuid[]) AND a.org_id = $2), '[]'::jsonb)
+		 WHERE id = $1 AND org_id = $2`,
+		emailID, orgID, valid)
+	return err
+}
+
 func (s *PgStore) UpdateThreadStats(ctx context.Context, threadID, orgID, snippet, lastSender string) error {
 	_, err := s.q.Exec(ctx,
 		`UPDATE threads SET message_count = message_count + 1, last_message_at = now(), snippet = $2, last_sender = $3, updated_at = now()
@@ -297,7 +321,7 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 		t.id, t.domain_id, t.subject, t.participant_emails,
 		t.last_message_at, t.message_count, t.unread_count,
 		t.snippet, t.last_sender, t.original_to, t.created_at` + base
-	sqlQuery = "SELECT * FROM (" + sqlQuery + ") sub ORDER BY last_message_at DESC" +
+	sqlQuery = "SELECT * FROM (" + sqlQuery + ") sub ORDER BY last_message_at DESC, id DESC" +
 		" LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
 	args = append(args, limit, (page-1)*limit)
 
@@ -316,9 +340,11 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 		var lastMessageAt, createdAt time.Time
 		var messageCount, unreadCount int
 
-		rows.Scan(&id, &dID, &subject, &participants,
+		if err := rows.Scan(&id, &dID, &subject, &participants,
 			&lastMessageAt, &messageCount, &unreadCount,
-			&snippet, &lastSender, &originalTo, &createdAt)
+			&snippet, &lastSender, &originalTo, &createdAt); err != nil {
+			return nil, 0, err
+		}
 
 		t := map[string]any{
 			"id":                 id,
@@ -338,13 +364,20 @@ func (s *PgStore) SearchEmails(ctx context.Context, orgID, query string, domainI
 		results = append(results, t)
 		threadIDs = append(threadIDs, id)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	rows.Close()
 	if results == nil {
 		results = []map[string]any{}
 	}
 
 	// Batch-fetch labels for all result threads
 	if len(threadIDs) > 0 {
-		labelMap, _ := s.BatchFetchLabels(ctx, threadIDs)
+		labelMap, err := s.BatchFetchLabels(ctx, threadIDs)
+		if err != nil {
+			return nil, 0, err
+		}
 		for _, t := range results {
 			tid := t["id"].(string)
 			if lbls, ok := labelMap[tid]; ok {

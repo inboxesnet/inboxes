@@ -112,6 +112,11 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+// Mock the shared labels query
+vi.mock("@/hooks/use-labels", () => ({
+  useLabels: () => ({ data: [], isError: false }),
+}));
+
 // Mock sonner
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 

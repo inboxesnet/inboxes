@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// suggestScanLimit is the number of newest emails a contact suggestion reads.
+const suggestScanLimit = 5000
+
 func (s *PgStore) SuggestContacts(ctx context.Context, orgID, query string, limit int, role string, aliasLabels []string) ([]map[string]any, error) {
 	if limit <= 0 {
 		limit = 10
@@ -20,22 +23,33 @@ func (s *PgStore) SuggestContacts(ctx context.Context, orgID, query string, limi
 		aliasLabels = []string{}
 	}
 
+	// Read only the newest emails of the org: this query runs on each key
+	// press, and a scan of all mail is too slow for that. An address is
+	// reduced to its bare, lower-case form ("Name <a@b.c>" becomes "a@b.c"),
+	// so that the client can use a suggestion as a recipient.
 	rows, err := s.q.Query(ctx,
-		`SELECT address AS email, COUNT(*) as count
+		`WITH recent AS MATERIALIZED (
+		   SELECT e.from_address, e.to_addresses FROM emails e
+		   WHERE e.org_id = $1
+		     AND ($4 OR EXISTS (SELECT 1 FROM thread_labels tl
+		                        WHERE tl.thread_id = e.thread_id AND tl.label = ANY($5::text[])))
+		   ORDER BY e.created_at DESC
+		   LIMIT $6
+		 )
+		 SELECT address AS email, COUNT(*) as count
 		 FROM (
-		   SELECT from_address as address FROM emails e WHERE e.org_id = $1
-		     AND ($4 OR EXISTS (SELECT 1 FROM thread_labels tl
-		                        WHERE tl.thread_id = e.thread_id AND tl.label = ANY($5::text[])))
-		   UNION ALL
-		   SELECT jsonb_array_elements_text(to_addresses) as address FROM emails e WHERE e.org_id = $1
-		     AND ($4 OR EXISTS (SELECT 1 FROM thread_labels tl
-		                        WHERE tl.thread_id = e.thread_id AND tl.label = ANY($5::text[])))
+		   SELECT lower(btrim(COALESCE(substring(raw from '<([^<>]+)>'), raw))) AS address
+		   FROM (
+		     SELECT from_address AS raw FROM recent
+		     UNION ALL
+		     SELECT jsonb_array_elements_text(to_addresses) AS raw FROM recent
+		   ) addrs
 		 ) sub
 		 WHERE address ILIKE $2
 		 GROUP BY address
-		 ORDER BY count DESC
+		 ORDER BY count DESC, address
 		 LIMIT $3`,
-		orgID, pattern, limit, isAdmin, aliasLabels)
+		orgID, pattern, limit, isAdmin, aliasLabels, suggestScanLimit)
 	if err != nil {
 		return nil, err
 	}

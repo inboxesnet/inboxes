@@ -1,5 +1,6 @@
 "use client";
 
+import { memo, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { cn, formatThreadTime } from "@/lib/utils";
 import { Star, Archive, Trash2, Mail, MailOpen, BellOff, CheckCircle2 } from "lucide-react";
@@ -24,14 +25,17 @@ interface ThreadListProps {
   resolveLabel?: (thread: Thread) => Label;
 }
 
-function ThreadRow({
+// Memoized: the page renders on each cache write and each key press. Only
+// the rows whose own props change must render again.
+const ThreadRow = memo(function ThreadRow({
   thread,
   index,
   domainId,
   label,
-  selectedId,
+  isActive,
+  isSelected,
+  isFocused,
   selectedIds,
-  focusedIndex,
   onToggleSelect,
   onSelectClick,
   onStar,
@@ -43,9 +47,11 @@ function ThreadRow({
   index: number;
   domainId: string;
   label: Label;
-  selectedId?: string;
-  selectedIds: Set<string>;
-  focusedIndex: number;
+  isActive: boolean;
+  isSelected: boolean;
+  isFocused: boolean;
+  /** Only set for a selected row in a multi-selection (multi-thread drag). */
+  selectedIds?: Set<string>;
   onToggleSelect: (id: string) => void;
   onSelectClick?: (id: string, index: number, shiftKey: boolean) => void;
   onStar: (id: string) => void;
@@ -56,7 +62,7 @@ function ThreadRow({
   const router = useRouter();
   const effectiveLabel = resolveLabel ? resolveLabel(thread) : label;
   // Include all selected thread IDs in drag data for multi-thread drag
-  const dragThreadIds = selectedIds.has(thread.id) && selectedIds.size > 1
+  const dragThreadIds = selectedIds && selectedIds.size > 1
     ? Array.from(selectedIds)
     : [thread.id];
 
@@ -65,9 +71,20 @@ function ThreadRow({
     data: { thread, threadIds: dragThreadIds },
   });
 
-  const isSelected = selectedIds.has(thread.id);
-  const isFocused = index === focusedIndex;
-  const isActive = thread.id === selectedId;
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const setRowRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rowRef.current = node;
+      setNodeRef(node);
+    },
+    [setNodeRef]
+  );
+
+  // Keep the keyboard-focused row in view (j / k).
+  useEffect(() => {
+    if (isFocused) rowRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [isFocused]);
+
   const isUnread = thread.unread_count > 0;
   const participants = parseParticipants(thread.participant_emails);
   const displayName =
@@ -79,15 +96,16 @@ function ThreadRow({
 
   return (
     <div
-      ref={setNodeRef}
+      ref={setRowRef}
       {...listeners}
       {...attributes}
       role="listitem"
       tabIndex={0}
       onClick={() => onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${effectiveLabel}/${thread.id}`)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${label}/${thread.id}`);
+        // Enter on an inner control (star, checkbox, action) belongs to it.
+        if (e.key === "Enter" && e.target === e.currentTarget) {
+          onThreadClick ? onThreadClick(thread.id) : router.push(`/d/${domainId}/${effectiveLabel}/${thread.id}`);
         }
       }}
       className={cn(
@@ -115,6 +133,7 @@ function ThreadRow({
               : onToggleSelect(thread.id)
           }
           onChange={() => {}}
+          aria-label={`Select conversation: ${thread.subject || "(no subject)"}`}
           className="h-3.5 w-3.5 rounded border-muted-foreground/40 cursor-pointer accent-primary"
         />
       </label>
@@ -266,7 +285,7 @@ function ThreadRow({
       </div>
     </div>
   );
-}
+});
 
 export function ThreadList({
   threads,
@@ -296,9 +315,12 @@ export function ThreadList({
           index={index}
           domainId={domainId}
           label={label}
-          selectedId={selectedId}
-          selectedIds={selectedIds}
-          focusedIndex={focusedIndex}
+          isActive={thread.id === selectedId}
+          isSelected={selectedIds.has(thread.id)}
+          isFocused={index === focusedIndex}
+          selectedIds={
+            selectedIds.size > 1 && selectedIds.has(thread.id) ? selectedIds : undefined
+          }
           onToggleSelect={onToggleSelect}
           onSelectClick={onSelectClick}
           onStar={onStar}

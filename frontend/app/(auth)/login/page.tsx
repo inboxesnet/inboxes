@@ -95,7 +95,8 @@ function LoginForm() {
       } else {
         setError("Something went wrong");
       }
-    } finally {
+      // Only an error enables the button again. After a success the button
+      // stays disabled until the navigation replaces this page.
       setLoading(false);
     }
   }

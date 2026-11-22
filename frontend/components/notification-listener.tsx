@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useNotifications } from "@/contexts/notification-context";
 import { api } from "@/lib/api";
@@ -86,6 +87,11 @@ function NotificationPrompt() {
 
 export function NotificationListener() {
   const { subscribe } = useNotifications();
+  // Client navigation keeps the app state. A full page load would close an
+  // open compose window.
+  const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
 
   const handleEmailReceived = useCallback(
     (msg: WSMessage) => {
@@ -111,7 +117,7 @@ export function NotificationListener() {
         });
         notification.onclick = () => {
           window.focus();
-          if (url) window.location.href = url;
+          if (url) routerRef.current.push(url);
           notification.close();
         };
       }
@@ -125,7 +131,7 @@ export function NotificationListener() {
           ? {
               label: "Open",
               onClick: () => {
-                window.location.href = url;
+                routerRef.current.push(url);
               },
             }
           : undefined,

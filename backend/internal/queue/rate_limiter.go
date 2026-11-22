@@ -20,25 +20,29 @@ func NewRateLimiter(interval time.Duration) *RateLimiter {
 
 // Wait blocks until the minimum interval has elapsed since the last call.
 // Returns an error if the context is cancelled while waiting.
+// Each caller reserves its own slot under the lock, so concurrent callers
+// leave one after the other and not all at the same time.
 func (rl *RateLimiter) Wait(ctx context.Context) error {
 	rl.mu.Lock()
-	elapsed := time.Since(rl.lastCall)
-	wait := rl.interval - elapsed
-	if wait <= 0 {
-		rl.lastCall = time.Now()
-		rl.mu.Unlock()
-		return nil
+	now := time.Now()
+	slot := rl.lastCall.Add(rl.interval)
+	if slot.Before(now) {
+		slot = now
 	}
+	rl.lastCall = slot
 	rl.mu.Unlock()
 
+	wait := slot.Sub(now)
+	if wait <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
 	select {
-	case <-time.After(wait):
+	case <-timer.C:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-
-	rl.mu.Lock()
-	rl.lastCall = time.Now()
-	rl.mu.Unlock()
-	return nil
 }

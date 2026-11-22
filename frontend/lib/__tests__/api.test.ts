@@ -203,3 +203,54 @@ describe("uploadFile", () => {
     expect(result).toEqual({ url: "/uploads/test.txt" });
   });
 });
+
+describe("api request — 401 handling", () => {
+  function res(status: number, json: unknown = {}) {
+    return { ok: status < 400, status, statusText: "", json: vi.fn().mockResolvedValue(json) };
+  }
+
+  it("retries once and does not latch when the session probe succeeds", async () => {
+    const onExpired = vi.fn();
+    window.addEventListener("session-expired", onExpired);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res(401, { error: "unauthorized" })) // request
+      .mockResolvedValueOnce(res(200, { id: "u1" })) // probe
+      .mockResolvedValueOnce(res(200, { data: "ok" })); // retry
+    const result = await api.get("/api/threads");
+    expect(result).toEqual({ data: "ok" });
+    expect(onExpired).not.toHaveBeenCalled();
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[1][0]).toBe("/api/users/me");
+    window.removeEventListener("session-expired", onExpired);
+  });
+
+  it("does not latch when the probe fails with a network error", async () => {
+    const onExpired = vi.fn();
+    window.addEventListener("session-expired", onExpired);
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(res(401))
+      .mockRejectedValueOnce(new TypeError("network"))
+      .mockResolvedValueOnce(res(200, { data: "ok" }));
+    await expect(api.get("/api/threads")).resolves.toEqual({ data: "ok" });
+    expect(onExpired).not.toHaveBeenCalled();
+    window.removeEventListener("session-expired", onExpired);
+  });
+
+  // Keep this test last: the latch stays set for the module lifetime.
+  it("latches and clears the persisted cache when the probe returns 401", async () => {
+    const onExpired = vi.fn();
+    window.addEventListener("session-expired", onExpired);
+    localStorage.setItem("inboxes-qc", "{}");
+    const fetchMock = vi.fn().mockResolvedValue(res(401, { error: "unauthorized" }));
+    globalThis.fetch = fetchMock;
+    await expect(api.get("/api/threads")).rejects.toMatchObject({ status: 401, message: "Session expired" });
+    expect(onExpired).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("inboxes-qc")).toBeNull();
+    // Later calls fail without a network request.
+    fetchMock.mockClear();
+    await expect(api.get("/api/threads")).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    window.removeEventListener("session-expired", onExpired);
+  });
+});

@@ -302,7 +302,8 @@ func (h *UserHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.CurrentPassword)) != nil {
-		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		// Not a 401: the client treats a 401 as a dead session.
+		writeError(w, http.StatusBadRequest, "current password is incorrect")
 		return
 	}
 

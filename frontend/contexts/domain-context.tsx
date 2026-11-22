@@ -40,7 +40,8 @@ export function DomainProvider({ children }: { children: ReactNode }) {
 
   const domains = domainsQuery.data ?? [];
   const unreadCounts = unreadCountsQuery.data ?? {};
-  const loading = domainsQuery.isLoading || unreadCountsQuery.isLoading;
+  // The unread counts only feed badges. Do not block the page on them.
+  const loading = domainsQuery.isLoading;
 
   const refreshDomains = useCallback(async () => {
     await qc.invalidateQueries({ queryKey: queryKeys.domains.list() });

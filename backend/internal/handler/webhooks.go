@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/inboxes/backend/internal/service"
 	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
+	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -55,6 +57,7 @@ type emailReceivedData struct {
 
 type emailStatusData struct {
 	EmailID   string `json:"email_id"`
+	MessageID string `json:"message_id"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -140,31 +143,41 @@ func (h *WebhookHandler) HandleResend(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("webhook: failed to record last_webhook_at", "org_id", orgID, "error", err)
 	}
 
+	// A handler error means the event is not stored. Answer 500 so that
+	// Resend delivers the event again; a 200 would lose it.
+	var handleErr error
 	switch payload.Type {
 	case "email.received":
-		h.handleEmailReceived(ctx, orgID, payload.Data)
+		handleErr = h.handleEmailReceived(ctx, orgID, payload.Data)
 	case "email.sent":
-		h.handleEmailStatus(ctx, orgID, "sent", payload.Data)
+		handleErr = h.handleEmailStatus(ctx, orgID, "sent", payload.Data)
 	case "email.delivered":
-		h.handleEmailStatus(ctx, orgID, "delivered", payload.Data)
+		handleErr = h.handleEmailStatus(ctx, orgID, "delivered", payload.Data)
 	case "email.bounced":
-		h.handleEmailStatus(ctx, orgID, "bounced", payload.Data)
-		h.recordBounce(ctx, orgID, payload.Data, "bounce")
+		handleErr = h.handleEmailStatus(ctx, orgID, "bounced", payload.Data)
 	case "email.complained":
-		h.handleEmailStatus(ctx, orgID, "complained", payload.Data)
-		h.recordBounce(ctx, orgID, payload.Data, "complaint")
+		handleErr = h.handleEmailStatus(ctx, orgID, "complained", payload.Data)
 	case "email.delivery_delayed", "email.opened", "email.clicked":
 		slog.Info("webhook: acknowledged event", "type", payload.Type, "org_id", orgID)
+	}
+	if handleErr != nil {
+		slog.Error("webhook: event not processed, asking for redelivery",
+			"type", payload.Type, "org_id", orgID, "error", handleErr)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, data json.RawMessage) {
+// handleEmailReceived stores a fetch job for an inbound email. It returns an
+// error only when a redelivery can help (database failure). A bad payload or
+// a duplicate returns nil.
+func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, data json.RawMessage) error {
 	var emailData emailReceivedData
 	if err := json.Unmarshal(data, &emailData); err != nil {
 		slog.Error("webhook: parse received email", "error", err)
-		return
+		return nil
 	}
 
 	dbCtx, dbCancel := util.DBCtx(ctx)
@@ -175,19 +188,21 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 	if err := h.Store.Q().QueryRow(dbCtx,
 		"SELECT deleted_at FROM orgs WHERE id = $1", orgID,
 	).Scan(&orgDeletedAt); err != nil {
-		slog.Error("webhook: org lookup failed", "org_id", orgID, "error", err)
-		return
+		return fmt.Errorf("org lookup: %w", err)
 	}
 	if orgDeletedAt != nil {
 		slog.Info("webhook: org deleted, ignoring email", "org_id", orgID, "resend_email_id", emailData.EmailID)
-		return
+		return nil
 	}
 
 	// Idempotency: skip if we already processed this email
-	exists, _ := h.Store.CheckWebhookDedup(dbCtx, orgID, emailData.EmailID, "email.received")
+	exists, err := h.Store.CheckWebhookDedup(dbCtx, orgID, emailData.EmailID, "email.received")
+	if err != nil {
+		return fmt.Errorf("dedup check: %w", err)
+	}
 	if exists {
 		slog.Info("webhook: duplicate email, skipping", "resend_email_id", emailData.EmailID)
-		return
+		return nil
 	}
 
 	// Find admin user for this org
@@ -196,14 +211,18 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 		"SELECT id FROM users WHERE org_id = $1 AND role = 'admin' AND status = 'active' LIMIT 1",
 		orgID,
 	).Scan(&adminUserID); err != nil {
-		slog.Error("webhook: no admin user found", "org_id", orgID, "error", err)
-		return
+		if errors.Is(err, pgx.ErrNoRows) {
+			// No active admin: a redelivery cannot fix this.
+			slog.Error("webhook: no admin user found", "org_id", orgID)
+			return nil
+		}
+		return fmt.Errorf("admin lookup: %w", err)
 	}
 
 	webhookDataJSON, err := json.Marshal(emailData)
 	if err != nil {
 		slog.Error("webhook: failed to marshal email data", "error", err)
-		return
+		return nil
 	}
 
 	// Atomic idempotent INSERT — partial unique index on (resend_email_id) WHERE status IN ('pending','running')
@@ -216,9 +235,12 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 		 RETURNING id`,
 		orgID, adminUserID, emailData.EmailID, webhookDataJSON,
 	).Scan(&jobID); err != nil {
-		// ON CONFLICT DO NOTHING returns no rows — this is a duplicate, not an error
-		slog.Info("webhook: duplicate job, skipping", "resend_email_id", emailData.EmailID)
-		return
+		if errors.Is(err, pgx.ErrNoRows) {
+			// ON CONFLICT DO NOTHING returns no rows — this is a duplicate, not an error
+			slog.Info("webhook: duplicate job, skipping", "resend_email_id", emailData.EmailID)
+			return nil
+		}
+		return fmt.Errorf("insert fetch job: %w", err)
 	}
 
 	// Push to Redis queue
@@ -234,27 +256,42 @@ func (h *WebhookHandler) handleEmailReceived(ctx context.Context, orgID string, 
 			slog.Error("webhook: auto-unblock delete failed", "org_id", orgID, "address", senderAddr, "error", err)
 		}
 	}
+	return nil
 }
 
-func (h *WebhookHandler) handleEmailStatus(ctx context.Context, orgID, status string, data json.RawMessage) {
-	h.handleEmailStatusWithRetry(ctx, orgID, status, data, 0)
+func (h *WebhookHandler) handleEmailStatus(ctx context.Context, orgID, status string, data json.RawMessage) error {
+	return h.handleEmailStatusWithRetry(ctx, orgID, status, data, 0)
 }
 
-func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, status string, data json.RawMessage, attempt int) {
+// handleEmailStatusWithRetry returns an error only for a database failure,
+// so that the caller can ask Resend for a redelivery.
+func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, status string, data json.RawMessage, attempt int) error {
 	var statusData emailStatusData
 	if err := json.Unmarshal(data, &statusData); err != nil {
 		slog.Error("webhook: parse status event", "status", status, "error", err)
-		return
+		return nil
 	}
 
 	dbCtx, dbCancel := util.DBCtx(ctx)
 	defer dbCancel()
 
+	// Store the Message-ID of the sent email when the row does not have one.
+	// Inbound replies match their thread on this value. It is stored in the
+	// normal form "<id>" that thread lookups use.
+	if messageID := util.NormalizeMsgID(statusData.MessageID); messageID != "" {
+		if _, err := h.Store.Q().Exec(dbCtx,
+			`UPDATE emails SET message_id = $1
+			 WHERE resend_email_id = $2 AND org_id = $3 AND (message_id IS NULL OR message_id = '')`,
+			messageID, statusData.EmailID, orgID,
+		); err != nil {
+			slog.Warn("webhook: store message id failed", "resend_email_id", statusData.EmailID, "error", err)
+		}
+	}
+
 	// UPDATE first — check rows affected
 	rowsAffected, err := h.Store.UpdateEmailStatus(dbCtx, orgID, statusData.EmailID, status)
 	if err != nil {
-		slog.Error("webhook: update email status failed", "resend_email_id", statusData.EmailID, "status", status, "error", err)
-		return
+		return fmt.Errorf("update email status %s: %w", status, err)
 	}
 
 	if rowsAffected == 0 {
@@ -266,16 +303,16 @@ func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, 
 			"SELECT id FROM emails WHERE resend_email_id = $1 AND org_id = $2",
 			statusData.EmailID, orgID,
 		).Scan(&existingID); err == nil {
-			slog.Info("webhook: status unchanged, skipping replayed event",
+			slog.Info("webhook: status unchanged, skipping replayed or out-of-order event",
 				"resend_email_id", statusData.EmailID, "status", status)
-			return
+			return nil
 		}
 
 		// Email not yet inserted (race: status webhook arrived before fetch job completed)
 		if attempt >= 3 {
 			slog.Warn("webhook: email not found after retries, dropping status update",
 				"resend_email_id", statusData.EmailID, "status", status)
-			return
+			return nil
 		}
 
 		// Use Redis INCR as a retry counter with 5-min TTL
@@ -283,7 +320,7 @@ func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, 
 		count, err := h.RDB.Incr(ctx, retryKey).Result()
 		if err != nil {
 			slog.Error("webhook: redis retry counter failed", "error", err)
-			return
+			return nil
 		}
 		if count == 1 {
 			h.RDB.Expire(ctx, retryKey, 5*time.Minute)
@@ -291,7 +328,7 @@ func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, 
 		if count > 3 {
 			slog.Warn("webhook: max retries exceeded for status update",
 				"resend_email_id", statusData.EmailID, "status", status)
-			return
+			return nil
 		}
 
 		// Retry after 10s delay
@@ -302,17 +339,32 @@ func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, 
 			// Fire-and-forget retry — use a bounded timeout since the original request ctx is done
 			retryCtx, retryCancel := context.WithTimeout(h.AppCtx, 60*time.Second)
 			defer retryCancel()
-			h.handleEmailStatusWithRetry(retryCtx, orgID, status, data, int(count))
+			if err := h.handleEmailStatusWithRetry(retryCtx, orgID, status, data, int(count)); err != nil {
+				slog.Error("webhook: status retry failed", "resend_email_id", statusData.EmailID, "status", status, "error", err)
+			}
 		})
-		return
+		return nil
 	}
 
-	var threadID, domainID string
+	// The status changed. Record the bounce only here, so that a replayed
+	// webhook does not start the block period again.
+	switch status {
+	case "bounced":
+		h.recordBounce(ctx, orgID, data, "bounce")
+	case "complained":
+		h.recordBounce(ctx, orgID, data, "complaint")
+	}
+
+	// The frontend knows emails by the internal id, not by the Resend id.
+	var emailID, threadID, domainID string
 	var emailSubject string
 	warnIfErr(h.Store.Q().QueryRow(dbCtx,
-		"SELECT thread_id, domain_id, subject FROM emails WHERE resend_email_id = $1",
-		statusData.EmailID,
-	).Scan(&threadID, &domainID, &emailSubject), "webhook: failed to look up thread/domain for event", "resend_email_id", statusData.EmailID)
+		"SELECT id, thread_id, domain_id, subject FROM emails WHERE resend_email_id = $1 AND org_id = $2",
+		statusData.EmailID, orgID,
+	).Scan(&emailID, &threadID, &domainID, &emailSubject), "webhook: failed to look up thread/domain for event", "resend_email_id", statusData.EmailID)
+	if emailID == "" {
+		emailID = statusData.EmailID
+	}
 
 	slog.Info("webhook: status update", "resend_email_id", statusData.EmailID, "status", status)
 
@@ -322,11 +374,13 @@ func (h *WebhookHandler) handleEmailStatusWithRetry(ctx context.Context, orgID, 
 		DomainID:  domainID,
 		ThreadID:  threadID,
 		Payload: map[string]interface{}{
-			"email_id": statusData.EmailID,
-			"status":   status,
-			"subject":  emailSubject,
+			"email_id":        emailID,
+			"resend_email_id": statusData.EmailID,
+			"status":          status,
+			"subject":         emailSubject,
 		},
 	})
+	return nil
 }
 
 // extractBareAddress parses "Name <email>" format and returns the bare email address.

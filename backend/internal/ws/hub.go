@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/inboxes/backend/internal/store"
 	"github.com/inboxes/backend/internal/util"
 	"github.com/redis/go-redis/v9"
@@ -63,44 +62,94 @@ func (h *Hub) Run(ctx context.Context) {
 	for {
 		select {
 		case client := <-h.register:
-			h.mu.Lock()
-			if _, ok := h.clients[client.UserID]; !ok {
-				h.clients[client.UserID] = make(map[*Client]bool)
-			}
-			// Enforce per-user connection limit — evict oldest by IssuedAt
-			if len(h.clients[client.UserID]) >= h.maxConnsPerUser {
-				var oldest *Client
-				for c := range h.clients[client.UserID] {
-					if oldest == nil || c.IssuedAt.Before(oldest.IssuedAt) {
-						oldest = c
-					}
-				}
-				if oldest != nil {
-					oldest.conn.WriteMessage(websocket.CloseMessage,
-						websocket.FormatCloseMessage(4001, "connection limit exceeded"))
-					delete(h.clients[client.UserID], oldest)
-					close(oldest.send)
-					slog.Info("ws: evicted oldest connection", "user_id", client.UserID, "limit", h.maxConnsPerUser)
-				}
-			}
-			h.clients[client.UserID][client] = true
-			h.mu.Unlock()
-			slog.Info("ws: client connected", "user_id", client.UserID, "connections", len(h.clients[client.UserID]))
+			h.addClient(client)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
-			if clients, ok := h.clients[client.UserID]; ok {
-				delete(clients, client)
-				if len(clients) == 0 {
-					delete(h.clients, client.UserID)
-				}
-			}
-			close(client.send)
+			removed := h.dropLocked(client, 0, "")
 			h.mu.Unlock()
-			slog.Info("ws: client disconnected", "user_id", client.UserID)
+			if removed {
+				slog.Info("ws: client disconnected", "user_id", client.UserID)
+			}
 
 		case <-ctx.Done():
 			return
+		}
+	}
+}
+
+// Close codes that the hub sends when it removes a client.
+const (
+	closeConnLimit      = 4001
+	closeSessionRevoked = 4002
+	closeSlowClient     = 4003
+)
+
+// dropLocked removes a client from the map and closes its send channel.
+// The caller must hold h.mu for writing. A second call for the same client
+// does nothing, so the channel cannot be closed twice. The write pump sends
+// the close frame; only that goroutine writes to the connection.
+func (h *Hub) dropLocked(c *Client, code int, reason string) bool {
+	clients, ok := h.clients[c.UserID]
+	if !ok || !clients[c] {
+		return false
+	}
+	delete(clients, c)
+	if len(clients) == 0 {
+		delete(h.clients, c.UserID)
+	}
+	c.closeCode = code
+	c.closeReason = reason
+	close(c.send)
+	return true
+}
+
+// addClient registers a client. It evicts the oldest connection of the
+// user when the user is at the connection limit.
+func (h *Hub) addClient(client *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.clients[client.UserID]) >= h.maxConnsPerUser {
+		var oldest *Client
+		for c := range h.clients[client.UserID] {
+			if oldest == nil || c.IssuedAt.Before(oldest.IssuedAt) {
+				oldest = c
+			}
+		}
+		if oldest != nil && h.dropLocked(oldest, closeConnLimit, "connection limit exceeded") {
+			slog.Info("ws: evicted oldest connection", "user_id", client.UserID, "limit", h.maxConnsPerUser)
+		}
+	}
+	if h.clients[client.UserID] == nil {
+		h.clients[client.UserID] = make(map[*Client]bool)
+	}
+	h.clients[client.UserID][client] = true
+	slog.Info("ws: client connected", "user_id", client.UserID, "connections", len(h.clients[client.UserID]))
+}
+
+// deliver queues a message for a client. It returns false when the send
+// buffer of the client is full.
+func deliver(c *Client, message string) bool {
+	select {
+	case c.send <- []byte(message):
+		return true
+	default:
+		return false
+	}
+}
+
+// dropSlow disconnects clients whose send buffer was full. A dropped
+// message is not sent again, so the client must reconnect and resync.
+func (h *Hub) dropSlow(slow []*Client) {
+	if len(slow) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range slow {
+		if h.dropLocked(c, closeSlowClient, "send buffer full") {
+			slog.Warn("ws: disconnected slow client", "user_id", c.UserID)
 		}
 	}
 }
@@ -163,20 +212,17 @@ func (h *Hub) subscribeRedis(ctx context.Context) {
 }
 
 func (h *Hub) sendToOrg(orgID string, message string) {
+	var slow []*Client
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	for _, clients := range h.clients {
 		for client := range clients {
-			if client.OrgID == orgID {
-				select {
-				case client.send <- []byte(message):
-				default:
-					// Buffer full, skip
-				}
+			if client.OrgID == orgID && !deliver(client, message) {
+				slow = append(slow, client)
 			}
 		}
 	}
+	h.mu.RUnlock()
+	h.dropSlow(slow)
 }
 
 // getThreadAliasLabels returns the alias labels (e.g. "alias:user@domain.com")
@@ -213,9 +259,8 @@ func (h *Hub) sendToOrgFiltered(orgID string, aliasLabels []string, message stri
 		}
 	}
 
+	var slow []*Client
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	for _, clients := range h.clients {
 		for client := range clients {
 			if client.OrgID != orgID {
@@ -223,24 +268,24 @@ func (h *Hub) sendToOrgFiltered(orgID string, aliasLabels []string, message stri
 			}
 			// Admins always receive all events
 			if client.Role == "admin" {
-				select {
-				case client.send <- []byte(message):
-				default:
+				if !deliver(client, message) {
+					slow = append(slow, client)
 				}
 				continue
 			}
 			// Non-admins: check if any of their alias addresses match
-			for _, addr := range client.AliasAddresses {
+			for _, addr := range client.aliasAddresses() {
 				if addrSet[addr] {
-					select {
-					case client.send <- []byte(message):
-					default:
+					if !deliver(client, message) {
+						slow = append(slow, client)
 					}
 					break
 				}
 			}
 		}
 	}
+	h.mu.RUnlock()
+	h.dropSlow(slow)
 }
 
 // subscribeDisconnect listens for push-based user disconnection events via Redis.
@@ -265,25 +310,17 @@ func (h *Hub) subscribeDisconnect(ctx context.Context) {
 // disconnectUser closes all WebSocket connections for a user immediately.
 func (h *Hub) disconnectUser(userID string) {
 	h.mu.Lock()
-	clients, ok := h.clients[userID]
-	if !ok || len(clients) == 0 {
-		h.mu.Unlock()
-		return
-	}
-	// Collect clients to close (avoid modifying map while iterating under lock)
-	toClose := make([]*Client, 0, len(clients))
-	for c := range clients {
-		toClose = append(toClose, c)
-	}
-	delete(h.clients, userID)
-	h.mu.Unlock()
+	defer h.mu.Unlock()
 
-	for _, c := range toClose {
-		c.conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(4002, "session revoked"))
-		close(c.send)
+	n := 0
+	for c := range h.clients[userID] {
+		if h.dropLocked(c, closeSessionRevoked, "session revoked") {
+			n++
+		}
 	}
-	slog.Info("ws: force-disconnected user", "user_id", userID, "connections", len(toClose))
+	if n > 0 {
+		slog.Info("ws: force-disconnected user", "user_id", userID, "connections", n)
+	}
 }
 
 func (h *Hub) Register(client *Client) {

@@ -1532,6 +1532,11 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
     }
   }
 
+  // The sidebar and the toolbar read the labels from the query cache.
+  function refreshSharedLabels() {
+    queryClient.invalidateQueries({ queryKey: queryKeys.labels.all });
+  }
+
   async function handleCreateLabel(e: React.FormEvent) {
     e.preventDefault();
     if (!newLabelName.trim()) return;
@@ -1543,6 +1548,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       setNewLabelName("");
       setSuccess("Label created");
       loadLabels();
+      refreshSharedLabels();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create label");
     } finally {
@@ -1564,6 +1570,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       await api.patch("/api/labels/reorder", {
         order: updated.map((l, i) => ({ id: l.id, order: i })),
       });
+      refreshSharedLabels();
     } catch (err) {
       setLabelsError(err instanceof ApiError ? err.message : "Failed to reorder labels");
       setCustomLabels(customLabels);
@@ -1576,6 +1583,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
       await api.patch(`/api/labels/${labelId}`, { name: newName });
       setEditingLabelId(null);
       loadLabels();
+      refreshSharedLabels();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to rename label");
     }
@@ -1592,6 +1600,7 @@ export function SettingsModal({ open, onOpenChange, defaultTab }: SettingsModalP
         try {
           await api.delete(`/api/labels/${labelId}`);
           loadLabels();
+          refreshSharedLabels();
         } catch (err) {
           setError(err instanceof ApiError ? err.message : "Failed to delete label");
         }

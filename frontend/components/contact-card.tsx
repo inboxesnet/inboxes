@@ -56,7 +56,12 @@ export function ContactCard({ email, children }: ContactCardProps) {
   const copyTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(email);
+    try {
+      await navigator.clipboard.writeText(email);
+    } catch {
+      // The browser refused clipboard access.
+      return;
+    }
     setCopied(true);
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     copyTimerRef.current = setTimeout(() => setCopied(false), 2000);

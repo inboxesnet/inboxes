@@ -169,19 +169,46 @@ func (w *EmailWorker) processJob(ctx context.Context, jobID string) {
 			// Mark the email as failed too
 			var emailID *string
 			if err := w.store.Q().QueryRow(ctx, `SELECT email_id FROM email_jobs WHERE id=$1`, jobID).Scan(&emailID); err == nil && emailID != nil {
-				w.store.Q().Exec(ctx, `UPDATE emails SET status='failed', updated_at=now() WHERE id=$1`, *emailID)
+				if _, err := w.store.Q().Exec(ctx, `UPDATE emails SET status='failed', updated_at=now() WHERE id=$1`, *emailID); err != nil {
+					slog.Error("email worker: failed to mark email failed for inactive plan", "email_id", *emailID, "error", err)
+				}
+				// Tell the frontend, or the email shows "Queued" until a reload.
+				var threadID, domainID, emailSubject string
+				warnIfErr(w.store.Q().QueryRow(ctx,
+					`SELECT thread_id, domain_id, subject FROM emails WHERE id=$1`, *emailID,
+				).Scan(&threadID, &domainID, &emailSubject), "email worker: event data lookup for inactive plan", "email_id", *emailID)
+				if w.bus != nil {
+					w.bus.Publish(ctx, event.Event{
+						EventType: event.EmailStatusUpdated,
+						OrgID:     orgID,
+						DomainID:  domainID,
+						ThreadID:  threadID,
+						Payload: map[string]interface{}{
+							"email_id": *emailID,
+							"status":   "failed",
+							"subject":  emailSubject,
+						},
+					})
+				}
 			}
 			return
 		}
 	}
 
-	// Mark running
-	_, err = w.store.Q().Exec(ctx,
-		`UPDATE email_jobs SET status='running', heartbeat_at=now(), updated_at=now() WHERE id=$1`,
+	// Claim the job. The conditional update wins only once, so a job id that
+	// is on the queue twice, or a second worker, cannot run the job again.
+	// A scheduled job that is not due stays pending.
+	claim, err := w.store.Q().Exec(ctx,
+		`UPDATE email_jobs SET status='running', heartbeat_at=now(), updated_at=now()
+		 WHERE id=$1 AND status='pending' AND (run_after IS NULL OR run_after <= now())`,
 		jobID,
 	)
 	if err != nil {
 		slog.Error("email worker: failed to mark running", "job_id", jobID, "error", err)
+		return
+	}
+	if claim.RowsAffected() == 0 {
+		slog.Info("email worker: job not claimable, skipping", "job_id", jobID, "status", status)
 		return
 	}
 

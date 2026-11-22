@@ -1,17 +1,18 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { memo, useState, useEffect, useMemo, useRef } from "react";
 import DOMPurify from "dompurify";
 import { sanitizeEmailHtml, ALLOWED_CSS_PROPERTIES } from "@/lib/sanitize-html";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime, formatFullDateTime } from "@/lib/utils";
 import { useDomains } from "@/contexts/domain-context";
 import { useEmailWindow } from "@/contexts/email-window-context";
 import { usePreferences } from "@/contexts/preferences-context";
 import { useThread, useStarThread, useMuteThread, useThreadAction } from "@/hooks/use-threads";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/query-keys";
+import { patchQueryData, patchQueriesData } from "@/lib/query-patch";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -66,13 +67,13 @@ function TrashCountdown({ expiresAt }: { expiresAt: string }) {
   );
 }
 
-export function ThreadView({
+export const ThreadView = memo(function ThreadView({
   threadId,
   domainId,
   label,
   onBack,
 }: ThreadViewProps) {
-  const { data: thread, isLoading } = useThread(threadId);
+  const { data: thread, isLoading, isError, error, refetch } = useThread(threadId);
   const { activeDomain } = useDomains();
   const { openCompose } = useEmailWindow();
   const { stripTrackingParams } = usePreferences();
@@ -86,15 +87,27 @@ export function ThreadView({
   const isBusy = starMutation.isPending || muteMutation.isPending || actionMutation.isPending;
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
-  // Mark as read on first load — optimistically update cache so list reflects immediately
+  // Mark as read on load — optimistically update cache so list reflects immediately.
+  // The guard includes the last email, so a reply that arrives while the
+  // thread is open is marked read too. A manual "mark unread" keeps the same
+  // guard and is not undone.
+  const lastEmailId = thread?.emails?.[thread.emails.length - 1]?.id;
   useEffect(() => {
-    if (thread && thread.unread_count > 0 && markedReadRef.current !== threadId) {
-      markedReadRef.current = threadId;
+    const guard = `${threadId}:${lastEmailId ?? thread?.message_count ?? ""}`;
+    if (thread && thread.unread_count > 0 && markedReadRef.current !== guard) {
+      markedReadRef.current = guard;
+      const unread = thread.unread_count;
+      // The sidebar badge counts unread inbox threads only.
+      const countsInBadge =
+        hasLabel(thread, "inbox") && !hasLabel(thread, "trash") && !hasLabel(thread, "spam");
       // Optimistic: update thread list cache before API responds
-      qc.setQueriesData<{ threads: Array<{ id: string; unread_count: number }>; total: number }>(
+      // The patch helpers keep the age of the cached data. A local patch
+      // is not a server read.
+      patchQueriesData<{ threads: Array<{ id: string; unread_count: number }>; total: number }>(
+        qc,
         { queryKey: queryKeys.threads.lists() },
         (old) => {
-          if (!old) return old;
+          if (!old?.threads?.some((t) => t.id === threadId && t.unread_count > 0)) return old;
           return {
             ...old,
             threads: old.threads.map((t) =>
@@ -104,26 +117,31 @@ export function ThreadView({
         }
       );
       // Optimistic: update thread detail cache too
-      qc.setQueryData<Thread>(
+      patchQueryData<Thread>(
+        qc,
         queryKeys.threads.detail(threadId),
-        (old) => (old ? { ...old, unread_count: 0 } : old)
+        (old) => ({ ...old, unread_count: 0 })
       );
       // Optimistic: decrement domain unread count immediately
-      qc.setQueryData<Record<string, number>>(queryKeys.domains.unreadCounts(), (old) => {
-        if (!old) return old;
-        const current = old[domainId] || 0;
-        return { ...old, [domainId]: Math.max(0, current - 1) };
-      });
+      if (countsInBadge) {
+        qc.setQueryData<Record<string, number>>(queryKeys.domains.unreadCounts(), (old) => {
+          if (!old) return old;
+          const current = old[domainId] || 0;
+          return { ...old, [domainId]: Math.max(0, current - unread) };
+        });
+      }
       api.patch(`/api/threads/${threadId}/read`)
         .then(() => qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() }))
-        .catch(() => toast.error("Failed to mark as read"));
+        .catch(() => {
+          toast.error("Failed to mark as read");
+          // Roll back: load the true state again. The guard stays set, so
+          // a failed call does not start a retry loop.
+          qc.invalidateQueries({ queryKey: queryKeys.threads.detail(threadId) });
+          qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+          qc.invalidateQueries({ queryKey: queryKeys.domains.unreadCounts() });
+        });
     }
-  }, [thread, threadId, qc]);
-
-  // Reset state when threadId changes
-  useEffect(() => {
-    markedReadRef.current = null;
-  }, [threadId]);
+  }, [thread, threadId, lastEmailId, domainId, qc]);
 
   // Scroll to the last message when thread loads
   useEffect(() => {
@@ -144,6 +162,25 @@ export function ThreadView({
   }
 
   if (!thread) {
+    // A 404 means the thread is gone. Any other failure can be tried again.
+    const notFound = (error as { status?: number } | null)?.status === 404;
+    if (isError && !notFound) {
+      return (
+        <div role="alert" className="flex flex-col items-center justify-center h-full gap-2 text-sm">
+          <span className="text-destructive">Failed to load this conversation</span>
+          <div className="flex items-center gap-3 text-xs">
+            <button onClick={() => refetch()} className="text-primary hover:underline">
+              Try again
+            </button>
+            {onBack && (
+              <button onClick={onBack} className="text-muted-foreground hover:underline">
+                Back
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
         Thread not found
@@ -153,6 +190,16 @@ export function ThreadView({
 
   const emails = thread.emails || [];
   const lastEmail = emails[emails.length - 1];
+  // Dismiss acts on the whole thread: every undismissed failure goes
+  // at once, so the thread fully leaves the Failed view.
+  const failedIds = emails
+    .filter(
+      (e) =>
+        e.direction === "outbound" &&
+        (e.status === "failed" || e.status === "bounced") &&
+        !e.dismissed_at
+    )
+    .map((e) => e.id);
 
   function handleReply(email: Email, mode: "reply" | "replyAll" | "forward") {
     if (!thread) return;
@@ -193,7 +240,10 @@ export function ThreadView({
     }
     actionMutation.mutate({ threadId, action });
     const navigateAway = ["archive", "trash", "spam", "unread"];
-    if (navigateAway.includes(action) || action.startsWith("move:")) {
+    // A move to a custom label only adds the label. The thread stays in
+    // its list, so the pane stays open.
+    const systemMove = ["move:inbox", "move:archive", "move:trash", "move:spam", "move:deleted_forever"];
+    if (navigateAway.includes(action) || systemMove.includes(action)) {
       onBack?.();
     }
   }
@@ -217,7 +267,7 @@ export function ThreadView({
       {/* Header */}
       <div className="h-14 flex items-center gap-2 md:gap-3 pl-14 pr-4 md:px-6 border-b shrink-0 relative z-[25] bg-background">
         {onBack && (
-          <button onClick={onBack} className="text-muted-foreground hover:text-foreground">
+          <button onClick={onBack} aria-label="Back to the list" className="text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-5 w-5" />
           </button>
         )}
@@ -331,16 +381,6 @@ export function ThreadView({
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-4 space-y-2">
         {emails.map((email, i) => {
           const isLast = i === emails.length - 1;
-          // Dismiss acts on the whole thread: every undismissed failure goes
-          // at once, so the thread fully leaves the Failed view.
-          const failedIds = emails
-            .filter(
-              (e) =>
-                e.direction === "outbound" &&
-                (e.status === "failed" || e.status === "bounced") &&
-                !e.dismissed_at
-            )
-            .map((e) => e.id);
           return (
             <div key={email.id} ref={isLast ? lastMessageRef : undefined}>
               <EmailMessage
@@ -388,7 +428,7 @@ export function ThreadView({
       </div>
     </div>
   );
-}
+});
 
 // sanitizeEmailHtml and ALLOWED_CSS_PROPERTIES are imported from @/lib/sanitize-html
 
@@ -412,9 +452,15 @@ function EmailMessage({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showImages, setShowImages] = useState(false);
 
-  const sanitized = email.body_html
-    ? sanitizeEmailHtml(email.body_html, showImages, stripTracking)
-    : null;
+  // Sanitizing is costly. Do it only for an expanded email, and only when
+  // one of its inputs changes.
+  const sanitized = useMemo(
+    () =>
+      expanded && email.body_html
+        ? sanitizeEmailHtml(email.body_html, showImages, stripTracking)
+        : null,
+    [expanded, email.body_html, showImages, stripTracking]
+  );
 
   if (!expanded) {
     // Collapsed: thin Gmail-style row — just sender, snippet, time
@@ -434,7 +480,7 @@ function EmailMessage({
         <span className="text-[13px] text-muted-foreground/70 truncate flex-1 min-w-0">
           {email.body_plain?.slice(0, 100)}
         </span>
-        <span className="text-xs text-muted-foreground shrink-0">
+        <span className="text-xs text-muted-foreground shrink-0" title={formatFullDateTime(email.created_at)}>
           {formatRelativeTime(email.created_at)}
         </span>
       </button>
@@ -469,7 +515,7 @@ function EmailMessage({
             {email.direction === "outbound" && (
               <StatusBadge status={email.status} />
             )}
-            <span className="text-xs text-muted-foreground shrink-0 ml-auto">
+            <span className="text-xs text-muted-foreground shrink-0 ml-auto" title={formatFullDateTime(email.created_at)}>
               {formatRelativeTime(email.created_at)}
             </span>
           </div>
@@ -666,6 +712,7 @@ function StatusBadge({ status }: { status: string }) {
 // ─── BCC Display ────────────────────────────────────────────────────────
 
 function BccLine({ email }: { email: Email }) {
+  const { activeDomain } = useDomains();
   const bccAddresses = parseAddresses(email.bcc_addresses);
   if (bccAddresses.length === 0) return null;
 
@@ -677,7 +724,6 @@ function BccLine({ email }: { email: Email }) {
   // Inbound: check if you were BCC'd (your address is in BCC but not in TO/CC)
   const toAddresses = parseAddresses(email.to_addresses);
   const ccAddresses = parseAddresses(email.cc_addresses);
-  const { activeDomain } = useDomains();
   const domainName = activeDomain?.domain || "";
 
   const isBccRecipient = bccAddresses.some(
@@ -796,7 +842,10 @@ function escapeHtml(str: string): string {
 function getQuotedHtml(email: Email, mode: "reply" | "replyAll" | "forward"): string {
   const date = escapeHtml(new Date(email.created_at).toLocaleString());
   const sender = escapeHtml(email.from_address);
-  const sanitizedBody = DOMPurify.sanitize(email.body_html || email.body_plain || "");
+  // A plain-text body is not HTML: escape it and keep its line breaks.
+  const sanitizedBody = email.body_html
+    ? DOMPurify.sanitize(email.body_html)
+    : escapeHtml(email.body_plain || "").replace(/\r?\n/g, "<br>");
 
   if (mode === "forward") {
     const toAddresses = escapeHtml(parseAddresses(email.to_addresses).join(", "));

@@ -283,8 +283,8 @@ func New(db *pgxpool.Pool, rdb *redis.Client, encSvc *service.EncryptionService,
 			r.With(middleware.RequireAdmin).Patch("/api/domains/visibility", domains.UpdateVisibility)
 			r.Get("/api/domains/unread-counts", domains.UnreadCounts)
 			r.With(middleware.RequireAdmin).Post("/api/domains/sync", domains.Sync)
-			r.Get("/api/domains/discovered", domains.DiscoveredDomains)
-			r.Post("/api/domains/discovered/{id}/dismiss", domains.DismissDiscoveredDomain)
+			r.With(middleware.RequireAdmin).Get("/api/domains/discovered", domains.DiscoveredDomains)
+			r.With(middleware.RequireAdmin).Post("/api/domains/discovered/{id}/dismiss", domains.DismissDiscoveredDomain)
 
 			r.With(middleware.RequireAdmin).Get("/api/users", users.List)
 			r.With(middleware.RequireAdmin, middleware.RateLimitByIP(rdb, 20, 60*60), middleware.RateLimitByUser(rdb, 10, 60*60)).Post("/api/users/invite", users.Invite)

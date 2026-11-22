@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
 import { sanitizeLinkNode } from "@/lib/sanitize-links";
@@ -98,6 +99,25 @@ interface MyAlias {
   is_default: boolean;
 }
 
+// useIsDesktop follows the Tailwind `md` breakpoint (768px).
+function useIsDesktop(): boolean {
+  const query = "(min-width: 768px)";
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window === "undefined" || !window.matchMedia
+      ? true
+      : window.matchMedia(query).matches
+  );
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(query);
+    const onChange = () => setIsDesktop(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return isDesktop;
+}
+
 export function FloatingComposeWindow() {
   const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose, registerFlush, openDraft } =
     useEmailWindow();
@@ -148,24 +168,47 @@ export function FloatingComposeWindow() {
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dirtyRef = useRef(false);
   const saveAbortRef = useRef<AbortController | null>(null);
+  // The first save of a new message is a POST that creates the draft. A
+  // later save or a send waits for it, so one message makes one draft.
+  const createInFlightRef = useRef<Promise<unknown> | null>(null);
+  // Counts user edits. A save clears the dirty flag only when no edit
+  // happened while it ran.
+  const editVersionRef = useRef(0);
+  // Changes when the window gets new content. A draft POST that ends after
+  // that must not give its id to the new content.
+  const composeEpochRef = useRef(0);
+  // True after the user selects a From address. The default must not
+  // replace that selection.
+  const fromTouchedRef = useRef(false);
+  // One layout only. Two mounted layouts ran two editors and two forms.
+  const isDesktop = useIsDesktop();
 
   // Alias state
   const [aliases, setAliases] = useState<MyAlias[]>([]);
 
-  // Fetch aliases when compose opens
+  // Fetch aliases when compose opens. Minimize and restore do not fetch again.
+  const isComposeActive = composeState !== "closed";
   useEffect(() => {
-    if (composeState !== "open" || !activeDomain) return;
+    if (!isComposeActive || !activeDomain) return;
     api.get<MyAlias[]>("/api/users/me/aliases").then((data) => {
       const domainAliases = data.filter(
         (a) => a.domain_id === activeDomain.id && a.can_send_as
       );
       setAliases(domainAliases);
     }).catch(() => { toast.error("Failed to load aliases"); });
-  }, [composeState, activeDomain]);
+  }, [isComposeActive, activeDomain]);
 
   // Pick best default from address
   function pickDefaultFrom(presetFrom?: string): string {
-    if (presetFrom) return presetFrom;
+    // Use the preset only when the user can send from it. If not, the
+    // select showed one alias while the state held a different address.
+    if (presetFrom) {
+      if (aliases.length === 0) return presetFrom;
+      const match = aliases.find(
+        (a) => a.address.toLowerCase() === presetFrom.toLowerCase()
+      );
+      if (match) return match.address;
+    }
     const domain = activeDomain?.domain || "example.com";
     if (aliases.length > 0) {
       const defaultAlias = aliases.find((a) => a.is_default);
@@ -183,11 +226,14 @@ export function FloatingComposeWindow() {
   useEffect(() => {
     if (composeState === "closed") {
       initializedDataRef.current = null;
+      composeEpochRef.current++;
       return;
     }
     if (composeData && initializedDataRef.current === composeData) return;
     if (composeState === "open" && composeData) {
       initializedDataRef.current = composeData;
+      composeEpochRef.current++;
+      fromTouchedRef.current = false;
       // Cancel any pending autosave from the previous content. Without this
       // a queued save could write the new content into the old draft.
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -258,10 +304,24 @@ export function FloatingComposeWindow() {
 
   // Set from address once aliases are loaded
   useEffect(() => {
-    if (composeState === "open") {
+    if (composeState === "open" && !fromTouchedRef.current) {
       setFromAddress(pickDefaultFrom(composeData?.fromAddress));
     }
   }, [composeState, aliases, composeData?.fromAddress, activeDomain]);
+
+  // The mobile layout shows the quoted text itself. Sanitize it one time,
+  // not on each key press.
+  const quotedHtml = composeData?.quotedHtml;
+  const mobileQuotedClean = useMemo(() => {
+    if (isDesktop || !quotedHtml) return "";
+    DOMPurify.addHook("afterSanitizeAttributes", (node) => { sanitizeLinkNode(node, stripTrackingParams); });
+    const clean = DOMPurify.sanitize(quotedHtml, {
+      ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
+      ALLOWED_ATTR: ["href", "target", "rel"],
+    });
+    DOMPurify.removeAllHooks();
+    return clean;
+  }, [isDesktop, quotedHtml, stripTrackingParams]);
 
   // Reset form on close
   useEffect(() => {
@@ -283,6 +343,7 @@ export function FloatingComposeWindow() {
       setAttachments([]);
       setUploading(false);
       dirtyRef.current = false;
+      fromTouchedRef.current = false;
       setSending(false);
       sendingRef.current = false;
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -302,12 +363,15 @@ export function FloatingComposeWindow() {
     // Validate every file before any upload starts
     for (const file of files) {
       const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+      // Clear the input on a refusal, so the same file can be selected again.
       if (BLOCKED_EXTENSIONS.has(ext)) {
         setError(`File type ${ext} is not allowed`);
+        e.target.value = "";
         return;
       }
       if (file.size > 10 * 1024 * 1024) {
         setError(`File too large (max 10MB): ${file.name}`);
+        e.target.value = "";
         return;
       }
     }
@@ -342,12 +406,16 @@ export function FloatingComposeWindow() {
     scheduleSave();
   }
 
-  const saveDraft = useCallback(async (signal?: AbortSignal) => {
-    if (!activeDomain) return;
+  // saveDraft resolves to true when the content is safe on the server (or
+  // when there is nothing to save), and to false when the save failed.
+  const saveDraft = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
+    if (!activeDomain) return true;
 
     // Don't save empty drafts
-    if (!subject && !bodyPlain && to.length === 0) return;
+    if (!subject && !bodyPlain && to.length === 0) return true;
 
+    const epoch = composeEpochRef.current;
+    const editVersion = editVersionRef.current;
     setSaveStatus("saving");
     try {
       const draftPayload: Record<string, unknown> = {
@@ -365,35 +433,96 @@ export function FloatingComposeWindow() {
       if (composeData?.inReplyTo) draftPayload.in_reply_to = composeData.inReplyTo;
       if (composeData?.references?.length) draftPayload.references = composeData.references;
 
+      // A create is in flight: wait for its id, then update that draft.
+      // A second POST would make a duplicate draft.
+      if (createInFlightRef.current) {
+        try {
+          await createInFlightRef.current;
+        } catch {
+          // The create failed. This call creates the draft.
+        }
+      }
+      if (epoch !== composeEpochRef.current) return true;
+
       // Use ref for synchronous draft ID check to prevent duplicate creation
       if (draftIdRef.current) {
-        await api.patch(`/api/drafts/${draftIdRef.current}`, draftPayload, { signal });
+        const id = draftIdRef.current;
+        await api.patch(`/api/drafts/${id}`, draftPayload, { signal });
+        // The Drafts list keeps its own copy of each draft. Update it, or
+        // a reopen from the list shows the text from before this save.
+        qc.setQueriesData<{ drafts: Draft[] }>(
+          { queryKey: queryKeys.drafts.all },
+          (old) =>
+            old?.drafts
+              ? {
+                  ...old,
+                  drafts: old.drafts.map((d) =>
+                    d.id === id
+                      ? {
+                          ...d,
+                          subject,
+                          from_address: effectiveFrom,
+                          to_addresses: to,
+                          cc_addresses: cc,
+                          bcc_addresses: bcc,
+                          body_html: bodyHtml,
+                          body_plain: bodyPlain,
+                          attachment_ids: attachments.map((a) => a.id),
+                          updated_at: new Date().toISOString(),
+                        }
+                      : d
+                  ),
+                }
+              : old
+        );
+        qc.invalidateQueries({ queryKey: queryKeys.drafts.all });
       } else {
-        const res = await api.post<{ id: string }>("/api/drafts", {
-          domain_id: activeDomain.id,
-          kind: composeData?.kind || (composeData?.replyToThreadId ? "reply" : "compose"),
-          ...draftPayload,
-        }, { signal });
-        draftIdRef.current = res.id;
-        setDraftId(res.id);
+        // No abort signal here. An aborted POST can still create the draft
+        // on the server, and the client would never learn its id.
+        const create = api
+          .post<{ id: string }>("/api/drafts", {
+            domain_id: activeDomain.id,
+            kind: composeData?.kind || (composeData?.replyToThreadId ? "reply" : "compose"),
+            ...draftPayload,
+          })
+          .then((res) => {
+            // The window still shows the same message: keep the id.
+            if (epoch === composeEpochRef.current) {
+              draftIdRef.current = res.id;
+              setDraftId(res.id);
+            }
+            return res;
+          });
+        createInFlightRef.current = create;
+        try {
+          await create;
+        } finally {
+          if (createInFlightRef.current === create) createInFlightRef.current = null;
+        }
         refreshDrafts();
       }
-      setSaveStatus("saved");
-      dirtyRef.current = false;
+      // An edit made during the save is not on the server yet. Stay dirty,
+      // so a close in that interval still saves it.
+      if (epoch === composeEpochRef.current && editVersion === editVersionRef.current) {
+        setSaveStatus("saved");
+        dirtyRef.current = false;
+      }
+      return true;
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      setSaveStatus("error");
+      // An aborted save was replaced by a newer one. It is not a failure.
+      if (err instanceof DOMException && err.name === "AbortError") return true;
+      if (epoch === composeEpochRef.current) setSaveStatus("error");
+      return false;
     }
-  }, [activeDomain, to, cc, bcc, subject, effectiveFrom, bodyHtml, bodyPlain, attachments, composeData, refreshDrafts]);
+  }, [activeDomain, to, cc, bcc, subject, effectiveFrom, bodyHtml, bodyPlain, attachments, composeData, refreshDrafts, qc]);
 
   // Register a save-now hook with the provider, so opening a reply over
   // this window saves the current content as a draft instead of losing it.
   useEffect(() => {
     registerFlush(async () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      if (dirtyRef.current) {
-        await saveDraft();
-      }
+      // False tells the provider to keep this window: the text is not saved.
+      return dirtyRef.current ? saveDraft() : true;
     });
     return () => registerFlush(null);
   }, [registerFlush, saveDraft]);
@@ -401,6 +530,7 @@ export function FloatingComposeWindow() {
   // Debounced auto-save
   const scheduleSave = useCallback(() => {
     dirtyRef.current = true;
+    editVersionRef.current++;
     setSaveStatus("");
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
@@ -414,24 +544,34 @@ export function FloatingComposeWindow() {
   // Discard — delete draft and close without saving
   const handleDiscard = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    if (draftId) {
+    if (saveAbortRef.current) saveAbortRef.current.abort();
+    // Wait for a create in flight, so its draft is deleted too.
+    if (createInFlightRef.current) {
       try {
-        await api.delete(`/api/drafts/${draftId}`);
+        await createInFlightRef.current;
+      } catch {
+        // No draft was created.
+      }
+    }
+    const id = draftIdRef.current;
+    if (id) {
+      try {
+        await api.delete(`/api/drafts/${id}`);
       } catch {
         // Ignore — draft may not exist
       }
       refreshDrafts();
     }
     closeCompose();
-  }, [draftId, closeCompose, refreshDrafts]);
+  }, [closeCompose, refreshDrafts]);
 
   // Save on close if dirty — keep open on failure to avoid data loss
   const handleClose = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     if (dirtyRef.current) {
-      try {
-        await saveDraft();
-      } catch {
+      // saveDraft reports a failure with false. It does not throw.
+      const saved = await saveDraft();
+      if (!saved) {
         toast.error("Draft save failed. Your changes have not been saved.", {
           action: {
             label: "Discard anyway",
@@ -440,14 +580,28 @@ export function FloatingComposeWindow() {
         });
         return;
       }
+      refreshDrafts();
     }
     closeCompose();
-  }, [closeCompose, saveDraft]);
+  }, [closeCompose, saveDraft, refreshDrafts]);
+
+  // Always holds the handleSend of the latest render.
+  const sendRef = useRef<() => void>(() => {});
+  sendRef.current = () => {
+    void handleSend();
+  };
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      handleSend(e);
+      // A recipient field can hold an address that is typed but not added.
+      // Blur adds it. flushSync renders that change now, so the send below
+      // reads the full recipient list.
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active.tagName === "INPUT") {
+        flushSync(() => active.blur());
+      }
+      sendRef.current();
     }
   }
 
@@ -468,12 +622,18 @@ export function FloatingComposeWindow() {
     return () => document.removeEventListener("keydown", onDocKeyDown);
   }, [composeState, handleClose]);
 
-  async function handleSend(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSend(e?: React.FormEvent) {
+    e?.preventDefault();
     setError("");
 
     if (to.length === 0) {
       setError("To is required");
+      return;
+    }
+
+    // A send now would leave out the file that is still in transit.
+    if (uploading) {
+      setError("Wait for the attachment upload to finish");
       return;
     }
 
@@ -502,6 +662,16 @@ export function FloatingComposeWindow() {
 
     let sendResult: SendResult | undefined;
     try {
+      // Wait for a draft create in flight and send that draft. A direct
+      // send here would leave the new draft in Drafts with no owner.
+      if (createInFlightRef.current) {
+        try {
+          await createInFlightRef.current;
+        } catch {
+          // No draft was created. Send directly.
+        }
+      }
+      const draftId = draftIdRef.current;
       if (draftId) {
         // Update draft then send it. Threading context rides along so a
         // reply sent from a draft still threads.
@@ -550,6 +720,7 @@ export function FloatingComposeWindow() {
 
       const undoSeconds = sendResult?.undo_seconds ?? 0;
       if (undoSeconds > 0 && sendResult?.email_id) {
+        const sentThreadId = sendResult.thread_id;
         // Snapshot the compose fields: an undo reopens them as a draft.
         const snapshot = {
           emailId: sendResult.email_id,
@@ -579,6 +750,13 @@ export function FloatingComposeWindow() {
                   `/api/emails/${snapshot.emailId}/cancel-send`
                 );
                 toast.success("Send undone", { id: "compose-send" });
+                // The email left the thread and became a draft again.
+                const undoneThreadId = sentThreadId || snapshot.threadId;
+                if (undoneThreadId) {
+                  qc.invalidateQueries({ queryKey: queryKeys.threads.detail(undoneThreadId) });
+                }
+                qc.invalidateQueries({ queryKey: queryKeys.threads.lists() });
+                refreshDrafts();
                 openDraft({
                   id: res.draft_id || snapshot.emailId,
                   domain_id: snapshot.domainId,
@@ -630,6 +808,10 @@ export function FloatingComposeWindow() {
       setError("A subject is required to schedule a send");
       return;
     }
+    if (uploading) {
+      setError("Wait for the attachment upload to finish");
+      return;
+    }
     if (sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
@@ -638,9 +820,9 @@ export function FloatingComposeWindow() {
 
     const fullHtml = composeData?.quotedHtml ? bodyHtml + composeData.quotedHtml : bodyHtml;
     try {
-      await saveDraft();
+      const saved = await saveDraft();
       const id = draftIdRef.current;
-      if (!id) throw new Error("Failed to save the draft");
+      if (!saved || !id) throw new Error("Failed to save the draft");
 
       const sendPatch: Record<string, unknown> = {
         subject,
@@ -724,6 +906,12 @@ export function FloatingComposeWindow() {
         )}
       </div>
     );
+  }
+
+  // Enter in a one-line field submits the form, and submit sends the email.
+  // Only the Send button and Cmd/Ctrl+Enter must send.
+  function preventPlainEnter(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) e.preventDefault();
   }
 
   if (composeState === "closed") return null;
@@ -817,7 +1005,7 @@ export function FloatingComposeWindow() {
             {uploading ? <Spinner className="h-4 w-4" /> : <Paperclip className="h-4 w-4" />}
           </button>
           {scheduleControl()}
-          <Button type="submit" size="sm" form="compose-form" disabled={sending}>
+          <Button type="submit" size="sm" form="compose-form" disabled={sending || uploading}>
             {sending ? <Spinner className="mr-1 h-3 w-3" /> : <Send className="mr-1 h-3 w-3" />}
             Send
           </Button>
@@ -836,7 +1024,7 @@ export function FloatingComposeWindow() {
             {aliases.length > 1 ? (
               <select
                 value={fromAddress}
-                onChange={(e) => { setFromAddress(e.target.value); scheduleSave(); }}
+                onChange={(e) => { fromTouchedRef.current = true; setFromAddress(e.target.value); scheduleSave(); }}
                 className="flex-1 h-7 text-sm border-0 bg-transparent shadow-none focus-visible:outline-none focus-visible:ring-0 px-1 cursor-pointer"
               >
                 {aliases.map((a) => (
@@ -897,6 +1085,7 @@ export function FloatingComposeWindow() {
             <Input
               value={subject}
               onChange={(e) => { setSubject(e.target.value); setSubjectWarning(false); scheduleSave(); }}
+              onKeyDown={preventPlainEnter}
               placeholder="Subject"
               maxLength={500}
               className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
@@ -927,17 +1116,7 @@ export function FloatingComposeWindow() {
           {composeData?.quotedHtml && (
             <div
               className="text-xs text-muted-foreground border-l-2 border-muted pl-3 mx-3 mt-2 max-h-[200px] overflow-y-auto prose prose-xs max-w-none"
-              dangerouslySetInnerHTML={{
-                __html: (() => {
-                  DOMPurify.addHook("afterSanitizeAttributes", (node) => { sanitizeLinkNode(node, stripTrackingParams); });
-                  const clean = DOMPurify.sanitize(composeData.quotedHtml, {
-                    ALLOWED_TAGS: ["p", "br", "strong", "em", "a", "div", "span", "blockquote"],
-                    ALLOWED_ATTR: ["href", "target", "rel"],
-                  });
-                  DOMPurify.removeAllHooks();
-                  return clean;
-                })(),
-              }}
+              dangerouslySetInnerHTML={{ __html: mobileQuotedClean }}
             />
           )}
         </div>
@@ -992,7 +1171,7 @@ export function FloatingComposeWindow() {
             {aliases.length > 1 ? (
               <select
                 value={fromAddress}
-                onChange={(e) => { setFromAddress(e.target.value); scheduleSave(); }}
+                onChange={(e) => { fromTouchedRef.current = true; setFromAddress(e.target.value); scheduleSave(); }}
                 className="flex-1 h-7 text-sm border-0 bg-transparent shadow-none focus-visible:outline-none focus-visible:ring-0 px-1 cursor-pointer"
               >
                 {aliases.map((a) => (
@@ -1008,7 +1187,8 @@ export function FloatingComposeWindow() {
             ) : (
               <Input
                 value={fromAddress}
-                onChange={(e) => { setFromAddress(e.target.value); scheduleSave(); }}
+                onChange={(e) => { fromTouchedRef.current = true; setFromAddress(e.target.value); scheduleSave(); }}
+                onKeyDown={preventPlainEnter}
                 placeholder={`hello@${activeDomain?.domain || "example.com"}`}
                 className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
               />
@@ -1056,6 +1236,7 @@ export function FloatingComposeWindow() {
             <Input
               value={subject}
               onChange={(e) => { setSubject(e.target.value); setSubjectWarning(false); scheduleSave(); }}
+              onKeyDown={preventPlainEnter}
               placeholder="Subject"
               maxLength={500}
               className="h-7 text-sm border-0 shadow-none focus-visible:ring-0 px-1"
@@ -1084,7 +1265,7 @@ export function FloatingComposeWindow() {
             }}
             toolbarLeft={
               <div className="flex items-center shrink-0">
-                <Button type="submit" size="sm" disabled={sending} className="mx-1 shrink-0">
+                <Button type="submit" size="sm" disabled={sending || uploading} className="mx-1 shrink-0">
                   {sending ? <Spinner className="mr-1 h-3 w-3" /> : <Send className="mr-1 h-3 w-3" />}
                   Send
                 </Button>
@@ -1132,8 +1313,7 @@ export function FloatingComposeWindow() {
   return (
     <>
       {fileInput}
-      {mobileCompose}
-      {desktopCompose}
+      {isDesktop ? desktopCompose : mobileCompose}
       <ConfirmDialog
         open={showDiscardConfirm}
         onOpenChange={setShowDiscardConfirm}

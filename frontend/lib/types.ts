@@ -63,11 +63,76 @@ export function hasLabel(thread: { labels?: string[] }, label: string): boolean 
   return thread.labels?.includes(label) ?? false;
 }
 
-export function threadBelongsInView(thread: { labels?: string[] }, viewLabel: string): boolean {
+// Views that the server computes from data that is not in the thread labels
+// (failed sends, active snoozes). The client cannot decide membership from a
+// thread summary; it must refetch these lists.
+export function isVirtualView(viewLabel: string): boolean {
+  return viewLabel === "failed" || viewLabel === "snoozed";
+}
+
+function isSnoozed(thread: { snoozed_until?: string | null }): boolean {
+  return !!thread.snoozed_until && new Date(thread.snoozed_until).getTime() > Date.now();
+}
+
+// Do not call this for a virtual view; check isVirtualView first.
+export function threadBelongsInView(
+  thread: { labels?: string[]; snoozed_until?: string | null },
+  viewLabel: string
+): boolean {
   if (viewLabel === "trash" || viewLabel === "spam") return hasLabel(thread, viewLabel);
   if (viewLabel === "archive") return !hasLabel(thread, "inbox") && !hasLabel(thread, "trash") && !hasLabel(thread, "spam");
-  // inbox, sent, starred:
+  // The server hides a snoozed thread from the inbox until it wakes.
+  if (viewLabel === "inbox" && isSnoozed(thread)) return false;
+  // inbox, sent, starred, custom labels:
   return hasLabel(thread, viewLabel) && !hasLabel(thread, "trash") && !hasLabel(thread, "spam");
+}
+
+/** Compute the labels of a thread after a bulk or single action. */
+export function applyBulkLabels(
+  labels: string[],
+  action: string,
+  label: string
+): string[] {
+  switch (action) {
+    case "archive":
+      return labels.filter((l) => l !== "inbox");
+    case "trash":
+      return [...labels.filter((l) => l !== "trash"), "trash"];
+    case "spam":
+      return [...labels.filter((l) => l !== "spam"), "spam"];
+    case "move":
+      switch (label) {
+        case "inbox":
+          return [
+            ...labels.filter(
+              (l) => l !== "inbox" && l !== "trash" && l !== "spam"
+            ),
+            "inbox",
+          ];
+        case "trash":
+          return [...labels.filter((l) => l !== "trash"), "trash"];
+        case "spam":
+          // The server also restores the thread from trash.
+          return [...labels.filter((l) => l !== "spam" && l !== "trash"), "spam"];
+        case "archive":
+          // The server also restores the thread from trash and spam.
+          return labels.filter(
+            (l) => l !== "inbox" && l !== "trash" && l !== "spam"
+          );
+        default:
+          return labels.includes(label) ? labels : [...labels, label];
+      }
+    case "mute":
+      return labels.includes("muted") ? labels : [...labels, "muted"];
+    case "unmute":
+      return labels.filter((l) => l !== "muted");
+    case "label":
+      return labels.includes(label) ? labels : [...labels, label];
+    case "unlabel":
+      return labels.filter((l) => l !== label);
+    default:
+      return labels;
+  }
 }
 
 export interface Email {

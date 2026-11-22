@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -104,34 +105,108 @@ func checkMemoryRevocation(jti, userID string, issuedAt time.Time) bool {
 // IsRevoked checks whether a token has been revoked, either individually or
 // via a user-wide revocation. Falls back to in-memory caches if Redis is unavailable.
 func (b *TokenBlacklist) IsRevoked(ctx context.Context, jti, userID string, issuedAt time.Time) bool {
-	if b == nil || b.rdb == nil {
-		return checkMemoryRevocation(jti, userID, issuedAt)
+	return b.Check(ctx, TokenCheck{JTI: jti, UserID: userID, IssuedAt: issuedAt}).Revoked
+}
+
+// retireGrace is the time a superseded token stays valid after the client
+// first uses its replacement. Requests already in flight carry the old token.
+const retireGrace = 60 * time.Second
+
+// renewLockTTL limits renewal to one new token per old token in this window.
+const renewLockTTL = 60 * time.Second
+
+// sessionTTL is the maximum token lifetime.
+const sessionTTL = 7 * 24 * time.Hour
+
+// TokenCheck is the input of Check.
+type TokenCheck struct {
+	JTI      string
+	UserID   string
+	IssuedAt time.Time
+	// RetireJTI is a superseded token. Check blacklists it after retireGrace.
+	RetireJTI string
+	// StatusKey is an optional extra key to read in the same round trip.
+	StatusKey string
+}
+
+// TokenCheckResult is the output of Check.
+type TokenCheckResult struct {
+	Revoked      bool
+	Status       string
+	StatusCached bool
+}
+
+// blacklistActive reports whether a token:bl value revokes the token now.
+// "1" revokes at once. Any other value is the Unix time at which the
+// revocation starts.
+func blacklistActive(val string, now time.Time) bool {
+	if val == "1" {
+		return true
 	}
-	// Check individual token revocation
-	if jti != "" {
-		exists, err := b.rdb.Exists(ctx, "token:bl:"+jti).Result()
-		if err != nil {
-			slog.Error("token_blacklist: redis error on jti check, falling back to memory", "error", err)
-			return checkMemoryRevocation(jti, userID, issuedAt)
-		}
-		if exists > 0 {
-			return true
+	at, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return true
+	}
+	return now.Unix() >= at
+}
+
+// Check does all per-request token reads in one Redis round trip. It falls
+// back to the in-memory caches if Redis is unavailable.
+func (b *TokenBlacklist) Check(ctx context.Context, c TokenCheck) TokenCheckResult {
+	if b == nil || b.rdb == nil {
+		return TokenCheckResult{Revoked: checkMemoryRevocation(c.JTI, c.UserID, c.IssuedAt)}
+	}
+	now := time.Now()
+
+	pipe := b.rdb.Pipeline()
+	var blCmd, stCmd *redis.StringCmd
+	if c.JTI != "" {
+		blCmd = pipe.Get(ctx, "token:bl:"+c.JTI)
+	}
+	rvCmd := pipe.Get(ctx, "token:rv:"+c.UserID)
+	if c.StatusKey != "" {
+		stCmd = pipe.Get(ctx, c.StatusKey)
+	}
+	if c.RetireJTI != "" {
+		// NX keeps an earlier deadline and an immediate revocation.
+		pipe.SetNX(ctx, "token:bl:"+c.RetireJTI, now.Add(retireGrace).Unix(), sessionTTL)
+	}
+	// Exec returns the first command error, which includes redis.Nil for a
+	// missing key. The code below reads each command result instead.
+	_, _ = pipe.Exec(ctx)
+
+	var res TokenCheckResult
+	if stCmd != nil {
+		if val, err := stCmd.Result(); err == nil {
+			res.Status = val
+			res.StatusCached = true
 		}
 	}
 
-	// Check user-wide revocation
-	val, err := b.rdb.Get(ctx, "token:rv:"+userID).Int64()
+	if blCmd != nil {
+		val, err := blCmd.Result()
+		if err != nil && err != redis.Nil {
+			slog.Error("token_blacklist: redis error on jti check, falling back to memory", "error", err)
+			res.Revoked = checkMemoryRevocation(c.JTI, c.UserID, c.IssuedAt)
+			return res
+		}
+		if err == nil && blacklistActive(val, now) {
+			res.Revoked = true
+			return res
+		}
+	}
+
+	val, err := rvCmd.Int64()
 	if err != nil {
 		if err == redis.Nil {
-			// Key doesn't exist — not revoked
-			return false
+			return res
 		}
-		// Actual Redis error — fall back to memory
 		slog.Error("token_blacklist: redis error on user revocation check, falling back to memory", "error", err)
-		return checkMemoryRevocation(jti, userID, issuedAt)
+		res.Revoked = checkMemoryRevocation(c.JTI, c.UserID, c.IssuedAt)
+		return res
 	}
-	revokedAt := time.Unix(val, 0)
-	return issuedAt.Before(revokedAt)
+	res.Revoked = c.IssuedAt.Before(time.Unix(val, 0))
+	return res
 }
 
 const maxSessions = 5
@@ -142,24 +217,77 @@ type Session struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// RegisterSession adds a JTI to the user's session set and evicts oldest sessions
-// beyond the max limit. Fails silently if Redis is unavailable.
-func (b *TokenBlacklist) RegisterSession(ctx context.Context, userID, jti string) {
+// sessionScript registers a session and enforces the session limit in one
+// atomic step. With an old JTI it replaces that session, so one device keeps
+// one slot. It blacklists each evicted session.
+// KEYS[1] = session set. ARGV = new JTI, score, limit, TTL seconds, old JTI.
+var sessionScript = redis.NewScript(`
+if ARGV[5] ~= '' then
+  redis.call('ZREM', KEYS[1], ARGV[5])
+end
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+redis.call('EXPIRE', KEYS[1], ARGV[4])
+local extra = redis.call('ZCARD', KEYS[1]) - tonumber(ARGV[3])
+if extra > 0 then
+  local old = redis.call('ZRANGE', KEYS[1], 0, extra - 1)
+  for _, jti in ipairs(old) do
+    redis.call('ZREM', KEYS[1], jti)
+    redis.call('SET', 'token:bl:' .. jti, '1', 'EX', ARGV[4])
+  end
+end
+return 0
+`)
+
+func (b *TokenBlacklist) runSessionScript(ctx context.Context, userID, oldJTI, newJTI string) {
 	if b == nil || b.rdb == nil {
 		return
 	}
-	key := "sessions:" + userID
-	b.rdb.ZAdd(ctx, key, redis.Z{Score: float64(time.Now().Unix()), Member: jti})
-	b.rdb.Expire(ctx, key, 7*24*time.Hour)
-
-	count, _ := b.rdb.ZCard(ctx, key).Result()
-	if count > maxSessions {
-		oldest, _ := b.rdb.ZRange(ctx, key, 0, count-maxSessions-1).Result()
-		for _, oldJTI := range oldest {
-			b.rdb.ZRem(ctx, key, oldJTI)
-			b.rdb.Set(ctx, "token:bl:"+oldJTI, "1", 7*24*time.Hour)
-		}
+	// A millisecond score keeps the newest session last when two sessions
+	// start in the same second.
+	err := sessionScript.Run(ctx, b.rdb, []string{"sessions:" + userID},
+		newJTI, time.Now().UnixMilli(), maxSessions, int(sessionTTL.Seconds()), oldJTI,
+	).Err()
+	if err != nil {
+		slog.Warn("token_blacklist: failed to register session", "user_id", userID, "error", err)
 	}
+}
+
+// RegisterSession adds a JTI to the user's session set and evicts oldest sessions
+// beyond the max limit. Fails silently if Redis is unavailable.
+func (b *TokenBlacklist) RegisterSession(ctx context.Context, userID, jti string) {
+	b.runSessionScript(ctx, userID, "", jti)
+}
+
+// ReplaceSession puts newJTI in the session slot of oldJTI after a renewal.
+// It does not blacklist oldJTI. Check does that when the client first uses
+// the new token.
+func (b *TokenBlacklist) ReplaceSession(ctx context.Context, userID, oldJTI, newJTI string) {
+	b.runSessionScript(ctx, userID, oldJTI, newJTI)
+}
+
+// AcquireRenewal reports whether the caller may renew the token with this
+// JTI. Only one caller wins in each renewLockTTL window, so parallel requests
+// with the same old token mint one new token. It returns false on a Redis
+// error: the old token stays valid and a later request renews it.
+func (b *TokenBlacklist) AcquireRenewal(ctx context.Context, jti string) bool {
+	if b == nil || b.rdb == nil {
+		return true
+	}
+	ok, err := b.rdb.SetNX(ctx, "token:renew:"+jti, "1", renewLockTTL).Result()
+	if err != nil {
+		slog.Warn("token_blacklist: renewal lock failed, skipping renewal", "error", err)
+		return false
+	}
+	return ok
+}
+
+// RemoveSession removes one session from the user's session set. It does
+// not blacklist the token.
+func (b *TokenBlacklist) RemoveSession(ctx context.Context, userID, jti string) {
+	if b == nil || b.rdb == nil {
+		return
+	}
+	b.rdb.ZRem(ctx, "sessions:"+userID, jti)
 }
 
 // ListSessions returns all active sessions for a user.
@@ -172,10 +300,19 @@ func (b *TokenBlacklist) ListSessions(ctx context.Context, userID string) []Sess
 	for _, m := range members {
 		sessions = append(sessions, Session{
 			JTI:       m.Member.(string),
-			CreatedAt: time.Unix(int64(m.Score), 0),
+			CreatedAt: sessionTime(m.Score),
 		})
 	}
 	return sessions
+}
+
+// sessionTime converts a session score to a time. Scores written before the
+// change to milliseconds are in seconds.
+func sessionTime(score float64) time.Time {
+	if score < 1e11 {
+		return time.Unix(int64(score), 0)
+	}
+	return time.UnixMilli(int64(score))
 }
 
 // RevokeSession removes a specific session and blacklists the token.

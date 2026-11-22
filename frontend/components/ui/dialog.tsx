@@ -20,6 +20,10 @@ const FOCUSABLE_SELECTOR =
 function Dialog({ open, onOpenChange, children }: DialogProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const idRef = React.useRef<symbol | null>(null);
+  // Callers often pass an inline function. A ref keeps the effect below
+  // from running again on each parent render, which moved the focus.
+  const onOpenChangeRef = React.useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
 
   React.useEffect(() => {
     if (!open) return;
@@ -46,7 +50,7 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
       if (dialogStack[dialogStack.length - 1] !== id) return;
       if (e.key === "Escape") {
         e.stopPropagation();
-        onOpenChange(false);
+        onOpenChangeRef.current(false);
         return;
       }
       if (e.key === "Tab") {
@@ -80,7 +84,7 @@ function Dialog({ open, onOpenChange, children }: DialogProps) {
       }
       previouslyFocused?.focus?.();
     };
-  }, [open, onOpenChange]);
+  }, [open]);
 
   if (!open) return null;
 

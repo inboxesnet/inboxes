@@ -49,7 +49,7 @@ func (tc *TrashCollector) collect(ctx context.Context) {
 	rows, err := tc.DB.Query(ctx,
 		`SELECT t.id, t.org_id, t.domain_id FROM threads t
 		 JOIN thread_labels tl ON tl.thread_id = t.id AND tl.label = 'trash'
-		 WHERE t.trash_expires_at < now() AND t.deleted_at IS NULL`)
+		 WHERE t.trash_expires_at IS NOT NULL AND t.trash_expires_at < now() AND t.deleted_at IS NULL`)
 	if err != nil {
 		slog.Error("trash collector: failed to query expired threads", "error", err)
 		return

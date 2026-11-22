@@ -57,6 +57,7 @@ type resendEmail struct {
 	HTML      string   `json:"html"`
 	Text      string   `json:"text"`
 	LastEvent string   `json:"last_event"`
+	MessageID string   `json:"message_id"`
 	CreatedAt string   `json:"created_at"`
 }
 
@@ -462,13 +463,17 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			continue
 		}
 
-		var inReplyTo string
-		var referencesHeader []string
-		if headers != nil {
-			inReplyTo = headers["In-Reply-To"]
-			if refs, ok := headers["References"]; ok {
-				referencesHeader = strings.Fields(refs)
-			}
+		// Resend returns lowercase header keys. Read them through a
+		// lowercase copy so that a change of case cannot hide them.
+		lowerHeaders := make(map[string]string, len(headers))
+		for k, v := range headers {
+			lowerHeaders[strings.ToLower(k)] = v
+		}
+		inReplyTo := util.NormalizeMsgID(lowerHeaders["in-reply-to"])
+		referencesHeader := util.ParseMsgIDs(lowerHeaders["references"])
+		messageID := util.NormalizeMsgID(email.MessageID)
+		if messageID == "" {
+			messageID = util.NormalizeMsgID(lowerHeaders["message-id"])
 		}
 		refsJSON, marshalErr := json.Marshal(referencesHeader)
 		if marshalErr != nil {
@@ -494,11 +499,26 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			}
 			defer tx.Rollback(dbCtx)
 
-			threadID, err := s.findOrCreateThread(dbCtx, tx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, inReplyTo, "inbound", email.From)
+			if err := LockThreading(dbCtx, tx, orgID); err != nil {
+				return fmt.Errorf("threading lock: %w", err)
+			}
+			participants := util.NormalizeAddresses([]string{email.From}, email.To, email.CC)
+			threadID, err := s.findOrCreateThread(dbCtx, tx, ThreadLookup{
+				OrgID:        orgID,
+				DomainID:     domainID,
+				MessageID:    messageID,
+				InReplyTo:    inReplyTo,
+				References:   referencesHeader,
+				Subject:      email.Subject,
+				Counterparty: email.From,
+			}, adminUserID, participants, email.To, snippet, "inbound", email.From)
 			if err != nil {
 				return fmt.Errorf("find/create thread: %w", err)
 			}
 			recvThreadID = threadID
+			if err := MergeParticipants(dbCtx, tx, threadID, participants); err != nil {
+				slog.Error("sync: failed to merge participants", "error", err)
+			}
 
 			// Add inbox label for received emails (idempotent)
 			if _, err := tx.Exec(dbCtx,
@@ -519,7 +539,7 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 				 attachments, created_at)
 				 VALUES ($1, $2, $3, $4, $5, $6, 'inbound', $7, $8, $9, $10, $11, $12, $13, $14, 'received',
 				 $15, $16, $17, $18, $19)`,
-				threadID, adminUserID, orgID, domainID, email.ID, email.MessageID,
+				threadID, adminUserID, orgID, domainID, email.ID, nullIfEmpty(messageID),
 				fromClean, toJSON, ccJSON, bccJSON, replyToJSON,
 				email.Subject, html, text, headersJSON, inReplyTo, refsJSON,
 				attachmentsJSON, createdAt,
@@ -633,6 +653,17 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			"SELECT id FROM emails WHERE resend_email_id = $1", email.ID,
 		).Scan(&existingID)
 		if err == nil {
+			// Backfill: old outbound rows have no Message-ID. Replies to
+			// them cannot match by header until the id is stored.
+			if msgID := util.NormalizeMsgID(email.MessageID); msgID != "" {
+				if _, err := s.pool.Exec(ctx,
+					`UPDATE emails SET message_id = $1, updated_at = now()
+					 WHERE id = $2 AND org_id = $3 AND (message_id IS NULL OR message_id = '')`,
+					msgID, existingID, orgID,
+				); err != nil {
+					slog.Warn("sync: backfill message_id failed", "email_id", email.ID, "error", err)
+				}
+			}
 			imported++
 			emit(SyncProgress{Phase: "importing", Imported: imported, Total: total})
 			continue
@@ -646,6 +677,9 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			if json.Unmarshal(fullData, &full) == nil {
 				email.HTML = full.HTML
 				email.Text = full.Text
+				if email.MessageID == "" {
+					email.MessageID = full.MessageID
+				}
 				// Enrich alias name if the full From field has a better display name
 				displayName := extractDisplayName(full.From)
 				fromAddr := ExtractEmail(full.From)
@@ -694,20 +728,39 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 			}
 			defer tx.Rollback(dbCtx)
 
-			threadID, err := s.findOrCreateThread(dbCtx, tx, orgID, adminUserID, domainID, email.Subject, email.From, email.To, snippet, "", "outbound", email.From)
+			if err := LockThreading(dbCtx, tx, orgID); err != nil {
+				return fmt.Errorf("threading lock: %w", err)
+			}
+			messageID := util.NormalizeMsgID(email.MessageID)
+			counterparty := ""
+			if len(email.To) > 0 {
+				counterparty = email.To[0]
+			}
+			participants := util.NormalizeAddresses([]string{email.From}, email.To, email.CC)
+			threadID, err := s.findOrCreateThread(dbCtx, tx, ThreadLookup{
+				OrgID:        orgID,
+				DomainID:     domainID,
+				MessageID:    messageID,
+				Subject:      email.Subject,
+				Counterparty: counterparty,
+			}, adminUserID, participants, email.To, snippet, "outbound", email.From)
 			if err != nil {
 				return fmt.Errorf("find/create thread: %w", err)
 			}
 			sentThreadID = threadID
+			if err := MergeParticipants(dbCtx, tx, threadID, participants); err != nil {
+				slog.Error("sync: failed to merge participants", "error", err)
+			}
 
 			_, err = tx.Exec(dbCtx,
-				`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, direction,
+				`INSERT INTO emails (thread_id, user_id, org_id, domain_id, resend_email_id, message_id, direction,
 				 from_address, to_addresses, cc_addresses, bcc_addresses, reply_to_addresses,
 				 subject, body_html, body_plain, status, last_event, attachments, created_at)
-				 VALUES ($1, $2, $3, $4, $5, 'outbound', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+				 VALUES ($1, $2, $3, $4, $5, $18, 'outbound', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 				threadID, adminUserID, orgID, domainID, email.ID,
 				ExtractEmail(email.From), toJSON, ccJSON, bccJSON, replyToJSON,
 				email.Subject, email.HTML, email.Text, status, email.LastEvent, attachmentsJSON, createdAt,
+				nullIfEmpty(messageID),
 			)
 			if err != nil {
 				return fmt.Errorf("insert email: %w", err)
@@ -842,72 +895,155 @@ func (s *SyncService) syncEmailsInternal(ctx context.Context, orgID, adminUserID
 	return result, nil
 }
 
-func (s *SyncService) findOrCreateThread(ctx context.Context, q querier, orgID, userID, domainID, subject, from string, to []string, snippet string, inReplyTo string, direction string, lastSender string) (string, error) {
-	var threadID string
-	cleanSubject := util.CleanSubjectLine(subject)
+// ThreadLookup holds the data that selects the thread of one email.
+// The ids must be in normal form (util.NormalizeMsgID).
+type ThreadLookup struct {
+	OrgID      string
+	DomainID   string
+	MessageID  string   // id of the email itself, "" if unknown
+	InReplyTo  string   // "" if the email has no In-Reply-To
+	References []string // empty if the email has no References
+	Subject    string   // raw subject
+	// Counterparty is the other party: the sender of inbound mail, the
+	// first recipient of outbound mail.
+	Counterparty string
+}
 
-	// Step 1: Match by In-Reply-To header (skip if thread is soft-deleted)
-	if inReplyTo != "" {
-		err := q.QueryRow(ctx,
-			`SELECT thread_id FROM emails WHERE message_id = $1 AND org_id = $2 LIMIT 1`,
-			inReplyTo, orgID,
-		).Scan(&threadID)
-		if err == nil {
-			var deletedAt interface{}
-			warnIfErr(q.QueryRow(ctx, `SELECT deleted_at FROM threads WHERE id = $1`, threadID).Scan(&deletedAt),
-				"sync: deleted_at check failed", "thread_id", threadID)
-			if deletedAt == nil {
-				return threadID, nil
-			}
-			threadID = ""
+// LockThreading serialises thread find-or-create for one org until the
+// transaction ends. Without it, two workers can each create a thread for
+// two emails of one conversation.
+func LockThreading(ctx context.Context, q querier, orgID string) error {
+	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('threading:' || $1::text, 0))`, orgID)
+	return err
+}
+
+// FindThread returns the live thread that the email belongs to. All steps
+// ignore deleted threads, so a reply can never join a thread that no list
+// shows. The webhook path, the poller path and the sync import all use it.
+func FindThread(ctx context.Context, q querier, in ThreadLookup) (string, bool) {
+	var threadID string
+
+	// Step 1: In-Reply-To.
+	if in.InReplyTo != "" {
+		if err := q.QueryRow(ctx,
+			`SELECT e.thread_id FROM emails e
+			 JOIN threads t ON t.id = e.thread_id
+			 WHERE e.message_id = $1 AND e.org_id = $2 AND t.deleted_at IS NULL
+			 ORDER BY e.created_at DESC LIMIT 1`,
+			in.InReplyTo, in.OrgID,
+		).Scan(&threadID); err == nil {
+			return threadID, true
 		}
 	}
 
-	// Step 2: Match by subject + counterparty (the other party in the conversation)
-	// For outbound: the counterparty is the recipient (TO address)
-	// For inbound: the counterparty is the sender (FROM address)
-	var matchAddr string
-	if direction == "outbound" && len(to) > 0 {
-		matchAddr = ExtractEmail(to[0])
-	} else {
-		matchAddr = ExtractEmail(from)
+	// Step 2: References.
+	if len(in.References) > 0 {
+		if err := q.QueryRow(ctx,
+			`SELECT e.thread_id FROM emails e
+			 JOIN threads t ON t.id = e.thread_id
+			 WHERE e.message_id = ANY($1::text[]) AND e.org_id = $2 AND t.deleted_at IS NULL
+			 ORDER BY e.created_at DESC LIMIT 1`,
+			in.References, in.OrgID,
+		).Scan(&threadID); err == nil {
+			return threadID, true
+		}
 	}
-	counterpartyJSON, marshalErr := json.Marshal([]string{matchAddr})
-	if marshalErr != nil {
-		return "", fmt.Errorf("marshal counterparty: %w", marshalErr)
+
+	// Step 3: a reply to this email is already stored (the reply arrived
+	// before its parent). Join the thread of the reply.
+	if in.MessageID != "" {
+		if err := q.QueryRow(ctx,
+			`SELECT e.thread_id FROM emails e
+			 JOIN threads t ON t.id = e.thread_id
+			 WHERE e.in_reply_to = $1 AND e.in_reply_to <> '' AND e.org_id = $2 AND t.deleted_at IS NULL
+			 ORDER BY e.created_at ASC LIMIT 1`,
+			in.MessageID, in.OrgID,
+		).Scan(&threadID); err == nil {
+			return threadID, true
+		}
 	}
-	err := q.QueryRow(ctx,
-		`SELECT id FROM threads WHERE org_id = $1 AND domain_id = $2 AND subject = $3
-		 AND participant_emails @> $4::jsonb AND deleted_at IS NULL
-		 AND last_message_at > now() - interval '90 days'
-		 ORDER BY last_message_at DESC LIMIT 1`,
-		orgID, domainID, cleanSubject, counterpartyJSON,
-	).Scan(&threadID)
-	if err == nil {
+
+	// Step 4: subject + counterparty, in the same domain, in the last 90
+	// days. Only a reply can use this step. A new email with a common
+	// subject ("Invoice") must start its own thread.
+	cleanSubject := util.CleanSubjectLine(in.Subject)
+	counterparty := util.NormalizeAddress(in.Counterparty)
+	isReply := in.InReplyTo != "" || len(in.References) > 0 || util.HasReplyPrefix(in.Subject)
+	if isReply && cleanSubject != "" && counterparty != "" {
+		counterpartyJSON, err := json.Marshal([]string{counterparty})
+		if err != nil {
+			return "", false
+		}
+		if err := q.QueryRow(ctx,
+			`SELECT id FROM threads WHERE org_id = $1 AND domain_id = $2 AND subject = $3
+			 AND participant_emails @> $4::jsonb AND deleted_at IS NULL
+			 AND last_message_at > now() - interval '90 days'
+			 ORDER BY last_message_at DESC LIMIT 1`,
+			in.OrgID, in.DomainID, cleanSubject, counterpartyJSON,
+		).Scan(&threadID); err == nil {
+			return threadID, true
+		}
+	}
+
+	return "", false
+}
+
+// MergeParticipants adds bare lowercase addresses to the participants of a
+// thread. Pass the output of util.NormalizeAddresses.
+func MergeParticipants(ctx context.Context, q querier, threadID string, addrs []string) error {
+	if len(addrs) == 0 {
+		return nil
+	}
+	addrsJSON, err := json.Marshal(addrs)
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx,
+		`UPDATE threads SET participant_emails = (
+		   SELECT COALESCE(jsonb_agg(DISTINCT val), '[]'::jsonb) FROM (
+		     SELECT jsonb_array_elements(participant_emails) AS val
+		     UNION
+		     SELECT jsonb_array_elements($2::jsonb) AS val
+		   ) sub
+		 )
+		 WHERE id = $1`, threadID, string(addrsJSON),
+	)
+	return err
+}
+
+func nullIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func (s *SyncService) findOrCreateThread(ctx context.Context, q querier, in ThreadLookup, userID string, participants, to []string, snippet, direction, lastSender string) (string, error) {
+	if threadID, ok := FindThread(ctx, q, in); ok {
 		return threadID, nil
 	}
 
-	// Step 3: Create new thread
-	participants, marshalErr2 := json.Marshal(append([]string{from}, to...))
-	if marshalErr2 != nil {
-		return "", fmt.Errorf("marshal participants: %w", marshalErr2)
+	participantsJSON, err := json.Marshal(participants)
+	if err != nil {
+		return "", fmt.Errorf("marshal participants: %w", err)
 	}
 	var originalTo *string
 	if len(to) > 0 {
 		addr := ExtractEmail(to[0])
 		originalTo = &addr
 	}
+	var threadID string
 	err = q.QueryRow(ctx,
 		`INSERT INTO threads (org_id, user_id, domain_id, subject, participant_emails, original_to, snippet, last_sender, last_message_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '1970-01-01T00:00:00Z')
 		 RETURNING id`,
-		orgID, userID, domainID, cleanSubject, participants, originalTo, snippet, lastSender,
+		in.OrgID, userID, in.DomainID, util.CleanSubjectLine(in.Subject), participantsJSON, originalTo, snippet, lastSender,
 	).Scan(&threadID)
 	if err == nil && direction == "outbound" {
 		// Add sent label only for outbound threads
 		if _, err := q.Exec(ctx,
 			`INSERT INTO thread_labels (thread_id, org_id, label) VALUES ($1, $2, 'sent') ON CONFLICT DO NOTHING`,
-			threadID, orgID); err != nil {
+			threadID, in.OrgID); err != nil {
 			slog.Error("sync: failed to insert sent label", "error", err)
 		}
 	}
@@ -935,6 +1071,7 @@ const labelsSubquery = `(SELECT COALESCE(array_agg(tl2.label ORDER BY tl2.label)
 func (s *SyncService) fetchThreadForEvent(ctx context.Context, threadID, orgID string) map[string]interface{} {
 	var id, dID, subject, snippet, lastSender string
 	var originalTo *string
+	var trashExpiresAt, snoozedUntil *time.Time
 	var participants json.RawMessage
 	var lastMessageAt, createdAt time.Time
 	var messageCount, unreadCount int
@@ -943,11 +1080,13 @@ func (s *SyncService) fetchThreadForEvent(ctx context.Context, threadID, orgID s
 	err := s.pool.QueryRow(ctx,
 		`SELECT t.id, t.domain_id, t.subject, t.participant_emails,
 		 t.last_message_at, t.message_count, t.unread_count, t.snippet, t.last_sender, t.original_to, t.created_at,
+		 t.trash_expires_at, t.snoozed_until,
 		 `+labelsSubquery+` as labels
 		 FROM threads t WHERE t.id = $1 AND t.org_id = $2`,
 		threadID, orgID,
 	).Scan(&id, &dID, &subject, &participants,
-		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt, &labels)
+		&lastMessageAt, &messageCount, &unreadCount, &snippet, &lastSender, &originalTo, &createdAt,
+		&trashExpiresAt, &snoozedUntil, &labels)
 	if err != nil {
 		return nil
 	}
@@ -969,6 +1108,14 @@ func (s *SyncService) fetchThreadForEvent(ctx context.Context, threadID, orgID s
 	}
 	if originalTo != nil {
 		t["original_to"] = *originalTo
+	}
+	// The frontend replaces its list row with this summary, so it must
+	// carry the same optional fields as the thread list.
+	if trashExpiresAt != nil {
+		t["trash_expires_at"] = *trashExpiresAt
+	}
+	if snoozedUntil != nil {
+		t["snoozed_until"] = *snoozedUntil
 	}
 	return t
 }

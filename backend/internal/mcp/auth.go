@@ -37,6 +37,8 @@ func NewToken(prefix string) (string, error) {
 	return prefix + "_" + base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+const lastUsedStampInterval = time.Minute
+
 // LookupToken resolves a raw bearer token to a live identity. The role and
 // status come from the users table on every call, so a role change or a
 // disabled account takes effect immediately.
@@ -47,19 +49,19 @@ func LookupToken(ctx context.Context, pool *pgxpool.Pool, raw string) (*TokenIde
 	hash := HashToken(raw)
 
 	var id TokenIdentity
-	var expiresAt, revokedAt *time.Time
+	var expiresAt, revokedAt, lastUsedAt *time.Time
 	var status string
 	// u.org_id = t.org_id binds the token's org to the user's current org.
 	// If a user ever moves org, their old tokens stop resolving instead of
 	// reading the old org's mail.
 	err := pool.QueryRow(ctx,
-		`SELECT t.id, t.user_id, t.org_id, t.kind, t.expires_at, t.revoked_at, u.role, u.status
+		`SELECT t.id, t.user_id, t.org_id, t.kind, t.expires_at, t.revoked_at, t.last_used_at, u.role, u.status
 		 FROM agent_tokens t
 		 JOIN users u ON u.id = t.user_id AND u.org_id = t.org_id
 		 JOIN orgs o ON o.id = t.org_id AND o.deleted_at IS NULL
 		 WHERE t.token_hash = $1`,
 		hash,
-	).Scan(&id.TokenID, &id.UserID, &id.OrgID, &id.Kind, &expiresAt, &revokedAt, &id.Role, &status)
+	).Scan(&id.TokenID, &id.UserID, &id.OrgID, &id.Kind, &expiresAt, &revokedAt, &lastUsedAt, &id.Role, &status)
 	if err != nil {
 		return nil, fmt.Errorf("token not found")
 	}
@@ -73,12 +75,18 @@ func LookupToken(ctx context.Context, pool *pgxpool.Pool, raw string) (*TokenIde
 		return nil, fmt.Errorf("user not active")
 	}
 
-	// Best-effort usage stamp; failure never blocks the request.
-	go func() {
-		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		pool.Exec(bctx, "UPDATE agent_tokens SET last_used_at = now() WHERE id = $1", id.TokenID)
-	}()
+	// Best-effort usage stamp; failure never blocks the request. One write
+	// per minute is sufficient: an agent sends many requests in a burst.
+	if lastUsedAt == nil || time.Since(*lastUsedAt) > lastUsedStampInterval {
+		go func() {
+			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			pool.Exec(bctx,
+				`UPDATE agent_tokens SET last_used_at = now()
+				 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`,
+				id.TokenID)
+		}()
+	}
 
 	return &id, nil
 }

@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useEmailWindow } from "@/contexts/email-window-context";
+import { useUnreadBadge } from "@/hooks/use-unread-badge";
 import { Spinner } from "@/components/ui/spinner";
 import { CalendarClock, FileText, Trash2 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils";
@@ -19,13 +20,18 @@ export default function DraftsPage() {
   const qc = useQueryClient();
   const [focusedIndex, setFocusedIndex] = useState(-1);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["drafts", domainId],
     queryFn: () =>
       api.get<{ drafts: Draft[] }>(`/api/drafts?domain_id=${domainId}`),
+    // No live event reports a draft change. Always fetch on mount and on
+    // window focus, so a reopened draft has its latest text.
+    staleTime: 0,
   });
 
   const drafts = data?.drafts ?? [];
+
+  useUnreadBadge("Drafts", domainId);
 
   // Reset focus when drafts change
   useEffect(() => {
@@ -47,6 +53,8 @@ export default function DraftsPage() {
       } catch {
         // 404 = already deleted (e.g. discarded from compose window) — ignore
       }
+      // Load the true list again. After a failed delete the draft returns.
+      qc.invalidateQueries({ queryKey: ["drafts", domainId] });
       // The sidebar Drafts badge comes from the label counts — refresh it.
       qc.invalidateQueries({ queryKey: ["domains", "unreadCounts"] });
     },
@@ -73,7 +81,16 @@ export default function DraftsPage() {
     function handleKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
-      if (e.metaKey || e.ctrlKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // An open dialog (compose, settings, confirm) owns the keyboard.
+      if (
+        target.closest?.('[role="dialog"], [role="alertdialog"]') ||
+        document.querySelector('[aria-modal="true"], [role="alertdialog"]')
+      ) {
+        return;
+      }
+      // Enter on a button, a link or a draft row belongs to that control.
+      if (e.key === "Enter" && target.closest?.('button, a[href], [role="button"]')) return;
 
       switch (e.key) {
         case "j":
@@ -85,8 +102,8 @@ export default function DraftsPage() {
           setFocusedIndex((prev) => Math.max(prev - 1, 0));
           break;
         case "Enter":
-          e.preventDefault();
           if (focusedIndex >= 0 && focusedIndex < drafts.length) {
+            e.preventDefault();
             openDraft(drafts[focusedIndex]);
           }
           break;
@@ -116,7 +133,14 @@ export default function DraftsPage() {
         <h1 className="font-semibold text-sm">Drafts</h1>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {drafts.length === 0 ? (
+        {isError && drafts.length === 0 ? (
+          <div role="alert" className="flex flex-col items-center justify-center h-full gap-2 text-sm">
+            <span className="text-destructive">Failed to load drafts</span>
+            <button onClick={() => refetch()} className="text-primary hover:underline text-xs">
+              Try again
+            </button>
+          </div>
+        ) : drafts.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             No drafts
           </div>
@@ -128,7 +152,14 @@ export default function DraftsPage() {
                 role="button"
                 tabIndex={0}
                 onClick={() => openDraft(draft)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openDraft(draft); }}
+                onKeyDown={(e) => {
+                  // Keys on the inner buttons (delete, cancel) belong to them.
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openDraft(draft);
+                  }
+                }}
                 className={cn(
                   "flex items-center gap-3 w-full text-left px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer",
                   i === focusedIndex && "ring-1 ring-inset ring-primary/30"
@@ -145,6 +176,8 @@ export default function DraftsPage() {
                         <CalendarClock className="h-3 w-3" />
                         {new Date(draft.scheduled_send_at).toLocaleString(undefined, {
                           weekday: "short",
+                          month: "short",
+                          day: "numeric",
                           hour: "numeric",
                           minute: "2-digit",
                         })}

@@ -10,6 +10,20 @@ type SpamResult struct {
 	Reasons []string `json:"reasons"`
 }
 
+// headerValue reads a header without case sensitivity. The fetch worker
+// stores lowercase keys; other callers can pass the original case.
+func headerValue(headers map[string]string, lowerKey string) string {
+	if v, ok := headers[lowerKey]; ok {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, lowerKey) {
+			return v
+		}
+	}
+	return ""
+}
+
 // ClassifySpam scores an inbound email for spam likelihood.
 // Uses header + heuristic analysis. Threshold: score >= 0.7 = spam.
 func ClassifySpam(headers map[string]string, fromAddress, subject, bodyPlain string) SpamResult {
@@ -17,7 +31,7 @@ func ClassifySpam(headers map[string]string, fromAddress, subject, bodyPlain str
 	var reasons []string
 
 	// Check authentication results
-	authResults := headers["Authentication-Results"]
+	authResults := strings.ToLower(headerValue(headers, "authentication-results"))
 	if authResults != "" {
 		if strings.Contains(authResults, "spf=fail") || strings.Contains(authResults, "spf=softfail") {
 			score += 0.2
@@ -34,23 +48,23 @@ func ClassifySpam(headers map[string]string, fromAddress, subject, bodyPlain str
 	}
 
 	// Check upstream spam headers
-	if spamStatus := headers["X-Spam-Status"]; spamStatus != "" {
+	if spamStatus := headerValue(headers, "x-spam-status"); spamStatus != "" {
 		if strings.HasPrefix(strings.ToLower(spamStatus), "yes") {
 			score += 0.3
 			reasons = append(reasons, "Upstream spam filter flagged")
 		}
 	}
-	if spamFlag := headers["X-Spam-Flag"]; strings.ToLower(spamFlag) == "yes" {
+	if spamFlag := headerValue(headers, "x-spam-flag"); strings.ToLower(spamFlag) == "yes" {
 		score += 0.3
 		reasons = append(reasons, "X-Spam-Flag: YES")
 	}
 
 	// Missing or malformed headers
-	if headers["Message-ID"] == "" {
+	if headerValue(headers, "message-id") == "" {
 		score += 0.1
 		reasons = append(reasons, "Missing Message-ID header")
 	}
-	if headers["Date"] == "" {
+	if headerValue(headers, "date") == "" {
 		score += 0.1
 		reasons = append(reasons, "Missing Date header")
 	}

@@ -40,11 +40,7 @@ import {
   Clock,
 } from "lucide-react";
 import { api } from "@/lib/api";
-
-interface CustomLabel {
-  id: string;
-  name: string;
-}
+import { useLabels } from "@/hooks/use-labels";
 import type { Label } from "@/lib/types";
 
 const LABELS: { key: Label; label: string; icon: React.ReactNode }[] = [
@@ -254,16 +250,23 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
     return () => { if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current); };
   }, [connected]);
 
-  const [customLabels, setCustomLabels] = useState<CustomLabel[]>([]);
-
+  const labelsQuery = useLabels();
+  const customLabels = labelsQuery.data ?? [];
+  const labelsFailed = labelsQuery.isError;
   useEffect(() => {
-    api.get<CustomLabel[]>("/api/labels").then(setCustomLabels).catch(() => { toast.error("Failed to load labels"); });
-  }, []);
+    if (labelsFailed) toast.error("Failed to load labels", { id: "labels-load-failed" });
+  }, [labelsFailed]);
 
-  // Extract label from path: /d/{domainId}/{label}/... → label is segments[3]
+  // Extract label from path: /d/{domainId}/{label}/... → label is segments[3].
+  // The path is URL-encoded; label names are not.
   const segments = pathname.split("/");
   const labelSegment = segments[3] || "inbox";
-  const currentLabel = LABELS.some((f) => f.key === labelSegment) ? labelSegment : labelSegment;
+  let currentLabel = labelSegment;
+  try {
+    currentLabel = decodeURIComponent(labelSegment);
+  } catch {
+    // Malformed escape in the URL. Keep the raw segment.
+  }
 
   function navigateToDomain(domainId: string) {
     setActiveDomainId(domainId);
@@ -273,7 +276,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
 
   function navigateToLabel(label: string) {
     if (!activeDomain) return;
-    router.push(`/d/${activeDomain.id}/${label}`);
+    router.push(`/d/${activeDomain.id}/${encodeURIComponent(label)}`);
     onCloseSidebar?.();
   }
 
@@ -326,6 +329,7 @@ export function DomainSidebar({ onCompose, onOpenSettings, onCloseSidebar }: Dom
           <button
             onClick={onCloseSidebar}
             className="p-1.5 -mr-1.5 rounded-md hover:bg-muted"
+            aria-label="Close sidebar"
           >
             <X className="h-5 w-5" />
           </button>

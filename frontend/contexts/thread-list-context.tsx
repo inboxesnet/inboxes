@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect, useSyncExternalStore } from "react";
 import type { Thread, Label } from "@/lib/types";
 
 interface ThreadListContextType {
@@ -20,6 +20,26 @@ interface ThreadListContextType {
 
 const ThreadListContext = createContext<ThreadListContextType | null>(null);
 
+// The keyboard shortcuts live in the layout, outside the provider that the
+// page renders. The provider publishes its value here so they can read it.
+let published: ThreadListContextType | null = null;
+const listeners = new Set<() => void>();
+
+function publish(value: ThreadListContextType | null) {
+  published = value;
+  listeners.forEach((listener) => listener());
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+const getPublished = () => published;
+const getServerPublished = () => null;
+
 export function ThreadListProvider({
   children,
   value,
@@ -27,6 +47,11 @@ export function ThreadListProvider({
   children: React.ReactNode;
   value: ThreadListContextType;
 }) {
+  useEffect(() => {
+    publish(value);
+  }, [value]);
+  useEffect(() => () => publish(null), []);
+
   return (
     <ThreadListContext.Provider value={value}>
       {children}
@@ -35,5 +60,7 @@ export function ThreadListProvider({
 }
 
 export function useThreadList() {
-  return useContext(ThreadListContext);
+  const fromContext = useContext(ThreadListContext);
+  const fromStore = useSyncExternalStore(subscribe, getPublished, getServerPublished);
+  return fromContext ?? fromStore;
 }

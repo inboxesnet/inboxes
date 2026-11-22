@@ -1109,7 +1109,7 @@ func TestClaimInvite_AlreadyActive(t *testing.T) {
 	}
 }
 
-// ── #20: Change password wrong current → 401 ──
+// ── #20: Change password wrong current → 400 ──
 
 func TestChangePassword_WrongCurrent(t *testing.T) {
 	t.Parallel()
@@ -1126,8 +1126,8 @@ func TestChangePassword_WrongCurrent(t *testing.T) {
 	req = withClaims(req, "user1", "org1", "admin")
 	w := httptest.NewRecorder()
 	h.UpdatePassword(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("ChangePassword(wrong): got status %d, want %d", w.Code, http.StatusUnauthorized)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("ChangePassword(wrong): got status %d, want %d", w.Code, http.StatusBadRequest)
 	}
 	if !strings.Contains(w.Body.String(), "current password is incorrect") {
 		t.Errorf("ChangePassword(wrong): body = %q", w.Body.String())

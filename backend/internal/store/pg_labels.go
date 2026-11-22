@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -21,6 +22,7 @@ func (s *PgStore) ReorderOrgLabels(ctx context.Context, orgID string, order []Do
 			`UPDATE org_labels SET display_order = $1 WHERE id = $2 AND org_id = $3`,
 			item.Order, item.ID, orgID); err != nil {
 			slog.Error("labels: reorder update failed", "label_id", item.ID, "error", err)
+			return fmt.Errorf("reorder label %s: %w", item.ID, err)
 		}
 	}
 	return nil

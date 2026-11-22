@@ -115,8 +115,14 @@ vi.mock("@/lib/types", () => ({
     thread.labels?.includes(label) ?? false,
 }));
 
+vi.mock("@/lib/query-patch", () => ({
+  patchQueryData: vi.fn(),
+  patchQueriesData: vi.fn(),
+}));
+
 vi.mock("@/lib/utils", () => ({
   formatRelativeTime: () => "1h",
+  formatFullDateTime: () => "Jan 1, 2026, 12:00 AM",
 }));
 
 vi.mock("@/components/ui/button", () => ({

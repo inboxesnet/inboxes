@@ -34,6 +34,10 @@ export const queryKeys = {
     all: ["users"] as const,
     me: () => [...queryKeys.users.all, "me"] as const,
   },
+  labels: {
+    all: ["labels"] as const,
+    list: () => [...queryKeys.labels.all, "list"] as const,
+  },
   notifications: {
     all: ["notifications"] as const,
     list: () => [...queryKeys.notifications.all, "list"] as const,

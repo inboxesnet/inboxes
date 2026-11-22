@@ -18,7 +18,16 @@ export function formatRelativeTime(date: string | Date): string {
   if (diffHours < 24) return `${diffHours}h`;
   if (diffDays < 7) return `${diffDays}d`;
 
+  if (d.getFullYear() !== now.getFullYear()) {
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// formatFullDateTime gives the exact local date and time, for tooltips.
+export function formatFullDateTime(date: string | Date): string {
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
 }
 
 export function formatThreadTime(date: string | Date): string {
@@ -102,4 +111,14 @@ export function validatePassword(password: string): string | null {
   if (!/[a-z]/.test(password)) return "Password must include a lowercase letter";
   if (!/[0-9]/.test(password)) return "Password must include a number";
   return null;
+}
+
+// decodeRouteParam decodes a dynamic route segment. Next.js gives these
+// URL-encoded ("Follow%20Up"). A malformed value comes back unchanged.
+export function decodeRouteParam(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

@@ -23,7 +23,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { useLabels } from "@/hooks/use-labels";
 import { hasLabel } from "@/lib/types";
 import type { Label, Thread } from "@/lib/types";
 
@@ -37,6 +37,8 @@ interface ThreadToolbarProps {
   someSelected: boolean;
   hasSelection: boolean;
   selectAllPages: boolean;
+  /** False in a search: the server cannot select "all pages" of a search. */
+  canSelectAllPages?: boolean;
   onToggleSelectAll: () => void;
   onSelectIds: (ids: string[]) => void;
   onToggleSelectAllPages: () => void;
@@ -51,11 +53,6 @@ interface ThreadToolbarProps {
   onPageChange: (page: number) => void;
   loading?: boolean;
   isPending?: boolean;
-}
-
-interface CustomLabel {
-  id: string;
-  name: string;
 }
 
 // snoozePresets builds the snooze choices relative to now.
@@ -94,6 +91,7 @@ export function ThreadToolbar({
   someSelected,
   hasSelection,
   selectAllPages,
+  canSelectAllPages = true,
   onToggleSelectAll,
   onSelectIds,
   onToggleSelectAllPages,
@@ -114,7 +112,8 @@ export function ThreadToolbar({
   const [labelDropdownOpen, setLabelDropdownOpen] = useState(false);
   const [moveDropdownOpen, setMoveDropdownOpen] = useState(false);
   const [snoozeDropdownOpen, setSnoozeDropdownOpen] = useState(false);
-  const [customLabels, setCustomLabels] = useState<CustomLabel[]>([]);
+  const labelsQuery = useLabels(labelDropdownOpen || moveDropdownOpen);
+  const customLabels = labelsQuery.data ?? [];
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -142,11 +141,12 @@ export function ThreadToolbar({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [dropdownOpen, labelDropdownOpen, moveDropdownOpen, snoozeDropdownOpen]);
 
+  const labelsFailed = labelsQuery.isError;
   useEffect(() => {
-    if ((labelDropdownOpen || moveDropdownOpen) && customLabels.length === 0) {
-      api.get<CustomLabel[]>("/api/labels").then(setCustomLabels).catch(() => { toast.error("Failed to load labels"); });
+    if (labelsFailed && (labelDropdownOpen || moveDropdownOpen)) {
+      toast.error("Failed to load labels");
     }
-  }, [labelDropdownOpen, moveDropdownOpen]);
+  }, [labelsFailed, labelDropdownOpen, moveDropdownOpen]);
 
   // The "v" keyboard shortcut dispatches this event to open the move menu.
   useEffect(() => {
@@ -164,7 +164,8 @@ export function ThreadToolbar({
   const end = Math.min(page * limit, total);
   const totalPages = Math.ceil(total / limit);
 
-  const showSelectAllBanner = allSelected && total > threads.length && !selectAllPages;
+  const showSelectAllBanner =
+    canSelectAllPages && allSelected && total > threads.length && !selectAllPages;
   const showSelectedAllBanner = selectAllPages;
 
   return (
@@ -179,10 +180,12 @@ export function ThreadToolbar({
             if (el) el.indeterminate = someSelected;
           }}
           onChange={onToggleSelectAll}
+          aria-label="Select all conversations on this page"
           className="h-3.5 w-3.5 rounded border-muted-foreground/40 cursor-pointer accent-primary"
         />
         <button
           onClick={() => setDropdownOpen((v) => !v)}
+          aria-label="Selection options"
           className="ml-0.5 p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
         >
           <ChevronDown className="h-3 w-3" />

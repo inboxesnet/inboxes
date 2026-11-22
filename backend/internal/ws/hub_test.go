@@ -355,3 +355,101 @@ func TestMaxConnsPerUser_Eviction(t *testing.T) {
 	}
 	h.mu.RUnlock()
 }
+
+// An evicted client still runs its read pump, which unregisters the client
+// later. That second removal must not close the send channel again.
+func TestEvictThenUnregister_NoDoubleClose(t *testing.T) {
+	t.Parallel()
+	h := NewHub(nil, nil, 1, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.Run(ctx)
+
+	oldest := &Client{UserID: "u1", OrgID: "org-1", send: make(chan []byte, 1), IssuedAt: time.Now()}
+	newer := &Client{UserID: "u1", OrgID: "org-1", send: make(chan []byte, 1), IssuedAt: time.Now().Add(time.Second)}
+
+	h.register <- oldest
+	h.register <- newer // evicts oldest
+	h.unregister <- oldest
+	h.unregister <- oldest
+
+	if _, ok := <-oldest.send; ok {
+		t.Fatal("expected the send channel of the evicted client to be closed")
+	}
+	if oldest.closeCode != closeConnLimit {
+		t.Errorf("closeCode: got %d, want %d", oldest.closeCode, closeConnLimit)
+	}
+
+	// The hub must still work: the lock is free and Run still reads.
+	h.sendToOrg("org-1", "ping")
+	select {
+	case msg := <-newer.send:
+		if string(msg) != "ping" {
+			t.Errorf("got %q, want ping", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("hub did not deliver after evict and unregister")
+	}
+
+	third := &Client{UserID: "u2", OrgID: "org-1", send: make(chan []byte, 1), IssuedAt: time.Now()}
+	select {
+	case h.register <- third:
+	case <-time.After(time.Second):
+		t.Fatal("hub Run loop stopped after evict and unregister")
+	}
+}
+
+func TestDisconnectUserThenUnregister_NoDoubleClose(t *testing.T) {
+	t.Parallel()
+	h := NewHub(nil, nil, 5, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.Run(ctx)
+
+	c := &Client{UserID: "u1", OrgID: "org-1", send: make(chan []byte, 1), IssuedAt: time.Now()}
+	h.register <- c
+	other := &Client{UserID: "u2", OrgID: "org-1", send: make(chan []byte, 1), IssuedAt: time.Now()}
+	h.register <- other
+
+	h.disconnectUser("u1")
+	h.unregister <- c
+
+	if _, ok := <-c.send; ok {
+		t.Fatal("expected the send channel to be closed")
+	}
+	if c.closeCode != closeSessionRevoked {
+		t.Errorf("closeCode: got %d, want %d", c.closeCode, closeSessionRevoked)
+	}
+
+	select {
+	case h.unregister <- other:
+	case <-time.After(time.Second):
+		t.Fatal("hub Run loop stopped after disconnect and unregister")
+	}
+}
+
+func TestSendToOrg_DropsSlowClient(t *testing.T) {
+	t.Parallel()
+	h := NewHub(nil, nil, 5, time.Minute)
+	slow := &Client{UserID: "u1", OrgID: "org-1", send: make(chan []byte, 1)}
+	fast := &Client{UserID: "u2", OrgID: "org-1", send: make(chan []byte, 4)}
+	h.clients["u1"] = map[*Client]bool{slow: true}
+	h.clients["u2"] = map[*Client]bool{fast: true}
+
+	h.sendToOrg("org-1", "one")
+	h.sendToOrg("org-1", "two") // the buffer of slow is full
+
+	if _, ok := h.clients["u1"]; ok {
+		t.Error("expected the slow client to be removed")
+	}
+	<-slow.send // "one"
+	if _, ok := <-slow.send; ok {
+		t.Error("expected the send channel of the slow client to be closed")
+	}
+	if slow.closeCode != closeSlowClient {
+		t.Errorf("closeCode: got %d, want %d", slow.closeCode, closeSlowClient)
+	}
+	if len(fast.send) != 2 {
+		t.Errorf("fast client: got %d messages, want 2", len(fast.send))
+	}
+}

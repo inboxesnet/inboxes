@@ -164,7 +164,7 @@ describe("WSSync event handling", () => {
     });
 
     // setQueriesData should have been called for thread lists
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads).toHaveLength(1);
     expect(listData?.threads[0].id).toBe("t1");
@@ -244,7 +244,7 @@ describe("WSSync event handling", () => {
       payload: { thread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "sent", 1]);
     expect(listData?.threads).toHaveLength(1);
     expect(listData?.threads[0].id).toBe("t2");
@@ -267,7 +267,7 @@ describe("WSSync event handling", () => {
       payload: { thread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads[0].labels).toContain("starred");
   });
@@ -287,7 +287,7 @@ describe("WSSync event handling", () => {
       payload: { thread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads[0].labels).not.toContain("starred");
   });
@@ -309,7 +309,7 @@ describe("WSSync event handling", () => {
       payload: { thread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads[0].labels).toContain("muted");
   });
@@ -329,7 +329,7 @@ describe("WSSync event handling", () => {
       payload: { thread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads[0].labels).not.toContain("muted");
   });
@@ -351,7 +351,7 @@ describe("WSSync event handling", () => {
       domain_id: "d1",
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads[0].unread_count).toBe(0);
 
@@ -375,7 +375,7 @@ describe("WSSync event handling", () => {
       domain_id: "d1",
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads[0].unread_count).toBe(1);
 
@@ -402,7 +402,7 @@ describe("WSSync event handling", () => {
       payload: { thread: archivedThread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     // Thread should be removed from inbox since it no longer has the inbox label
     expect(listData?.threads).toHaveLength(0);
@@ -428,7 +428,7 @@ describe("WSSync event handling", () => {
       payload: { thread: trashedThread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads).toHaveLength(0);
   });
@@ -450,7 +450,7 @@ describe("WSSync event handling", () => {
       domain_id: "d1",
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     expect(listData?.threads).toHaveLength(0);
     expect(listData?.total).toBe(0);
@@ -483,7 +483,7 @@ describe("WSSync event handling", () => {
       },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     // t1 and t2 should be removed from inbox (archive removes inbox label)
     expect(listData?.threads).toHaveLength(1);
@@ -514,7 +514,7 @@ describe("WSSync event handling", () => {
       },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     // Both should be removed from inbox (trash makes them not belong in inbox view)
     expect(listData?.threads).toHaveLength(0);
@@ -524,6 +524,12 @@ describe("WSSync event handling", () => {
 
   it("email.status_updated — updates email delivery status in thread detail cache", async () => {
     await mountWSSync();
+    seedCache(
+      ["threads", "detail", "t1"],
+      makeThread({
+        emails: [{ id: "e1", status: "sent" }] as Thread["emails"],
+      })
+    );
 
     fireEvent({
       event: "email.status_updated",
@@ -534,12 +540,66 @@ describe("WSSync event handling", () => {
       },
     });
 
-    // Should call setQueryData for the thread detail
-    expect(setQueryDataCalls.length).toBeGreaterThan(0);
+    // Should patch the thread detail
     const call = setQueryDataCalls.find(
       (c) => JSON.stringify(c.queryKey) === JSON.stringify(["threads", "detail", "t1"])
     );
     expect(call).toBeTruthy();
+    const detail = getCacheData<Thread>(["threads", "detail", "t1"]);
+    expect(detail?.emails?.[0].status).toBe("delivered");
+  });
+
+  it("email.status_updated cancelled — removes the email and refetches", async () => {
+    await mountWSSync();
+    seedCache(
+      ["threads", "detail", "t1"],
+      makeThread({
+        emails: [{ id: "e1", status: "queued" }] as Thread["emails"],
+      })
+    );
+
+    fireEvent({
+      event: "email.status_updated",
+      thread_id: "t1",
+      payload: { email_id: "e1", status: "cancelled" },
+    });
+
+    const detail = getCacheData<Thread>(["threads", "detail", "t1"]);
+    expect(detail?.emails).toHaveLength(0);
+    expect(
+      invalidateQueriesCalls.some(
+        (c) => JSON.stringify(c.queryKey) === JSON.stringify(["drafts"])
+      )
+    ).toBe(true);
+  });
+
+  it("a live insert goes on page 1 only, and not into a virtual view", async () => {
+    await mountWSSync();
+    seedCache(["threads", "list", "d1", "inbox", 1], { threads: [], page: 1, total: 0 });
+    seedCache(["threads", "list", "d1", "inbox", 2], { threads: [], page: 2, total: 0 });
+    seedCache(["threads", "list", "d1", "failed", 1], {
+      threads: [makeThread({ id: "t1" })],
+      page: 1,
+      total: 1,
+    });
+
+    fireEvent({
+      event: "email.received",
+      thread_id: "t1",
+      domain_id: "d1",
+      payload: { thread: makeThread({ id: "t1" }) },
+    });
+
+    expect(
+      getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1])?.threads
+    ).toHaveLength(1);
+    expect(
+      getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 2])?.threads
+    ).toHaveLength(0);
+    // The Failed view keeps its row; a refetch decides.
+    expect(
+      getCacheData<ThreadListResponse>(["threads", "list", "d1", "failed", 1])?.threads
+    ).toHaveLength(1);
   });
 
   // ── sync.completed ──
@@ -727,7 +787,7 @@ describe("WSSync event handling", () => {
       payload: { thread: movedThread },
     });
 
-    expect(setQueriesDataCalls.length).toBeGreaterThan(0);
+    expect(setQueryDataCalls.length).toBeGreaterThan(0);
     const listData = getCacheData<ThreadListResponse>(["threads", "list", "d1", "inbox", 1]);
     // Thread moved to trash, so it should be removed from inbox
     expect(listData?.threads).toHaveLength(0);

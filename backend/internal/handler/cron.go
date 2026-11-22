@@ -70,14 +70,26 @@ func (h *CronHandler) CleanupWebhooks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to query orgs")
 		return
 	}
-	defer rows.Close()
-
-	var cleaned, failed int
+	// Read the org list first and close the rows. Open rows hold a pool
+	// connection, and the Resend calls below can take a long time.
+	type orgWebhook struct{ orgID, webhookID string }
+	var orgs []orgWebhook
 	for rows.Next() {
-		var orgID, currentWebhookID string
-		if err := rows.Scan(&orgID, &currentWebhookID); err != nil {
+		var o orgWebhook
+		if err := rows.Scan(&o.orgID, &o.webhookID); err != nil {
 			continue
 		}
+		orgs = append(orgs, o)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to query orgs")
+		return
+	}
+
+	var cleaned, failed int
+	for _, o := range orgs {
+		orgID, currentWebhookID := o.orgID, o.webhookID
 
 		// List all webhooks from Resend
 		data, err := h.ResendSvc.Fetch(ctx, orgID, "GET", "/webhooks", nil)

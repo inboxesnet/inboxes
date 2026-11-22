@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -126,7 +128,7 @@ func (s *ResendService) Fetch(ctx context.Context, orgID, method, path string, b
 	if err != nil {
 		return nil, err
 	}
-	return DoRequest(apiKey, method, resendBaseURL+path, body)
+	return DoRequestCtx(ctx, apiKey, method, resendBaseURL+path, body)
 }
 
 // GetOrgAPIKey fetches and decrypts the Resend API key for an org.
@@ -194,8 +196,14 @@ func (s *ResendService) getSystemKey(ctx context.Context) string {
 		`SELECT value, iv, tag, encrypted FROM system_settings WHERE key = 'resend_system_api_key'`,
 	).Scan(&encrypted, &iv, &tag, &isEncrypted)
 	if err != nil {
-		s.cachedDBKey = ""
-		s.dbKeyCacheValid = true
+		// Cache "no key" only when the row is absent. A database error or a
+		// cancelled request must not hide the key until the next restart.
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.cachedDBKey = ""
+			s.dbKeyCacheValid = true
+		} else {
+			slog.Error("resend: failed to read system key from DB", "error", err)
+		}
 		return ""
 	}
 
@@ -308,14 +316,17 @@ func (s *ResendService) InvalidateFromCache() {
 func (s *ResendService) SystemFetch(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
 	key := s.getSystemKey(ctx)
 	if key == "" {
+		slog.Warn("resend: system email not sent, no system key is configured", "path", path)
 		return nil, nil // graceful degradation
 	}
+	// A system email must go out even if the client closes the request.
+	ctx = context.WithoutCancel(ctx)
 
 	// Critical user-facing sends (invites, verification, password reset) get
 	// retry-with-backoff on 429 so background pollers can't starve them.
 	const maxRetries = 3
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err := DoRequest(key, method, resendBaseURL+path, body)
+		resp, err := DoRequestCtx(ctx, key, method, resendBaseURL+path, body)
 		if err == nil {
 			return resp, nil
 		}
@@ -342,6 +353,12 @@ func ResendDirectFetch(apiKey, method, path string, body interface{}) ([]byte, e
 // DoRequest makes an HTTP request to the Resend API. Rate limiting is handled
 // externally by the queue's RateLimiter — this function does no throttling.
 func DoRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
+	return DoRequestCtx(context.Background(), apiKey, method, url, body)
+}
+
+// DoRequestCtx is DoRequest with a context. A cancelled context stops the
+// request; the client timeout still applies.
+func DoRequestCtx(ctx context.Context, apiKey, method, url string, body interface{}) ([]byte, error) {
 	path := strings.TrimPrefix(url, resendBaseURL)
 
 	slog.Info("resend: request", "method", method, "path", path)
@@ -361,7 +378,7 @@ func DoRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
 		}
 		reqBody = bytes.NewReader(encoded)
 	}
-	req, err := http.NewRequest(method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("resend: create request: %w", err)
 	}
@@ -384,11 +401,8 @@ func DoRequest(apiKey, method, url string, body interface{}) ([]byte, error) {
 		return nil, &ResendError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
-	logBody := string(respBody)
-	if len(logBody) > 500 {
-		logBody = logBody[:500] + "..."
-	}
-	slog.Info("resend: response", "method", method, "path", path, "status", resp.StatusCode, "body", logBody)
+	// Do not log the body: it can contain mail content.
+	slog.Info("resend: response", "method", method, "path", path, "status", resp.StatusCode, "bytes", len(respBody))
 
 	return respBody, nil
 }

@@ -20,11 +20,15 @@ export const ALLOWED_TAGS = [
   "h1", "h2", "h3", "h4", "blockquote", "pre", "code",
   "img", "table", "thead", "tbody", "tr", "td", "th",
   "div", "span",
+  "b", "i", "s", "hr", "center", "font", "small", "sub", "sup",
+  "h5", "h6", "tfoot", "caption",
 ];
 
 export const ALLOWED_ATTR = [
   "href", "src", "alt", "style", "class", "target", "rel", "width", "height",
   "data-original-src", "dir",
+  "colspan", "rowspan", "align", "valign", "bgcolor",
+  "cellpadding", "cellspacing", "border", "title",
 ];
 
 export function sanitizeEmailHtml(html: string, showImages: boolean, stripTracking = true) {

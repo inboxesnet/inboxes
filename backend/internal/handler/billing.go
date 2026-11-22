@@ -229,6 +229,20 @@ func (h *BillingHandler) GetBilling(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// firstStatusWriter records the first status code a handler writes.
+type firstStatusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *firstStatusWriter) WriteHeader(code int) {
+	if w.status != 0 {
+		return // the first status is the one the client gets
+	}
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
 // HandleStripeWebhook processes Stripe webhook events.
 func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
@@ -263,6 +277,23 @@ func (h *BillingHandler) HandleStripeWebhook(w http.ResponseWriter, r *http.Requ
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+
+	// A 5xx answer tells Stripe to send the event again. Remove the dedup
+	// row in that case, or the retry is skipped as a duplicate and the
+	// event is lost.
+	sw := &firstStatusWriter{ResponseWriter: w}
+	w = sw
+	defer func() {
+		if sw.status < http.StatusInternalServerError {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if _, err := h.Store.Q().Exec(cleanupCtx,
+			`DELETE FROM stripe_events WHERE event_id = $1`, event.ID); err != nil {
+			slog.Error("stripe: failed to remove dedup row after error", "event_id", event.ID, "error", err)
+		}
+	}()
 
 	switch event.Type {
 	case "checkout.session.completed":
