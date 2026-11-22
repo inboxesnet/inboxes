@@ -401,7 +401,7 @@ describe("FloatingComposeWindow", () => {
     let resolvePost: (value: unknown) => void;
     vi.mocked(api.post).mockImplementation(() => new Promise((res) => { resolvePost = res; }));
 
-    mockComposeData = { toAddresses: ["test@example.com"] };
+    mockComposeData = { toAddresses: ["test@example.com"], subject: "Hi", bodyHtml: "<p>Hello</p>" };
     render(<FloatingComposeWindow />);
 
     // Click send
@@ -428,7 +428,7 @@ describe("FloatingComposeWindow", () => {
       status: "queued",
       undo_seconds: 10,
     });
-    mockComposeData = { toAddresses: ["test@example.com"] };
+    mockComposeData = { toAddresses: ["test@example.com"], subject: "Hi", bodyHtml: "<p>Hello</p>" };
     render(<FloatingComposeWindow />);
 
     fireEvent.click(screen.getAllByText("Send")[0]);
@@ -453,7 +453,7 @@ describe("FloatingComposeWindow", () => {
       status: "queued",
       undo_seconds: 0,
     });
-    mockComposeData = { toAddresses: ["test@example.com"] };
+    mockComposeData = { toAddresses: ["test@example.com"], subject: "Hi", bodyHtml: "<p>Hello</p>" };
     render(<FloatingComposeWindow />);
 
     fireEvent.click(screen.getAllByText("Send")[0]);

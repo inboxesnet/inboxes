@@ -355,6 +355,10 @@ func (h *DraftHandler) Send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "from, to, and subject are required to send")
 		return
 	}
+	if isBlankBody(bodyHTML, bodyPlain) {
+		writeError(w, http.StatusBadRequest, "a message is required to send")
+		return
+	}
 
 	// Check the domain status up front, like the direct send path does.
 	// Without this check the job fails later in the worker, near-silently.

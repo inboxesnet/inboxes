@@ -55,6 +55,10 @@ func (h *EmailHandler) Send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "from, to, and subject are required")
 		return
 	}
+	if isBlankBody(req.HTML, req.Text) {
+		writeError(w, http.StatusBadRequest, "a message is required")
+		return
+	}
 	if err := validateLength(req.Subject, "subject", 500); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

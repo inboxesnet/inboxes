@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"regexp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -172,3 +173,18 @@ func escapeLIKE(s string) string {
 	return s
 }
 
+var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
+
+// isBlankBody reports whether an email has no content to send. The mail
+// provider refuses an email with an empty body.
+func isBlankBody(html, text string) bool {
+	if strings.TrimSpace(text) != "" {
+		return false
+	}
+	if strings.Contains(strings.ToLower(html), "<img") {
+		return false
+	}
+	plain := htmlTagRe.ReplaceAllString(html, "")
+	plain = strings.ReplaceAll(plain, "&nbsp;", " ")
+	return strings.TrimSpace(plain) == ""
+}

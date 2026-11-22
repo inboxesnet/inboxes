@@ -96,7 +96,7 @@ func TestSend_MissingMultipleFields(t *testing.T) {
 func TestSend_InvalidToEmail(t *testing.T) {
 	t.Parallel()
 	h := &EmailHandler{}
-	body := `{"from":"alice@example.com","to":["not-an-email"],"subject":"Hi"}`
+	body := `{"from":"alice@example.com","to":["not-an-email"],"subject":"Hi","html":"<p>Hello</p>"}`
 	req := httptest.NewRequest("POST", "/emails/send", strings.NewReader(body))
 	req = withClaims(req, "user1", "org1", "admin")
 	w := httptest.NewRecorder()
@@ -113,7 +113,7 @@ func TestSend_SubjectTooLong(t *testing.T) {
 	t.Parallel()
 	h := &EmailHandler{}
 	longSubject := strings.Repeat("a", 501)
-	body := `{"from":"alice@example.com","to":["bob@example.com"],"subject":"` + longSubject + `"}`
+	body := `{"from":"alice@example.com","to":["bob@example.com"],"subject":"` + longSubject + `","html":"<p>Hello</p>"}`
 	req := httptest.NewRequest("POST", "/emails/send", strings.NewReader(body))
 	req = withClaims(req, "user1", "org1", "admin")
 	w := httptest.NewRecorder()
@@ -538,5 +538,20 @@ func TestSearch_DomainFilter(t *testing.T) {
 	}
 	if len(threads) != 1 {
 		t.Errorf("Search(domain filter): got %d threads, want 1", len(threads))
+	}
+}
+
+func TestSend_EmptyBody(t *testing.T) {
+	t.Parallel()
+	h := &EmailHandler{}
+	for _, html := range []string{"", "<p></p>", "<p>&nbsp; </p><br>"} {
+		body := `{"from":"alice@example.com","to":["bob@example.com"],"subject":"test","html":"` + html + `"}`
+		req := httptest.NewRequest("POST", "/emails/send", strings.NewReader(body))
+		req = withClaims(req, "user1", "org1", "admin")
+		w := httptest.NewRecorder()
+		h.Send(w, req)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "a message is required") {
+			t.Errorf("Send(empty body %q): status %d, body %q", html, w.Code, w.Body.String())
+		}
 	}
 }

@@ -118,6 +118,14 @@ function useIsDesktop(): boolean {
   return isDesktop;
 }
 
+// The mail provider refuses an email with an empty body. An image counts as
+// content.
+function isBlankMessage(html: string, quotedHtml?: string): boolean {
+  const full = html + (quotedHtml ?? "");
+  if (/<img/i.test(full)) return false;
+  return full.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim() === "";
+}
+
 export function FloatingComposeWindow() {
   const { composeState, composeData, minimizeCompose, restoreCompose, closeCompose, registerFlush, openDraft } =
     useEmailWindow();
@@ -637,12 +645,17 @@ export function FloatingComposeWindow() {
       return;
     }
 
-    if (!subject && warnNoSubject && !subjectWarning) {
-      setSubjectWarning(true);
-      setError("No subject - click Send again to send anyway");
+    // The server and the mail provider refuse an email with no subject.
+    if (!subject.trim()) {
+      setError("A subject is required");
       return;
     }
     setSubjectWarning(false);
+
+    if (isBlankMessage(bodyHtml, composeData?.quotedHtml)) {
+      setError("A message is required");
+      return;
+    }
 
     const totalRecipients = to.length + cc.length + bcc.length;
     if (totalRecipients > 50) {
@@ -804,8 +817,12 @@ export function FloatingComposeWindow() {
       setError("To is required");
       return;
     }
-    if (!subject) {
+    if (!subject.trim()) {
       setError("A subject is required to schedule a send");
+      return;
+    }
+    if (isBlankMessage(bodyHtml, composeData?.quotedHtml)) {
+      setError("A message is required");
       return;
     }
     if (uploading) {
